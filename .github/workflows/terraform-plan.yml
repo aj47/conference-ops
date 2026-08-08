@@ -1,0 +1,142 @@
+name: Terraform plan
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/terraform-plan.yml"
+      - ".github/workflows/deploy.yml"
+      - "scripts/render-terraform-vars.mjs"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to plan
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production, both]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  select:
+    name: Select environments
+    runs-on: ubuntu-latest
+    outputs:
+      environments: ${{ steps.environments.outputs.value }}
+    steps:
+      - id: environments
+        env:
+          REQUESTED: ${{ inputs.environment || 'both' }}
+        run: |
+          case "$REQUESTED" in
+            staging) echo 'value=["staging"]' >> "$GITHUB_OUTPUT" ;;
+            production) echo 'value=["production"]' >> "$GITHUB_OUTPUT" ;;
+            both) echo 'value=["staging","production"]' >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unsupported environment: $REQUESTED" >&2; exit 1 ;;
+          esac
+
+  untrusted-plan:
+    name: Secretless PR plan
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      CLOUDFLARE_API_TOKEN: ci-placeholder-token
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+      - name: Render representative desired state
+        env:
+          CLOUDFLARE_ACCOUNT_ID: 00000000000000000000000000000000
+          CLOUDFLARE_ZONE_ID: 00000000000000000000000000000000
+          ENABLE_PREVIEW_ACCESS: "true"
+          PREVIEW_ACCESS_HOSTNAME: preview.example.com
+          PREVIEW_ACCESS_ALLOWED_EMAILS_JSON: '["reviewer@example.com"]'
+          PREVIEW_ACCESS_SERVICE_TOKEN_IDS_JSON: '["00000000-0000-4000-8000-000000000000"]'
+          DNS_RECORDS_JSON: '{"verification":{"name":"_conference-ops.example.com","type":"TXT","content":"conference-ops-verification","proxied":false}}'
+        run: node scripts/render-terraform-vars.mjs --environment staging
+      - name: Create backend-free validation copy
+        run: |
+          mkdir -p "$RUNNER_TEMP/conference-ops-terraform"
+          cp infra/terraform/*.tf "$RUNNER_TEMP/conference-ops-terraform/"
+          cp infra/terraform/.terraform.lock.hcl "$RUNNER_TEMP/conference-ops-terraform/"
+          sed -i '/backend "s3" {}/d' "$RUNNER_TEMP/conference-ops-terraform/versions.tf"
+      - name: Plan without credentials or remote reads
+        run: |
+          terraform -chdir="$RUNNER_TEMP/conference-ops-terraform" init -backend=false -lockfile=readonly
+          terraform -chdir="$RUNNER_TEMP/conference-ops-terraform" validate
+          terraform -chdir="$RUNNER_TEMP/conference-ops-terraform" plan -refresh=false -lock=false -var-file="$GITHUB_WORKSPACE/artifacts/terraform/staging.tfvars.json"
+
+  plan:
+    name: Approved remote plan ${{ matrix.environment }}
+    needs: select
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(needs.select.outputs.environments) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ matrix.environment }}
+    env:
+      AWS_ENDPOINT_URL_S3: https://${{ vars.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+      - name: Validate required configuration
+        env:
+          ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          test -n "$ACCOUNT_ID"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+      - name: Initialize remote state
+        working-directory: infra/terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_ACCESS_KEY }}
+        run: terraform init -reconfigure -lockfile=readonly -backend-config=../environments/${{ matrix.environment }}.s3.tfbackend
+      - name: Render non-secret desired state
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          D1_PRIMARY_LOCATION_HINT: ${{ vars.D1_PRIMARY_LOCATION_HINT }}
+          R2_LOCATION: ${{ vars.R2_LOCATION }}
+          ENABLE_D1_READ_REPLICATION: ${{ vars.ENABLE_D1_READ_REPLICATION }}
+          ENABLE_PREVIEW_ACCESS: ${{ vars.ENABLE_PREVIEW_ACCESS }}
+          PREVIEW_ACCESS_HOSTNAME: ${{ vars.PREVIEW_ACCESS_HOSTNAME }}
+          PREVIEW_ACCESS_ALLOWED_EMAILS_JSON: ${{ vars.PREVIEW_ACCESS_ALLOWED_EMAILS_JSON }}
+          PREVIEW_ACCESS_ALLOWED_IDPS_JSON: ${{ vars.PREVIEW_ACCESS_ALLOWED_IDPS_JSON }}
+          PREVIEW_ACCESS_SERVICE_TOKEN_IDS_JSON: ${{ vars.PREVIEW_ACCESS_SERVICE_TOKEN_IDS_JSON }}
+          DNS_RECORDS_JSON: ${{ vars.DNS_RECORDS_JSON }}
+          JOBS_QUEUE_RETENTION_SECONDS: ${{ vars.JOBS_QUEUE_RETENTION_SECONDS }}
+          JOBS_DLQ_RETENTION_SECONDS: ${{ vars.JOBS_DLQ_RETENTION_SECONDS }}
+        run: node scripts/render-terraform-vars.mjs --environment "${{ matrix.environment }}"
+      - name: Validate
+        working-directory: infra/terraform
+        run: terraform validate
+      - name: Plan
+        working-directory: infra/terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: terraform plan -no-color -lock-timeout=5m -var-file="../../artifacts/terraform/${{ matrix.environment }}.tfvars.json"

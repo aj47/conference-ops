@@ -1,0 +1,185 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment target
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+      seed_demo:
+        description: Replace staging demo records after migration
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conference-ops-deploy-${{ inputs.environment || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy ${{ inputs.environment || 'staging' }}
+    needs: verify
+    if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment || 'staging' }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ inputs.environment || 'staging' }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL }}
+      APP_CUSTOM_DOMAIN: ${{ vars.APP_CUSTOM_DOMAIN }}
+      MAIL_FROM: ${{ vars.MAIL_FROM }}
+      MAIL_REPLY_TO: ${{ vars.MAIL_REPLY_TO }}
+      ACCELEVENTS_EVENT_URL: ${{ vars.ACCELEVENTS_EVENT_URL }}
+      ACCELEVENTS_ENABLED: ${{ vars.ACCELEVENTS_ENABLED }}
+      ENABLE_CLOUDFLARE_EMAIL: ${{ vars.ENABLE_CLOUDFLARE_EMAIL }}
+      ENABLE_PREVIEW_ACCESS: ${{ vars.ENABLE_PREVIEW_ACCESS }}
+      PREVIEW_ACCESS_HOSTNAME: ${{ vars.PREVIEW_ACCESS_HOSTNAME }}
+      PREVIEW_ACCESS_SERVICE_TOKEN_IDS_JSON: ${{ vars.PREVIEW_ACCESS_SERVICE_TOKEN_IDS_JSON }}
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+      - run: pnpm install --frozen-lockfile
+      - name: Validate deployment inputs
+        run: node scripts/check-deploy-prerequisites.mjs "$DEPLOY_ENVIRONMENT" --inputs-only
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          REALTIME_TOKEN: ${{ secrets.REALTIME_TOKEN }}
+          ACCELEVENTS_API_KEY: ${{ secrets.ACCELEVENTS_API_KEY }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      - name: Render non-secret Terraform desired state
+        env:
+          D1_PRIMARY_LOCATION_HINT: ${{ vars.D1_PRIMARY_LOCATION_HINT }}
+          R2_LOCATION: ${{ vars.R2_LOCATION }}
+          ENABLE_D1_READ_REPLICATION: ${{ vars.ENABLE_D1_READ_REPLICATION }}
+          ENABLE_PREVIEW_ACCESS: ${{ vars.ENABLE_PREVIEW_ACCESS }}
+          PREVIEW_ACCESS_HOSTNAME: ${{ vars.PREVIEW_ACCESS_HOSTNAME }}
+          PREVIEW_ACCESS_ALLOWED_EMAILS_JSON: ${{ vars.PREVIEW_ACCESS_ALLOWED_EMAILS_JSON }}
+          PREVIEW_ACCESS_ALLOWED_IDPS_JSON: ${{ vars.PREVIEW_ACCESS_ALLOWED_IDPS_JSON }}
+          PREVIEW_ACCESS_SERVICE_TOKEN_IDS_JSON: ${{ vars.PREVIEW_ACCESS_SERVICE_TOKEN_IDS_JSON }}
+          DNS_RECORDS_JSON: ${{ vars.DNS_RECORDS_JSON }}
+          JOBS_QUEUE_RETENTION_SECONDS: ${{ vars.JOBS_QUEUE_RETENTION_SECONDS }}
+          JOBS_DLQ_RETENTION_SECONDS: ${{ vars.JOBS_DLQ_RETENTION_SECONDS }}
+        run: node scripts/render-terraform-vars.mjs --environment "$DEPLOY_ENVIRONMENT"
+      - name: Initialize and apply infrastructure
+        working-directory: infra/terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL_S3: https://${{ vars.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          terraform init -reconfigure -lockfile=readonly -backend-config=../environments/${DEPLOY_ENVIRONMENT}.s3.tfbackend
+          terraform plan -lock-timeout=5m -var-file="../../artifacts/terraform/${DEPLOY_ENVIRONMENT}.tfvars.json" -out=tfplan
+          terraform apply -lock-timeout=5m -auto-approve tfplan
+      - id: infrastructure
+        name: Read infrastructure outputs
+        working-directory: infra/terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_STATE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_STATE_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL_S3: https://${{ vars.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: echo "d1_database_id=$(terraform output -raw d1_database_id)" >> "$GITHUB_OUTPUT"
+      - name: Render deployment configuration
+        env:
+          CLOUDFLARE_D1_DATABASE_ID: ${{ steps.infrastructure.outputs.d1_database_id }}
+        run: |
+          node scripts/render-wrangler-config.mjs --environment "$DEPLOY_ENVIRONMENT"
+          node scripts/check-deploy-prerequisites.mjs "$DEPLOY_ENVIRONMENT"
+          install -m 600 artifacts/wrangler/wrangler.jsonc wrangler.jsonc
+          install -m 600 artifacts/wrangler/wrangler.jobs.jsonc wrangler.jobs.jsonc
+          install -m 600 artifacts/wrangler/wrangler.realtime.jsonc wrangler.realtime.jsonc
+      - name: Render Worker secrets without logging values
+        env:
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          REALTIME_TOKEN: ${{ secrets.REALTIME_TOKEN }}
+          ACCELEVENTS_API_KEY: ${{ secrets.ACCELEVENTS_API_KEY }}
+        run: |
+          node scripts/write-worker-secrets.mjs --worker app --out-file artifacts/secrets/app.json --cleanup-out-file artifacts/secrets/app-cleanup.json
+          node scripts/write-worker-secrets.mjs --worker jobs --out-file artifacts/secrets/jobs.json --cleanup-out-file artifacts/secrets/jobs-cleanup.json
+          node scripts/write-worker-secrets.mjs --worker realtime --out-file artifacts/secrets/realtime.json
+      - name: Apply D1 migrations
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm exec wrangler d1 migrations apply DB --remote --env "$DEPLOY_ENVIRONMENT" --config wrangler.jsonc
+      - name: Seed staging demo data when explicitly requested
+        if: inputs.seed_demo == true && inputs.environment == 'staging'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DEMO_USER_PASSWORD: ${{ secrets.DEMO_USER_PASSWORD }}
+        run: |
+          node scripts/render-demo-seed.mjs
+          pnpm exec wrangler d1 execute DB --remote --env staging --config wrangler.jsonc --file artifacts/demo-seed.sql
+      - name: Build application
+        run: CLOUDFLARE_ENV="$DEPLOY_ENVIRONMENT" pnpm build
+      - name: Deploy realtime Worker first
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm exec wrangler deploy --env "$DEPLOY_ENVIRONMENT" --config wrangler.realtime.jsonc --secrets-file artifacts/secrets/realtime.json
+      - name: Deploy jobs Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm exec wrangler deploy --env "$DEPLOY_ENVIRONMENT" --config wrangler.jobs.jsonc --secrets-file artifacts/secrets/jobs.json
+      - name: Deploy application Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: CLOUDFLARE_ENV="$DEPLOY_ENVIRONMENT" pnpm exec wrangler deploy --secrets-file artifacts/secrets/app.json
+      - name: Remove disabled optional Worker secrets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [[ "$(node -p "Object.keys(require('./artifacts/secrets/app-cleanup.json')).length")" -gt 0 ]]; then
+            pnpm exec wrangler secret bulk artifacts/secrets/app-cleanup.json --name "conference-ops-${DEPLOY_ENVIRONMENT}-app"
+          fi
+          if [[ "$(node -p "Object.keys(require('./artifacts/secrets/jobs-cleanup.json')).length")" -gt 0 ]]; then
+            pnpm exec wrangler secret bulk artifacts/secrets/jobs-cleanup.json --name "conference-ops-${DEPLOY_ENVIRONMENT}-jobs"
+          fi
+      - name: Health check
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+        run: |
+          response_file="$(mktemp)"
+          trap 'rm -f -- "$response_file"' EXIT
+          args=(--silent --show-error --retry 5 --retry-all-errors --max-time 20 --output "$response_file" --write-out '%{http_code}')
+          if [[ -n "$CF_ACCESS_CLIENT_ID" && -n "$CF_ACCESS_CLIENT_SECRET" ]]; then
+            args+=(--header "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID")
+            args+=(--header "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET")
+          fi
+          status="$(curl "${args[@]}" "${PUBLIC_APP_URL%/}/api/health")"
+          if [[ "$status" != "200" ]]; then
+            echo "Health check returned HTTP $status" >&2
+            exit 1
+          fi
+          node -e '
+            const fs = require("node:fs");
+            const body = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (body.status !== "ok") throw new Error(`Unexpected health status: ${body.status}`);
+            if (body.environment !== process.env.DEPLOY_ENVIRONMENT) throw new Error(`Expected ${process.env.DEPLOY_ENVIRONMENT}; received ${body.environment}`);
+          ' "$response_file"

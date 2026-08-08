@@ -1,0 +1,157 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "conference-ops-jobs-local",
+  "main": "./src/jobs/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    }
+  },
+  "vars": {
+    "ENVIRONMENT": "local",
+    "DEMO_MODE": "true",
+    "PUBLIC_APP_URL": "http://localhost:5173",
+    "BETTER_AUTH_URL": "http://localhost:5173",
+    "ACCELEVENTS_EVENT_URL": "",
+    "MAIL_FROM": "program@example.invalid",
+    "MAIL_REPLY_TO": "program@example.invalid"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "conference-ops-local",
+      "database_id": "local-conference-ops",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "JOBS_QUEUE",
+        "queue": "conference-ops-local-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "conference-ops-local-jobs",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "conference-ops-local-jobs-dlq",
+        "retry_delay": 15
+      }
+    ]
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+  "send_email": [
+    {
+      "name": "EMAIL"
+    }
+  ],
+  "env": {
+    "staging": {
+      "name": "conference-ops-staging-jobs",
+      "workers_dev": false,
+      "vars": {
+        "ENVIRONMENT": "staging",
+        "DEMO_MODE": "false",
+        "PUBLIC_APP_URL": "__PUBLIC_APP_URL__",
+        "BETTER_AUTH_URL": "__PUBLIC_APP_URL__",
+        "ACCELEVENTS_EVENT_URL": "__ACCELEVENTS_EVENT_URL__",
+        "MAIL_FROM": "__MAIL_FROM__",
+        "MAIL_REPLY_TO": "__MAIL_REPLY_TO__"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "conference-ops-staging",
+          "database_id": "__D1_DATABASE_ID__",
+          "migrations_dir": "./migrations"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "JOBS_QUEUE",
+            "queue": "conference-ops-staging-jobs"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "conference-ops-staging-jobs",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 5,
+            "dead_letter_queue": "conference-ops-staging-jobs-dlq",
+            "retry_delay": 15
+          }
+        ]
+      },
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      },
+      "send_email": [
+        {
+          "name": "EMAIL",
+          "allowed_sender_addresses": ["__MAIL_FROM__"]
+        }
+      ]
+    },
+    "production": {
+      "name": "conference-ops-production-jobs",
+      "workers_dev": false,
+      "vars": {
+        "ENVIRONMENT": "production",
+        "DEMO_MODE": "false",
+        "PUBLIC_APP_URL": "__PUBLIC_APP_URL__",
+        "BETTER_AUTH_URL": "__PUBLIC_APP_URL__",
+        "ACCELEVENTS_EVENT_URL": "__ACCELEVENTS_EVENT_URL__",
+        "MAIL_FROM": "__MAIL_FROM__",
+        "MAIL_REPLY_TO": "__MAIL_REPLY_TO__"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "conference-ops-production",
+          "database_id": "__D1_DATABASE_ID__",
+          "migrations_dir": "./migrations"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "JOBS_QUEUE",
+            "queue": "conference-ops-production-jobs"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "conference-ops-production-jobs",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 5,
+            "dead_letter_queue": "conference-ops-production-jobs-dlq",
+            "retry_delay": 15
+          }
+        ]
+      },
+      "triggers": {
+        "crons": ["*/5 * * * *"]
+      },
+      "send_email": [
+        {
+          "name": "EMAIL",
+          "allowed_sender_addresses": ["__MAIL_FROM__"]
+        }
+      ]
+    }
+  }
+}

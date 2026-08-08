@@ -1,0 +1,3 @@
+cloudflare_account_id  = "00000000000000000000000000000000"
+state_bucket_name      = "conference-ops-terraform-state"
+state_bucket_location  = "wnam"

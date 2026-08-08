@@ -1,0 +1,65 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "conference-ops-realtime-local",
+  "main": "./src/realtime/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "EVENT_REALTIME",
+        "class_name": "EventRealtime"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["EventRealtime"]
+    }
+  ],
+  "secrets": {
+    "required": ["REALTIME_TOKEN"]
+  },
+  "env": {
+    "staging": {
+      "name": "conference-ops-staging-realtime",
+      "workers_dev": false,
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "EVENT_REALTIME",
+            "class_name": "EventRealtime"
+          }
+        ]
+      },
+      "secrets": {
+        "required": ["REALTIME_TOKEN"]
+      }
+    },
+    "production": {
+      "name": "conference-ops-production-realtime",
+      "workers_dev": false,
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "EVENT_REALTIME",
+            "class_name": "EventRealtime"
+          }
+        ]
+      },
+      "secrets": {
+        "required": ["REALTIME_TOKEN"]
+      }
+    }
+  }
+}

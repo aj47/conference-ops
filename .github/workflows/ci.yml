@@ -1,0 +1,85 @@
+name: Verify
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    name: Application and D1
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Audit production dependencies
+        run: pnpm audit --prod
+      - name: Verify generated migration is current
+        run: |
+          pnpm db:generate
+          git diff --exit-code -- migrations
+      - name: Lint, typecheck, test, and build
+        run: pnpm verify
+      - name: Install end-to-end browsers
+        run: pnpm exec playwright install --with-deps chromium webkit
+      - name: Run desktop and mobile lifecycle tests
+        run: pnpm test:e2e
+      - name: Apply migrations and realistic seed to an isolated D1
+        run: bash scripts/verify-migrations.sh
+      - name: Render non-secret deployment configuration
+        env:
+          CLOUDFLARE_D1_DATABASE_ID: 11111111-1111-4111-8111-111111111111
+          PUBLIC_APP_URL: https://staging.example.com
+          MAIL_FROM: program@example.com
+          MAIL_REPLY_TO: replies@example.com
+        run: |
+          node scripts/render-wrangler-config.mjs --environment staging
+          node scripts/check-deploy-prerequisites.mjs staging
+          install -m 600 artifacts/wrangler/wrangler.jsonc wrangler.jsonc
+          install -m 600 artifacts/wrangler/wrangler.jobs.jsonc wrangler.jobs.jsonc
+          install -m 600 artifacts/wrangler/wrangler.realtime.jsonc wrangler.realtime.jsonc
+      - name: Dry-run all Workers
+        run: |
+          pnpm exec wrangler deploy --dry-run --env staging --config wrangler.realtime.jsonc
+          pnpm exec wrangler deploy --dry-run --env staging --config wrangler.jobs.jsonc
+          CLOUDFLARE_ENV=staging pnpm build
+          CLOUDFLARE_ENV=staging pnpm exec wrangler deploy --dry-run
+
+  terraform:
+    name: Terraform syntax and validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ci-placeholder-token
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+      - name: Check formatting
+        run: terraform fmt -check -recursive infra
+      - name: Validate bootstrap stack
+        working-directory: infra/bootstrap
+        run: |
+          terraform init -backend=false -lockfile=readonly
+          terraform validate
+          terraform plan -refresh=false -lock=false -input=false -var-file=terraform.tfvars.example
+      - name: Validate environment stack
+        run: |
+          mkdir -p "$RUNNER_TEMP/conference-ops-terraform"
+          cp infra/terraform/*.tf "$RUNNER_TEMP/conference-ops-terraform/"
+          cp infra/terraform/.terraform.lock.hcl "$RUNNER_TEMP/conference-ops-terraform/"
+          sed -i '/backend "s3" {}/d' "$RUNNER_TEMP/conference-ops-terraform/versions.tf"
+          terraform -chdir="$RUNNER_TEMP/conference-ops-terraform" init -backend=false -lockfile=readonly
+          terraform -chdir="$RUNNER_TEMP/conference-ops-terraform" validate
+          terraform -chdir="$RUNNER_TEMP/conference-ops-terraform" plan -refresh=false -lock=false -input=false -var-file="$GITHUB_WORKSPACE/infra/environments/ci.tfvars"

@@ -1,0 +1,68 @@
+{
+  "name": "conference-ops",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:seed:local": "wrangler d1 execute DB --local --file=./seed.sql",
+    "cf:types": "wrangler types",
+    "cf:dry-run": "wrangler deploy --dry-run",
+    "deploy:staging": "CLOUDFLARE_ENV=staging vite build && wrangler deploy --env staging",
+    "deploy:production": "CLOUDFLARE_ENV=production vite build && wrangler deploy --env production"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "6.3.1",
+    "@dnd-kit/sortable": "10.0.0",
+    "@dnd-kit/utilities": "3.2.2",
+    "@hono/zod-validator": "^0.9.0",
+    "better-auth": "1.6.26",
+    "date-fns": "4.1.0",
+    "drizzle-orm": "0.45.2",
+    "hono": "4.13.1",
+    "lucide-react": "0.544.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-router-dom": "7.18.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.51.1",
+    "@cloudflare/workers-types": "^5.20260808.1",
+    "@eslint/js": "9.39.4",
+    "@playwright/test": "1.62.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "drizzle-kit": "0.31.10",
+    "eslint": "9.39.4",
+    "eslint-plugin-react-hooks": "7.0.1",
+    "eslint-plugin-react-refresh": "0.4.24",
+    "jsdom": "27.0.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.1",
+    "vite": "8.2.1",
+    "vitest": "4.1.10",
+    "wrangler": "4.120.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@esbuild-kit/core-utils>esbuild": "0.25.12"
+    }
+  },
+  "packageManager": "pnpm@9.12.1"
+}
