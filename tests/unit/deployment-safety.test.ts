@@ -68,6 +68,18 @@ function readinessBindings(overrides: Partial<Bindings> = {}): Bindings {
 }
 
 describe("deployment preflight", () => {
+  it("does not duplicate the reusable verification run while deployment is disabled", () => {
+    const workflow = readFileSync(".github/workflows/deploy.yml", "utf8");
+
+    expect(workflow).toContain(`  verify:
+    if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml`);
+    expect(workflow).toContain(`  deploy:
+    name: Deploy \${{ inputs.environment || 'staging' }}
+    needs: verify
+    if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'`);
+  });
+
   it("does not expose deploy scripts that bypass rendered configuration", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { scripts?: Record<string, string> };
     const mutatingDeployScripts = Object.entries(packageJson.scripts ?? {})
