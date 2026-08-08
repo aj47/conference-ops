@@ -4,13 +4,17 @@ import type {
   EmbedDefinition,
   FormDefinition,
   FormField,
+  MessageTemplateDefinition,
   OnboardingTask,
   ProgramSession,
   Proposal,
+  ReminderRule,
   ResourcePage,
   ReviewAssignment,
+  ReviewerGroupConfig,
   Room,
   SpeakerProfile,
+  TaskTemplateDefinition,
   Track,
   WorkspaceSnapshot,
 } from "../shared/domain";
@@ -184,10 +188,13 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
 
   const eventId = String(membership.id);
   const role = String(membership.role) as Actor["role"];
-  const [formRows, speakerRows, proposalRows, proposalSpeakerRows, reviewRows, taskRows, trackRows, roomRows, sessionRows, sessionSpeakerRows, resourceRows, embedRows, activityRows, actorRows] = await Promise.all([
+  const [formRows, speakerRows, proposalRows, proposalSpeakerRows, reviewRows, taskRows, trackRows, roomRows, sessionRows, sessionSpeakerRows, resourceRows, embedRows, activityRows, actorRows, reviewerGroupRows, reviewerGroupMemberRows, taskTemplateRows, messageTemplateRows, reminderRuleRows] = await Promise.all([
     env.DB.prepare(workspaceFormRowsSql(role)).bind(eventId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT sp.*, up.object_key AS headshot_key FROM speaker_profiles sp LEFT JOIN uploads up ON up.id = sp.headshot_upload_id WHERE sp.event_id = ?").bind(eventId).all<Record<string, unknown>>(),
-    env.DB.prepare(`SELECT p.*, rg.name AS reviewer_group, response_version.fields AS response_fields,
+    env.DB.prepare(`SELECT p.*, COALESCE((SELECT GROUP_CONCAT(route_group.name, ', ')
+        FROM proposal_reviewer_groups route
+        JOIN reviewer_groups route_group ON route_group.id = route.reviewer_group_id
+        WHERE route.proposal_id = p.id), rg.name) AS reviewer_group, response_version.fields AS response_fields,
       response_version.id AS response_version_id, response_version.form_id AS response_form_id,
       response_version.version AS response_version, response_version.public_title AS response_public_title,
       response_version.page_heading AS response_page_heading, response_version.welcome_title AS response_welcome_title,
@@ -234,6 +241,14 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
     env.DB.prepare("SELECT * FROM embeds WHERE event_id = ? ORDER BY name").bind(eventId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT al.*, COALESCE(u.name, 'Conference Ops') AS actor_name FROM audit_logs al LEFT JOIN user u ON u.id = al.actor_user_id WHERE al.event_id = ? ORDER BY al.created_at DESC LIMIT 20").bind(eventId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT u.id, u.name, u.email, em.role FROM event_memberships em JOIN user u ON u.id = em.user_id WHERE em.event_id = ? ORDER BY u.name").bind(eventId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT id, name, category FROM reviewer_groups WHERE event_id = ? ORDER BY category, name").bind(eventId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT rgm.reviewer_group_id, rgm.user_id FROM reviewer_group_members rgm JOIN reviewer_groups rg ON rg.id = rgm.reviewer_group_id WHERE rg.event_id = ? ORDER BY rgm.user_id").bind(eventId).all<Record<string, unknown>>(),
+    env.DB.prepare(`SELECT tt.*, fv.form_id AS linked_form_id, fv.fields AS linked_form_fields
+      FROM task_templates tt
+      LEFT JOIN form_versions fv ON fv.id = tt.form_version_id
+      WHERE tt.event_id = ? ORDER BY tt.created_at, tt.title`).bind(eventId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT id, kind, name, subject, html, text, updated_at FROM message_templates WHERE event_id = ? ORDER BY kind, updated_at DESC").bind(eventId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT id, kind, enabled, offset_days, updated_at FROM communication_schedules WHERE event_id = ? ORDER BY kind").bind(eventId).all<Record<string, unknown>>(),
   ]);
 
   const speakerById = new Map<string, SpeakerProfile>();
@@ -351,6 +366,45 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
   const resources: ResourcePage[] = resourceRows.results.map((row) => ({ id: String(row.id), title: String(row.title), slug: String(row.slug), status: String(row.status) as ResourcePage["status"], summary: String(row.summary), updatedAt: iso(row.updated_at) }));
   const embeds: EmbedDefinition[] = embedRows.results.map((row) => ({ id: String(row.id), name: String(row.name), eventId, format: String(row.format) as EmbedDefinition["format"], enabled: Boolean(row.enabled), theme: String(row.theme) as EmbedDefinition["theme"], updatedAt: iso(row.updated_at) }));
   const actors: Actor[] = actorRows.results.map((row) => ({ id: String(row.id), name: String(row.name), email: String(row.email), role: String(row.role) as Actor["role"] }));
+  const reviewerIdsByGroup = new Map<string, string[]>();
+  for (const row of reviewerGroupMemberRows.results) {
+    const groupId = String(row.reviewer_group_id);
+    reviewerIdsByGroup.set(groupId, [...(reviewerIdsByGroup.get(groupId) ?? []), String(row.user_id)]);
+  }
+  const reviewerGroups: ReviewerGroupConfig[] = reviewerGroupRows.results.map((row) => ({
+    id: String(row.id),
+    name: String(row.name),
+    category: String(row.category),
+    reviewerIds: reviewerIdsByGroup.get(String(row.id)) ?? [],
+  }));
+  const taskTemplates: TaskTemplateDefinition[] = taskTemplateRows.results.map((row) => ({
+    id: String(row.id),
+    title: String(row.title),
+    description: String(row.description),
+    type: String(row.type) as TaskTemplateDefinition["type"],
+    targetType: String(row.target_type) as TaskTemplateDefinition["targetType"],
+    completionMode: String(row.completion_mode) as TaskTemplateDefinition["completionMode"],
+    relativeDueDays: Number(row.relative_due_days),
+    formId: row.linked_form_id ? String(row.linked_form_id) : undefined,
+    fileRequestId: row.file_request_id ? String(row.file_request_id) : undefined,
+    formFields: row.linked_form_fields ? json<FormField[]>(row.linked_form_fields, []) : undefined,
+  }));
+  const messageTemplates: MessageTemplateDefinition[] = messageTemplateRows.results.map((row) => ({
+    id: String(row.id),
+    kind: String(row.kind) as MessageTemplateDefinition["kind"],
+    name: String(row.name),
+    subject: String(row.subject),
+    html: String(row.html),
+    text: String(row.text),
+    updatedAt: iso(row.updated_at),
+  }));
+  const reminderRules: ReminderRule[] = reminderRuleRows.results.map((row) => ({
+    id: String(row.id),
+    kind: String(row.kind) as ReminderRule["kind"],
+    enabled: Boolean(row.enabled),
+    offsetDays: Number(row.offset_days),
+    updatedAt: iso(row.updated_at),
+  }));
   const actor: Actor = { id: authActor.id, name: authActor.name, email: authActor.email, role };
   const reviewerProposalIds = new Set(reviews.filter((review) => review.reviewerId === authActor.id).map((review) => review.proposalId));
   const ownedProposalIds = new Set(proposalRows.results.filter((row) => String(row.owner_user_id) === authActor.id).map((row) => String(row.id)));
@@ -371,6 +425,10 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
     },
     forms: role === "organizer" ? forms : forms.filter((form) => form.status !== "draft"), proposals: visibleProposals, reviews: visibleReviews, tasks: visibleTasks, tracks, rooms, sessions: visibleSessions,
     resources: role === "organizer" ? resources : resources.filter((resource) => resource.status === "published"), embeds: role === "organizer" ? embeds : [],
+    reviewerGroups: role === "organizer" ? reviewerGroups : [],
+    taskTemplates: role === "organizer" ? taskTemplates : [],
+    messageTemplates: role === "organizer" ? messageTemplates : [],
+    reminderRules: role === "organizer" ? reminderRules : [],
     activity: role === "organizer" ? activityRows.results.map((row) => ({ id: String(row.id), actor: String(row.actor_name), action: String(row.action), target: String(row.summary), at: iso(row.created_at), tone: String(row.action).includes("failed") || String(row.action).includes("override") ? "warning" : String(row.action).includes("accepted") || String(row.action).includes("published") ? "positive" : "neutral" })) : [],
   };
 }

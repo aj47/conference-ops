@@ -66,18 +66,37 @@ class TestD1Database {
 function createDatabase() {
   const d1 = new TestD1Database();
   d1.database.exec(`
-    CREATE TABLE events (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, starts_at INTEGER NOT NULL);
-    CREATE TABLE event_memberships (event_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL);
+    CREATE TABLE events (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, starts_at INTEGER NOT NULL);
+    CREATE TABLE event_memberships (
+      event_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      accepted_at INTEGER,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (event_id, user_id, role)
+    );
     CREATE TABLE proposals (
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      format TEXT NOT NULL,
       status TEXT NOT NULL,
       decided_at INTEGER,
       updated_at INTEGER NOT NULL,
       version INTEGER NOT NULL
     );
-    CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL);
-    CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
+    CREATE TABLE speaker_profiles (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      event_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      published INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL, sort_order INTEGER NOT NULL);
     CREATE TABLE task_templates (
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL,
@@ -114,18 +133,59 @@ function createDatabase() {
       request_id TEXT NOT NULL,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE program_sessions (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      proposal_id TEXT UNIQUE,
+      origin TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      format TEXT NOT NULL,
+      status TEXT NOT NULL,
+      calendar_uid TEXT NOT NULL,
+      calendar_sequence INTEGER NOT NULL,
+      version INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE session_speakers (
+      session_id TEXT NOT NULL,
+      speaker_profile_id TEXT NOT NULL,
+      PRIMARY KEY (session_id, speaker_profile_id)
+    );
+    CREATE TABLE message_templates (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      kind TEXT,
+      subject TEXT NOT NULL,
+      html TEXT NOT NULL,
+      text TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE outbox (
+      id TEXT PRIMARY KEY,
+      event_id TEXT,
+      kind TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempts INTEGER NOT NULL,
+      available_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
 
-    INSERT INTO events VALUES ('event-a', 'org-a', 4102444800000);
-    INSERT INTO event_memberships VALUES ('event-a', 'organizer-a', 'organizer');
+    INSERT INTO events VALUES ('event-a', 'org-a', 'Conference A', 4102444800000);
+    INSERT INTO event_memberships VALUES ('event-a', 'organizer-a', 'organizer', 1, 1);
     INSERT INTO proposals VALUES
-      ('proposal-draft', 'event-a', 'draft', NULL, 1, 1),
-      ('proposal-review', 'event-a', 'under_review', NULL, 1, 1),
-      ('proposal-review-2', 'event-a', 'under_review', NULL, 1, 1);
-    INSERT INTO speaker_profiles VALUES ('speaker-a', 'event-a');
+      ('proposal-draft', 'event-a', 'applicant-a', 'Draft proposal', 'Draft summary', 'talk', 'draft', NULL, 1, 1),
+      ('proposal-review', 'event-a', 'applicant-a', 'First proposal', 'First summary', 'talk', 'under_review', NULL, 1, 1),
+      ('proposal-review-2', 'event-a', 'applicant-a', 'Second proposal', 'Second summary', 'workshop', 'under_review', NULL, 1, 1);
+    INSERT INTO speaker_profiles VALUES ('speaker-a', NULL, 'event-a', 'Speaker A', 'speaker@example.com', 0, 1);
     INSERT INTO proposal_speakers VALUES
-      ('proposal-draft', 'speaker-a'),
-      ('proposal-review', 'speaker-a'),
-      ('proposal-review-2', 'speaker-a');
+      ('proposal-draft', 'speaker-a', 0),
+      ('proposal-review', 'speaker-a', 0),
+      ('proposal-review-2', 'speaker-a', 0);
     INSERT INTO task_templates VALUES
       ('template-profile', 'event-a', 'Complete profile', 'Add public details.', 'profile', 'contact', 7),
       ('template-slides', 'event-a', 'Upload slides', 'Provide the final deck.', 'upload', 'submission', 7);
@@ -177,6 +237,8 @@ describe("proposal decision API finality", () => {
     ]);
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 0 });
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM speaker_tasks").get()).toEqual({ count: 0 });
+    expect(d1.database.prepare("SELECT COUNT(*) AS count FROM program_sessions").get()).toEqual({ count: 0 });
+    expect(d1.database.prepare("SELECT COUNT(*) AS count FROM outbox").get()).toEqual({ count: 0 });
   });
 
   it("requires a staged queue, creates onboarding once, and locks the final decision", async () => {
@@ -192,6 +254,12 @@ describe("proposal decision API finality", () => {
     expect(d1.database.prepare("SELECT status, decided_at IS NOT NULL AS decided, version FROM proposals WHERE id = 'proposal-review'").get()).toEqual({ status: "accepted", decided: 1, version: 3 });
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 2 });
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM speaker_tasks").get()).toEqual({ count: 2 });
+    expect(d1.database.prepare("SELECT proposal_id, status FROM program_sessions").get()).toEqual({ proposal_id: "proposal-review", status: "unscheduled" });
+    expect(d1.database.prepare("SELECT speaker_profile_id FROM session_speakers").all()).toEqual([{ speaker_profile_id: "speaker-a" }]);
+    expect(d1.database.prepare("SELECT published FROM speaker_profiles WHERE id = 'speaker-a'").get()).toEqual({ published: 1 });
+    expect(d1.database.prepare("SELECT idempotency_key, status FROM outbox").all()).toEqual([
+      { idempotency_key: "proposal-decision:proposal-review:accepted:speaker-a", status: "queued" },
+    ]);
   });
 
   it("creates contact tasks once and submission tasks for each accepted proposal", async () => {

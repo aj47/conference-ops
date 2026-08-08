@@ -1,5 +1,13 @@
 import type { Actor, Role } from "../shared/domain";
 
+export function selectablePersonaActors(
+  actors: Actor[],
+  activeActor: Pick<Actor, "id">,
+  demoMode = false,
+) {
+  return demoMode ? actors : actors.filter((actor) => actor.id === activeActor.id);
+}
+
 export function actorRoleOptionValue(
   actor: Pick<Actor, "id" | "role">,
   actors: Array<Pick<Actor, "id" | "role">> = [actor],

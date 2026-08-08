@@ -118,6 +118,37 @@ VALUES
    '[{"id":"field-title","label":"Title","type":"short_text","required":true},{"id":"field-summary","label":"What will you show?","type":"long_text","required":true}]',
    '{"source":"demo"}', NULL, 'user-organizer', 1786174200000);
 
+INSERT OR REPLACE INTO submission_forms
+  (id, event_id, name, slug, kind, target_type, submission_type,
+   collects_participants, status, current_version, published_version,
+   max_submissions_per_user, redirect_to_portal, confirmation_email_enabled,
+   opens_at, closes_at, created_at, updated_at)
+VALUES
+  ('form-hotel', 'event-aie-2026', 'Hotel stay requirements', 'hotel-stay',
+   'portal', 'contact', 'session', 0, 'published', 1, 1, 1, 1, 0,
+   NULL, NULL, 1785585600000, 1786174200000),
+  ('form-flight', 'event-aie-2026', 'Flight reimbursement', 'flight-reimbursement',
+   'portal', 'contact', 'session', 0, 'published', 1, 1, 1, 1, 0,
+   NULL, NULL, 1785585600000, 1786174200000);
+
+INSERT OR REPLACE INTO form_versions
+  (id, form_id, version, public_title, page_heading, welcome_title, welcome_copy,
+   confirmation_copy, max_speakers, allow_multiple_drafts, fields, settings,
+   published_at, created_by, created_at)
+VALUES
+  ('form-version-hotel-1', 'form-hotel', 1, 'Hotel stay requirements', 'Hotel',
+   'Plan your stay', 'Tell the event team whether you need an event-provided room and when you expect to arrive.',
+   'Your hotel requirements are saved.', 1, 0,
+   '[{"id":"hotel-needed","label":"Do you need an event-provided hotel room?","type":"checkbox","required":true,"section":"proposal"},{"id":"hotel-arrival","label":"Expected arrival date and time","type":"short_text","required":true,"section":"proposal","condition":{"sourceFieldId":"hotel-needed","operator":"equals","value":"true"}},{"id":"hotel-notes","label":"Accessibility or stay notes","type":"long_text","required":false,"section":"proposal","condition":{"sourceFieldId":"hotel-needed","operator":"equals","value":"true"}}]',
+   '{"proposalSectionTitle":"Hotel stay requirements","proposalPageHeading":"Hotel","proposalInstructions":"Share only the travel details the event team needs.","participantSectionTitle":"Speaker details","participantPageHeading":"Speaker","participantInstructions":"","participantMin":1,"combinedCharacterLimit":10000,"submissionType":"session","collectsParticipants":false,"maxSubmissionsPerUser":1,"redirectToPortal":true,"confirmationEmailEnabled":false}',
+   1786174200000, 'user-organizer', 1785585600000),
+  ('form-version-flight-1', 'form-flight', 1, 'Flight reimbursement', 'Travel',
+   'Plan your travel', 'Share the itinerary and reimbursement details the event team needs.',
+   'Your travel details are saved.', 1, 0,
+   '[{"id":"flight-needed","label":"Will you request flight reimbursement?","type":"checkbox","required":true,"section":"proposal"},{"id":"flight-itinerary","label":"Proposed itinerary or booking link","type":"long_text","required":true,"section":"proposal","condition":{"sourceFieldId":"flight-needed","operator":"equals","value":"true"}},{"id":"flight-amount","label":"Estimated reimbursement amount","type":"short_text","required":true,"section":"proposal","condition":{"sourceFieldId":"flight-needed","operator":"equals","value":"true"}}]',
+   '{"proposalSectionTitle":"Flight reimbursement","proposalPageHeading":"Travel","proposalInstructions":"Do not include card or passport numbers.","participantSectionTitle":"Speaker details","participantPageHeading":"Speaker","participantInstructions":"","participantMin":1,"combinedCharacterLimit":10000,"submissionType":"session","collectsParticipants":false,"maxSubmissionsPerUser":1,"redirectToPortal":true,"confirmationEmailEnabled":false}',
+   1786174200000, 'user-organizer', 1785585600000);
+
 INSERT OR REPLACE INTO reviewer_groups
   (id, event_id, name, category, created_at, updated_at)
 VALUES
@@ -203,6 +234,16 @@ VALUES
   ('proposal-4', 'speaker-jon', 0),
   ('proposal-5', 'speaker-marco', 0),
   ('proposal-6', 'speaker-leah', 0);
+
+INSERT OR REPLACE INTO proposal_reviewer_groups
+  (proposal_id, reviewer_group_id)
+VALUES
+  ('proposal-1', 'group-eval'),
+  ('proposal-2', 'group-agents'),
+  ('proposal-3', 'group-eval'),
+  ('proposal-4', 'group-agents'),
+  ('proposal-5', 'group-eval'),
+  ('proposal-6', 'group-eval');
 
 INSERT OR REPLACE INTO review_rounds
   (id, event_id, name, round, rubric, status, created_at, updated_at)
@@ -297,7 +338,13 @@ VALUES
    'form', 10, 'form-version-logistics-1', NULL, 1785585600000, 1786174200000),
   ('template-calendar', 'event-aie-2026', 'Accept calendar invitation',
    'Confirm the scheduled session time.', 'calendar', 'contact',
-   'manual', 5, NULL, NULL, 1785585600000, 1786174200000);
+   'manual', 5, NULL, NULL, 1785585600000, 1786174200000),
+  ('template-hotel', 'event-aie-2026', 'Hotel stay requirements',
+   'Tell the event team whether you need a hotel stay and share arrival details.', 'form', 'contact',
+   'form', 21, 'form-version-hotel-1', NULL, 1785585600000, 1786174200000),
+  ('template-flight', 'event-aie-2026', 'Flight reimbursement',
+   'Share the itinerary and reimbursement details the event team needs.', 'form', 'contact',
+   'form', 18, 'form-version-flight-1', NULL, 1785585600000, 1786174200000);
 
 INSERT OR REPLACE INTO speaker_tasks
   (id, event_id, template_id, speaker_profile_id, proposal_id, title, description, type,
@@ -356,13 +403,39 @@ VALUES
    '{"tracks":["track-evaluate"]}', 1785585600000, 1786173360000);
 
 INSERT OR REPLACE INTO message_templates
-  (id, event_id, name, subject, html, text, created_at, updated_at)
+  (id, event_id, kind, name, subject, html, text, created_at, updated_at)
 VALUES
-  ('message-session-scheduled', 'event-aie-2026', 'Session scheduled',
+  ('message-session-scheduled', 'event-aie-2026', 'calendar', 'Session scheduled',
    'Your {{event.name}} session is scheduled',
    '<p>Hi {{speaker.name}},</p><p>Your session <strong>{{session.title}}</strong> now has a time and room. An updated calendar invitation is attached.</p>',
    'Hi {{speaker.name}}, your session {{session.title}} now has a time and room. An updated calendar invitation is attached.',
+   1785585600000, 1786174200000),
+  ('message-confirmation', 'event-aie-2026', 'submission_confirmation', 'Submission confirmation',
+   'We received your {{event.name}} proposal',
+   '<p>Hi {{speaker.name}},</p><p>Your proposal is in the review queue.</p><p><a href="{{speaker.portal_url}}">Open your portal</a></p>',
+   'Hi {{speaker.name}}, your proposal is in the review queue. Open your portal: {{speaker.portal_url}}',
+   1785585600000, 1786174200000),
+  ('message-acceptance', 'event-aie-2026', 'acceptance', 'Acceptance decision',
+   'You are speaking at {{event.name}}',
+   '<p>Hi {{speaker.name}},</p><p>Your proposal <strong>{{proposal.title}}</strong> has been accepted.</p><p><a href="{{speaker.portal_url}}">Open onboarding</a></p><p>{{decision.feedback}}</p>',
+   'Hi {{speaker.name}}, your proposal {{proposal.title}} has been accepted. Open onboarding: {{speaker.portal_url}}. {{decision.feedback}}',
+   1785585600000, 1786174200000),
+  ('message-rejection', 'event-aie-2026', 'rejection', 'Decline decision',
+   'Your {{event.name}} proposal',
+   '<p>Hi {{speaker.name}},</p><p>Thank you for submitting <strong>{{proposal.title}}</strong>. We are not able to include it in this program.</p><p>{{decision.feedback}}</p>',
+   'Hi {{speaker.name}}, thank you for submitting {{proposal.title}}. We are not able to include it in this program. {{decision.feedback}}',
+   1785585600000, 1786174200000),
+  ('message-reminder', 'event-aie-2026', 'reminder', 'Speaker task reminder',
+   'Speaker tasks due · {{event.name}}',
+   '<p>Hi {{speaker.name}},</p><p>You have {{task.count}} outstanding speaker task(s).</p><p><a href="{{speaker.portal_url}}">Open your portal</a></p>',
+   'Hi {{speaker.name}}, you have {{task.count}} outstanding speaker task(s). Open your portal: {{speaker.portal_url}}',
    1785585600000, 1786174200000);
+
+INSERT OR REPLACE INTO communication_schedules
+  (id, event_id, kind, enabled, offset_days, last_run_at, created_at, updated_at)
+VALUES
+  ('schedule-cfp-draft', 'event-aie-2026', 'cfp_draft', 1, 2, NULL, 1785585600000, 1786174200000),
+  ('schedule-task-overdue', 'event-aie-2026', 'task_overdue', 1, 2, NULL, 1785585600000, 1786174200000);
 
 -- A historical sent item demonstrates outbox visibility without creating an
 -- email, calendar, or integration side effect when the demo seed is applied.

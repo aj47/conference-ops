@@ -1,6 +1,7 @@
 const privateWorkspaceRoutes = new Set([
   "/workspace",
   "/forms",
+  "/program-settings",
   "/proposals",
   "/reviews",
   "/schedule",

@@ -4,6 +4,7 @@ import { eventRoleLandingPath, privateEventPath } from "../../src/client/private
 describe("privateEventPath", () => {
   it("pins authenticated organizer and speaker routes to the active event", () => {
     expect(privateEventPath("/workspace", "event-secondary")).toBe("/workspace?eventId=event-secondary");
+    expect(privateEventPath("/program-settings", "event-secondary")).toBe("/program-settings?eventId=event-secondary");
     expect(privateEventPath("/reviews?round=2#queue", "event secondary")).toBe("/reviews?round=2&eventId=event+secondary#queue");
     expect(privateEventPath("/portal/tasks", "event-secondary")).toBe("/portal/tasks?eventId=event-secondary");
   });

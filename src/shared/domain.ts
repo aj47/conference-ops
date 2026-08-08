@@ -93,6 +93,7 @@ export interface FormDefinition {
   id: string;
   eventId: string;
   name: string;
+  slug?: string;
   publicTitle?: string;
   pageHeading?: string;
   version: number;
@@ -186,6 +187,56 @@ export interface ReviewRubricCriterion {
   weight: number;
   maxScore: number;
   description?: string;
+}
+
+export interface ReviewerGroupConfig {
+  id: string;
+  name: string;
+  category: string;
+  reviewerIds: string[];
+}
+
+export interface TaskTemplateDefinition {
+  id: string;
+  title: string;
+  description: string;
+  type: "profile" | "upload" | "form" | "calendar";
+  targetType: "contact" | "group" | "submission";
+  completionMode: "manual" | "form" | "file_request";
+  relativeDueDays: number;
+  formId?: string;
+  fileRequestId?: string;
+  formFields?: FormField[];
+}
+
+export type MessageTemplateKind = "submission_confirmation" | "acceptance" | "rejection" | "reminder" | "calendar";
+
+export interface MessageTemplateDefinition {
+  id: string;
+  kind: MessageTemplateKind;
+  name: string;
+  subject: string;
+  html: string;
+  text: string;
+  updatedAt: string;
+}
+
+export interface ReminderRule {
+  id: string;
+  kind: "task_overdue" | "cfp_draft";
+  enabled: boolean;
+  offsetDays: number;
+  updatedAt: string;
+}
+
+export interface ReadinessInsight {
+  id: string;
+  priority: "now" | "next" | "watch";
+  title: string;
+  detail: string;
+  count: number;
+  actionLabel: string;
+  actionPath: string;
 }
 
 export interface OnboardingTask {
@@ -295,6 +346,10 @@ export interface WorkspaceSnapshot {
   sessions: ProgramSession[];
   resources: ResourcePage[];
   embeds?: EmbedDefinition[];
+  reviewerGroups?: ReviewerGroupConfig[];
+  taskTemplates?: TaskTemplateDefinition[];
+  messageTemplates?: MessageTemplateDefinition[];
+  reminderRules?: ReminderRule[];
   activity: ActivityItem[];
 }
 

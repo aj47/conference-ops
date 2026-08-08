@@ -16,6 +16,7 @@ import {
   LockKeyhole,
   Mail,
   Plus,
+  Pencil,
   Save,
   Send,
   Settings2,
@@ -77,19 +78,20 @@ function LongTextField({ value, onChange, label, hint }: { value: string; onChan
   );
 }
 
-function AddFieldDialog({ sourceFields, onAdd, onClose }: { sourceFields: FormField[]; onAdd: (field: FormField) => void; onClose: () => void }) {
+function FieldDialog({ sourceFields, field, onSave, onClose }: { sourceFields: FormField[]; field?: FormField; onSave: (field: FormField) => void; onClose: () => void }) {
   const dialogRef = useDialogA11y<HTMLFormElement>(onClose);
-  const [label, setLabel] = useState("");
-  const [type, setType] = useState<FormFieldType>("short_text");
-  const [required, setRequired] = useState(false);
-  const [options, setOptions] = useState("Option one\nOption two");
-  const eligibleSources = sourceFields.filter((field) => field.type !== "file" && !field.condition);
-  const [conditionEnabled, setConditionEnabled] = useState(false);
-  const [conditionSourceId, setConditionSourceId] = useState(eligibleSources[0]?.id ?? "");
-  const [conditionOperator, setConditionOperator] = useState<"equals" | "contains">("equals");
+  const [label, setLabel] = useState(field?.label ?? "");
+  const [type, setType] = useState<FormFieldType>(field?.type ?? "short_text");
+  const [required, setRequired] = useState(field?.required ?? false);
+  const [options, setOptions] = useState(field?.options?.join("\n") ?? "Option one\nOption two");
+  const eligibleSources = sourceFields.filter((candidate) => candidate.id !== field?.id && candidate.type !== "file" && !candidate.condition);
+  const [conditionEnabled, setConditionEnabled] = useState(Boolean(field?.condition));
+  const [conditionSourceId, setConditionSourceId] = useState(field?.condition?.sourceFieldId ?? eligibleSources[0]?.id ?? "");
+  const [conditionOperator, setConditionOperator] = useState<"equals" | "contains">(field?.condition?.operator ?? "equals");
   const conditionSource = eligibleSources.find((field) => field.id === conditionSourceId);
-  const [conditionValue, setConditionValue] = useState(conditionSource?.options?.[0] ?? "");
+  const [conditionValue, setConditionValue] = useState(field?.condition?.value ?? conditionSource?.options?.[0] ?? "");
   const selectable = type === "select" || type === "multi_select";
+  const categoryField = field?.id === "field-category" || ["category", "program category", "program lane"].includes(field?.label.trim().toLowerCase() ?? "");
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <form
@@ -103,26 +105,27 @@ function AddFieldDialog({ sourceFields, onAdd, onClose }: { sourceFields: FormFi
         onSubmit={(event) => {
           event.preventDefault();
           if (!label.trim()) return;
-          onAdd({
-            id: `field-${crypto.randomUUID()}`,
-            label: label.trim(),
+          onSave({
+            id: field?.id ?? `field-${crypto.randomUUID()}`,
+            label: categoryField ? field!.label : label.trim(),
+            ...(field?.description ? { description: field.description } : {}),
             type,
-            required: type === "file" ? false : required,
+            required: categoryField ? true : type === "file" ? false : required,
             ...(selectable ? { options: options.split("\n").map((option) => option.trim()).filter(Boolean) } : {}),
-            ...(conditionEnabled && conditionSourceId && conditionValue.trim()
+            ...(!categoryField && conditionEnabled && conditionSourceId && conditionValue.trim()
               ? { condition: { sourceFieldId: conditionSourceId, operator: conditionOperator, value: conditionValue.trim() } }
               : {}),
           });
           onClose();
         }}
       >
-        <div className="drawer__head"><div><p className="eyebrow">Custom question</p><h2 id="new-field-title">Add a form field</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
+        <div className="drawer__head"><div><p className="eyebrow">{field ? "Published form contract" : "Custom question"}</p><h2 id="new-field-title">{field ? `Edit ${field.label}` : "Add a form field"}</h2></div><button type="button" className="icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div>
         <div className="drawer__body form-stack">
-          <Field label="Question label"><input data-dialog-initial-focus required value={label} onChange={(event) => setLabel(event.target.value)} placeholder="What should reviewers know?" /></Field>
-          <Field label="Answer type" hint="Secure file uploads are not available yet."><select value={type} onChange={(event) => setType(event.target.value as FormFieldType)}>{Object.entries(fieldTypeNames).filter(([value]) => value !== "file").map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></Field>
-          {selectable && <Field label="Choices" hint="One option per line"><textarea rows={5} value={options} onChange={(event) => setOptions(event.target.value)} /></Field>}
-          <Toggle checked={required} onChange={setRequired} label="Require an answer" />
-          {eligibleSources.length ? (
+          <Field label="Question label" hint={categoryField ? "The canonical program-lane label stays stable so routing remains reliable." : undefined}><input data-dialog-initial-focus required value={label} readOnly={categoryField} onChange={(event) => setLabel(event.target.value)} placeholder="What should reviewers know?" /></Field>
+          <Field label="Answer type" hint={categoryField ? "Use Dropdown for one track or Multi-select for one or more tracks." : "Secure file uploads are not available yet."}><select value={type} onChange={(event) => setType(event.target.value as FormFieldType)}>{Object.entries(fieldTypeNames).filter(([value]) => value !== "file" && (!categoryField || value === "select" || value === "multi_select")).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></Field>
+          {selectable && <Field label="Choices" hint="One option per line"><textarea required rows={5} value={options} onChange={(event) => setOptions(event.target.value)} /></Field>}
+          <Toggle checked={categoryField || required} onChange={setRequired} label="Require an answer" disabled={categoryField} />
+          {!categoryField && eligibleSources.length ? (
             <>
               <Toggle checked={conditionEnabled} onChange={setConditionEnabled} label="Show this field conditionally" />
               {conditionEnabled && <div className="field-grid field-grid--2">
@@ -135,9 +138,9 @@ function AddFieldDialog({ sourceFields, onAdd, onClose }: { sourceFields: FormFi
                 </Field>
               </div>}
             </>
-          ) : <InlineAlert tone="info">Add an unconditional question first if this field should depend on another answer.</InlineAlert>}
+          ) : !categoryField ? <InlineAlert tone="info">Add an unconditional question first if this field should depend on another answer.</InlineAlert> : null}
         </div>
-        <div className="drawer__foot"><button type="button" className="button button--quiet" onClick={onClose}>Cancel</button><button type="submit" className="button button--primary"><Plus size={15} /> Add field</button></div>
+        <div className="drawer__foot"><button type="button" className="button button--quiet" onClick={onClose}>Cancel</button><button type="submit" className="button button--primary">{field ? <><Save size={15} /> Save changes</> : <><Plus size={15} /> Add field</>}</button></div>
       </form>
     </div>
   );
@@ -145,7 +148,8 @@ function AddFieldDialog({ sourceFields, onAdd, onClose }: { sourceFields: FormFi
 
 function FieldRows({ fields, onChange, participant = false }: { fields: FormField[]; onChange: (fields: FormField[]) => void; participant?: boolean }) {
   const [adding, setAdding] = useState(false);
-  const lockedIds = new Set(["field-title", "speaker-first", "speaker-last", "speaker-email"]);
+  const [editing, setEditing] = useState<FormField | null>(null);
+  const identityLockedIds = new Set(["field-title", "speaker-first", "speaker-last", "speaker-email"]);
   const move = (index: number, direction: -1 | 1) => {
     const nextIndex = index + direction;
     if (nextIndex < 0 || nextIndex >= fields.length) return;
@@ -162,30 +166,34 @@ function FieldRows({ fields, onChange, participant = false }: { fields: FormFiel
       </div>
       <div className="field-rows">
         {fields.map((field, index) => {
-          const locked = lockedIds.has(field.id);
+          const identityLocked = identityLockedIds.has(field.id);
+          const routingContract = field.id === "field-category" || ["category", "program category", "program lane"].includes(field.label.trim().toLowerCase());
+          const requiredContract = identityLocked || routingContract;
           return (
             <article className="field-row" key={field.id}>
               <GripVertical size={16} className="field-row__grip" aria-hidden="true" />
               <div className="field-row__main">
-                <div className="field-row__title"><strong>{field.label}</strong>{locked && <span className="locked-badge"><LockKeyhole size={11} /> Locked</span>}</div>
+                <div className="field-row__title"><strong>{field.label}</strong>{identityLocked && <span className="locked-badge"><LockKeyhole size={11} /> Locked</span>}{routingContract && <span className="locked-badge"><Braces size={11} /> Routing contract</span>}</div>
                 <div className="field-row__meta"><span>{fieldTypeNames[field.type]}</span>{field.type === "long_text" && <span>Max 5,000</span>}{field.condition && <span className="condition-badge"><Braces size={11} /> When {fields.find((candidate) => candidate.id === field.condition?.sourceFieldId)?.label ?? "source"} {field.condition.operator === "equals" ? "is" : "contains"} {field.condition.value}</span>}</div>
               </div>
               <Toggle
                 checked={field.required}
-                disabled={locked || (field.type === "file" && !field.required)}
+                disabled={requiredContract || (field.type === "file" && !field.required)}
                 label={field.type === "file" ? field.required ? "Required — turn off to publish" : "Optional only" : "Required"}
                 onChange={(required) => onChange(fields.map((item) => item.id === field.id ? { ...item, required: item.type === "file" ? false : required } : item))}
               />
               <div className="field-row__actions">
+                <button type="button" className="icon-button" disabled={identityLocked} onClick={() => setEditing(field)} aria-label={`Edit ${field.label}`}><Pencil size={15} /></button>
                 <button type="button" className="icon-button" onClick={() => move(index, -1)} disabled={index === 0} aria-label={`Move ${field.label} up`}><ArrowUp size={15} /></button>
                 <button type="button" className="icon-button" onClick={() => move(index, 1)} disabled={index === fields.length - 1} aria-label={`Move ${field.label} down`}><ArrowDown size={15} /></button>
-                <button type="button" className="icon-button icon-button--danger" disabled={locked} onClick={() => onChange(fields.filter((item) => item.id !== field.id))} aria-label={`Delete ${field.label}`}><Trash2 size={15} /></button>
+                <button type="button" className="icon-button icon-button--danger" disabled={requiredContract} onClick={() => onChange(fields.filter((item) => item.id !== field.id))} aria-label={`Delete ${field.label}`}><Trash2 size={15} /></button>
               </div>
             </article>
           );
         })}
       </div>
-      {adding && <AddFieldDialog sourceFields={fields} onClose={() => setAdding(false)} onAdd={(field) => onChange([...fields, field])} />}
+      {adding && <FieldDialog sourceFields={fields} onClose={() => setAdding(false)} onSave={(field) => onChange([...fields, field])} />}
+      {editing && <FieldDialog sourceFields={fields} field={editing} onClose={() => setEditing(null)} onSave={(field) => onChange(fields.map((candidate) => candidate.id === field.id ? field : candidate))} />}
     </section>
   );
 }

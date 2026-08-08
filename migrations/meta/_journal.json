@@ -36,6 +36,20 @@
       "when": 1786197313324,
       "tag": "0004_regular_queen_noir",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786224854237,
+      "tag": "0005_past_dakota_north",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1786225124510,
+      "tag": "0006_careless_domino",
+      "breakpoints": true
     }
   ]
 }

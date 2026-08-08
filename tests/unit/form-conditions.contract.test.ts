@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { defaultForm } from "../../src/shared/demo-data";
 import {
   configuredSubmissionCategory,
+  configuredSubmissionCategories,
   formAvailability,
   isFieldVisible,
   requiredFileField,
@@ -169,6 +170,18 @@ describe("validateFormResponses", () => {
     expect(configuredSubmissionCategory(defaultForm.fields, { "field-category": "Developer experience" })).toBe("Developer experience");
     expect(configuredSubmissionCategory(defaultForm.fields, { "field-category": "Unconfigured category" })).toBeUndefined();
     expect(configuredSubmissionCategory(defaultForm.fields, { category: "Developer experience" })).toBeUndefined();
+  });
+
+  it("derives a deduplicated multi-track routing set from the pinned multi-select", () => {
+    const fields: FormField[] = [
+      { id: "field-category", label: "Program lanes", type: "multi_select", required: true, options: ["Agents", "Evaluation", "Infrastructure"] },
+    ];
+
+    expect(configuredSubmissionCategories(fields, {
+      "field-category": ["Agents", "Evaluation", "Agents", "Not configured"],
+    })).toEqual(["Agents", "Evaluation"]);
+    expect(configuredSubmissionCategories(fields, { "field-category": "Agents" })).toEqual(["Agents"]);
+    expect(configuredSubmissionCategories(fields, {})).toEqual([]);
   });
 
   it("counts canonical long text once and counts forged duplicate text independently", () => {

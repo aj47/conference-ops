@@ -130,6 +130,38 @@ export function createDemoWorkspace(actorId = "user-organizer"): WorkspaceSnapsh
       { id: "embed-agenda", name: "Public agenda", eventId: "event-aie-2026", format: "agenda", enabled: true, theme: "light", updatedAt: "2026-08-08T07:15:00.000Z" },
       { id: "embed-speakers", name: "Speaker gallery", eventId: "event-aie-2026", format: "speaker_gallery", enabled: true, theme: "light", updatedAt: "2026-08-08T07:16:00.000Z" },
     ],
+    reviewerGroups: [
+      { id: "group-agents", name: "Agents committee", category: "Agents in production", reviewerIds: ["user-reviewer"] },
+      { id: "group-infra", name: "Infrastructure committee", category: "Model infrastructure", reviewerIds: ["user-reviewer"] },
+      { id: "group-eval", name: "Evaluation committee", category: "Evaluation & safety", reviewerIds: ["user-reviewer"] },
+      { id: "group-dx", name: "DX committee", category: "Developer experience", reviewerIds: [] },
+    ],
+    taskTemplates: [
+      { id: "template-profile", title: "Confirm speaker profile", description: "Review your title, company, bio, and public headshot.", type: "profile", targetType: "contact", completionMode: "manual", relativeDueDays: 14 },
+      { id: "template-hotel", title: "Hotel stay requirements", description: "Tell the event team whether you need a hotel stay and share arrival details.", type: "form", targetType: "contact", completionMode: "form", relativeDueDays: 21, formId: "form-hotel", formFields: [
+        { id: "hotel-needed", label: "Do you need an event-provided hotel stay?", type: "checkbox", required: true, section: "proposal" },
+        { id: "hotel-arrival", label: "Expected arrival date", type: "short_text", required: false, section: "proposal", condition: { sourceFieldId: "hotel-needed", operator: "equals", value: "true" } },
+        { id: "hotel-notes", label: "Accessibility or room notes", type: "long_text", required: false, section: "proposal" },
+      ] },
+      { id: "template-flight", title: "Flight reimbursement", description: "Share the itinerary and reimbursement details the event team needs.", type: "form", targetType: "contact", completionMode: "form", relativeDueDays: 18, formId: "form-flight", formFields: [
+        { id: "flight-needed", label: "Will you request flight reimbursement?", type: "checkbox", required: true, section: "proposal" },
+        { id: "flight-origin", label: "Departure city or airport", type: "short_text", required: false, section: "proposal", condition: { sourceFieldId: "flight-needed", operator: "equals", value: "true" } },
+        { id: "flight-estimate", label: "Estimated round-trip cost", type: "short_text", required: false, section: "proposal", condition: { sourceFieldId: "flight-needed", operator: "equals", value: "true" } },
+      ] },
+      { id: "template-slides", title: "Upload final slides", description: "PDF or PPTX, maximum 50 MB.", type: "upload", targetType: "submission", completionMode: "file_request", relativeDueDays: 7, fileRequestId: "request-slides" },
+      { id: "template-calendar", title: "Accept calendar invitation", description: "Confirm the scheduled session time.", type: "calendar", targetType: "contact", completionMode: "manual", relativeDueDays: 5 },
+    ],
+    messageTemplates: [
+      { id: "message-confirmation", kind: "submission_confirmation", name: "Submission confirmation", subject: "We received your {{event.name}} proposal", html: "<p>Hi {{speaker.name}},</p><p>Your proposal <strong>{{proposal.title}}</strong> is in the review queue.</p><p><a href=\"{{speaker.portal_url}}\">Open your portal</a></p>", text: "Hi {{speaker.name}}, your proposal {{proposal.title}} is in the review queue. Open your portal: {{speaker.portal_url}}", updatedAt: "2026-08-08T07:17:00.000Z" },
+      { id: "message-acceptance", kind: "acceptance", name: "Acceptance", subject: "You're speaking at {{event.name}}", html: "<p>Hi {{speaker.name}},</p><p>Your proposal <strong>{{proposal.title}}</strong> has been accepted.</p><p><a href=\"{{speaker.portal_url}}\">Open onboarding</a></p><p>{{decision.feedback}}</p>", text: "Hi {{speaker.name}}, your proposal {{proposal.title}} has been accepted. Open onboarding: {{speaker.portal_url}}. {{decision.feedback}}", updatedAt: "2026-08-08T07:17:00.000Z" },
+      { id: "message-rejection", kind: "rejection", name: "Decision: not selected", subject: "Your {{event.name}} proposal", html: "<p>Hi {{speaker.name}},</p><p>Thank you for submitting <strong>{{proposal.title}}</strong>. We are not able to include it in this program.</p><p>{{decision.feedback}}</p>", text: "Hi {{speaker.name}}, thank you for submitting {{proposal.title}}. We are not able to include it in this program. {{decision.feedback}}", updatedAt: "2026-08-08T07:17:00.000Z" },
+      { id: "message-reminder", kind: "reminder", name: "Onboarding reminder", subject: "Speaker tasks for {{event.name}}", html: "<p>Hi {{speaker.name}},</p><p>You have {{task.count}} outstanding speaker task(s).</p><p><a href=\"{{speaker.portal_url}}\">Open your portal</a></p>", text: "Hi {{speaker.name}}, you have {{task.count}} outstanding speaker task(s). Open your portal: {{speaker.portal_url}}", updatedAt: "2026-08-08T07:17:00.000Z" },
+      { id: "message-calendar", kind: "calendar", name: "Calendar invitation", subject: "Your {{event.name}} session is scheduled", html: "<p>Hi {{speaker.name}},</p><p>Your session <strong>{{session.title}}</strong> is scheduled in {{session.room}}. The calendar invitation is attached.</p>", text: "Hi {{speaker.name}}, your session {{session.title}} is scheduled in {{session.room}}. The calendar invitation is attached.", updatedAt: "2026-08-08T07:17:00.000Z" },
+    ],
+    reminderRules: [
+      { id: "schedule-cfp-draft", kind: "cfp_draft", enabled: true, offsetDays: 2, updatedAt: "2026-08-08T07:17:00.000Z" },
+      { id: "schedule-task-overdue", kind: "task_overdue", enabled: true, offsetDays: 2, updatedAt: "2026-08-08T07:17:00.000Z" },
+    ],
     activity: [
       { id: "activity-1", actor: "Maya Chen", action: "accepted", target: "The eval flywheel that caught our agent regressions", at: "2026-08-08T07:45:00.000Z", tone: "positive" },
       { id: "activity-2", actor: "Leah Okafor", action: "submitted", target: "Observability for agents that run all afternoon", at: "2026-08-08T06:10:00.000Z", tone: "neutral" },

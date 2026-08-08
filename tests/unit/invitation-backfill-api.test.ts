@@ -119,6 +119,11 @@ async function createDatabase(role: "reviewer" | "organizer" = "reviewer") {
       updated_at INTEGER NOT NULL,
       owner_user_id TEXT NOT NULL
     );
+    CREATE TABLE proposal_reviewer_groups (
+      proposal_id TEXT NOT NULL,
+      reviewer_group_id TEXT NOT NULL,
+      PRIMARY KEY (proposal_id, reviewer_group_id)
+    );
     CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, user_id TEXT);
     CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
     CREATE TABLE review_assignments (
@@ -147,6 +152,13 @@ async function createDatabase(role: "reviewer" | "organizer" = "reviewer") {
       ('proposal-co-speaker', 'event-a', 'group-build', 'submitted', 1, 'applicant-c'),
       ('proposal-draft', 'event-a', 'group-build', 'draft', 1, 'applicant-d'),
       ('proposal-other', 'event-b', 'group-other', 'submitted', 1, 'applicant-e');
+    INSERT INTO proposal_reviewer_groups VALUES
+      ('proposal-build', 'group-build'),
+      ('proposal-evaluate', 'group-evaluate'),
+      ('proposal-owned', 'group-build'),
+      ('proposal-co-speaker', 'group-build'),
+      ('proposal-draft', 'group-build'),
+      ('proposal-other', 'group-other');
     INSERT INTO speaker_profiles VALUES ('speaker-reviewer-new', 'event-a', 'reviewer-new');
     INSERT INTO proposal_speakers VALUES ('proposal-co-speaker', 'speaker-reviewer-new');
   `);

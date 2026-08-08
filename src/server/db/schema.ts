@@ -205,6 +205,18 @@ export const reviewerGroupMembers = sqliteTable(
   (table) => [primaryKey({ columns: [table.reviewerGroupId, table.userId] }), index("reviewer_group_user_idx").on(table.userId)],
 );
 
+export const proposalReviewerGroups = sqliteTable(
+  "proposal_reviewer_groups",
+  {
+    proposalId: text("proposal_id").notNull().references(() => proposals.id, { onDelete: "cascade" }),
+    reviewerGroupId: text("reviewer_group_id").notNull().references(() => reviewerGroups.id, { onDelete: "cascade" }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.proposalId, table.reviewerGroupId] }),
+    index("proposal_reviewer_group_idx").on(table.reviewerGroupId),
+  ],
+);
+
 export const speakerProfiles = sqliteTable(
   "speaker_profiles",
   {
@@ -480,12 +492,27 @@ export const resourcePages = sqliteTable(
 export const messageTemplates = sqliteTable("message_templates", {
   id: text("id").primaryKey(),
   eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+  kind: text("kind", { enum: ["submission_confirmation", "acceptance", "rejection", "reminder", "calendar"] }).notNull().default("reminder"),
   name: text("name").notNull(),
   subject: text("subject").notNull(),
   html: text("html").notNull(),
   text: text("text").notNull(),
   ...timestamps,
 });
+
+export const communicationSchedules = sqliteTable(
+  "communication_schedules",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["task_overdue", "cfp_draft"] }).notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    offsetDays: integer("offset_days").notNull().default(2),
+    lastRunAt: integer("last_run_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex("communication_schedule_event_kind_unique").on(table.eventId, table.kind)],
+);
 
 export const outbox = sqliteTable(
   "outbox",

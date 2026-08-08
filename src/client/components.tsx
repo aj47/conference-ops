@@ -10,7 +10,7 @@ import { useEffect, useId } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ProposalStatus, TaskStatus } from "../shared/domain";
 import { eventRoleLandingPath } from "./private-routes";
-import { actorForRoleOption, actorRoleOptionValue } from "./role-selection";
+import { actorForRoleOption, actorRoleOptionValue, selectablePersonaActors } from "./role-selection";
 import { useWorkspace } from "./workspace";
 
 export function LogoMark({ compact = false }: { compact?: boolean }) {
@@ -45,6 +45,7 @@ export function PersonaSwitcher({ compact = false }: { compact?: boolean }) {
   const navigate = useNavigate();
   const labelId = useId();
   const eventId = privateWorkspaceEventId ?? workspace.event.id;
+  const selectableActors = selectablePersonaActors(workspace.actors, workspace.actor, workspace.demoMode === true);
 
   return (
     <label className={`persona-switcher${compact ? " persona-switcher--compact" : ""}`}>
@@ -53,18 +54,18 @@ export function PersonaSwitcher({ compact = false }: { compact?: boolean }) {
       <select
         aria-labelledby={compact ? undefined : labelId}
         aria-label={compact ? "Switch demo persona" : undefined}
-        value={actorRoleOptionValue(workspace.actor, workspace.actors)}
+        value={actorRoleOptionValue(workspace.actor, selectableActors)}
         onChange={(event) => {
-          const actor = actorForRoleOption(workspace.actors, event.target.value);
+          const actor = actorForRoleOption(selectableActors, event.target.value);
           if (!actor) return;
           switchActor(actor.id, actor.role);
           navigate(eventRoleLandingPath(actor.role, eventId, workspace.event.slug));
         }}
       >
-        {workspace.actors.map((actor) => (
+        {selectableActors.map((actor) => (
           <option
-            key={actorRoleOptionValue(actor, workspace.actors)}
-            value={actorRoleOptionValue(actor, workspace.actors)}
+            key={actorRoleOptionValue(actor, selectableActors)}
+            value={actorRoleOptionValue(actor, selectableActors)}
           >
             {actor.name} · {actor.role}
           </option>

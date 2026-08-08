@@ -46,7 +46,7 @@ function ProposalFacts({ proposal }: { proposal: Proposal }) {
 }
 
 function ProposalDetail({ proposal }: { proposal: Proposal }) {
-  const { workspace, decideProposal, convertProposalToSession } = useWorkspace();
+  const { workspace, decideProposal } = useWorkspace();
   const [decisionNote, setDecisionNote] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [stageChoice, setStageChoice] = useState<"accept_queue" | "decline_queue" | null>(null);
@@ -89,19 +89,19 @@ function ProposalDetail({ proposal }: { proposal: Proposal }) {
             </div>
           ) : proposal.status === "accepted" || proposal.status === "session" ? (
             <div className="decision-stage-editor">
-              <InlineAlert tone="info">The final acceptance is recorded. Create one unscheduled program session, then place it on the call sheet.</InlineAlert>
-              <button type="button" className="button button--positive button--full" disabled={hasSession || proposal.status === "session" || Boolean(pending)} onClick={async () => { setPending("convert"); try { await convertProposalToSession(proposal.id); } finally { setPending(null); } }}><Check size={15} /> {hasSession || proposal.status === "session" ? "Program session created" : pending === "convert" ? "Creating…" : "Create program session"}</button>
+              <InlineAlert tone="info">The final acceptance is recorded. Conference Ops created the speaker access, onboarding tasks, and an unscheduled program session automatically.</InlineAlert>
+              <div className="button button--positive button--full" aria-label={hasSession ? "Program session created" : "Program session is being activated"}><Check size={15} /> {hasSession ? "Program session created" : "Activation will appear after refresh"}</div>
             </div>
           ) : proposal.status === "accept_queue" ? (
             <div className="decision-stage-editor">
-              <InlineAlert tone="info"><strong>Acceptance queue.</strong> Final approval creates the speaker onboarding tasks. Queue the acceptance email from Publish after reviewing the audience; creating the session remains a separate action.</InlineAlert>
-              <Field label="Final decision note" hint="Internal audit context"><textarea rows={3} value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /></Field>
+              <InlineAlert tone="info"><strong>Acceptance queue.</strong> Final approval creates speaker access, onboarding tasks, and the unscheduled program session together, then queues the configured acceptance email.</InlineAlert>
+              <Field label="Decision feedback" hint="Saved in the audit trail and included in the decision email"><textarea rows={3} value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /></Field>
               <div className="decision-actions"><button type="button" className="button button--quiet" onClick={() => setStageChoice("decline_queue")}>Move to decline queue</button><button type="button" className="button button--positive" disabled={Boolean(pending)} onClick={() => void commitDecision("accepted")}><Check size={15} /> Confirm acceptance</button></div>
             </div>
           ) : proposal.status === "decline_queue" ? (
             <div className="decision-stage-editor">
               <InlineAlert tone="warning"><strong>Decline queue.</strong> Final rejection is distinct from this internal recommendation.</InlineAlert>
-              <Field label="Final decision note" hint="Internal audit context"><textarea rows={3} value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /></Field>
+              <Field label="Decision feedback" hint="Saved in the audit trail and included in the decision email"><textarea rows={3} value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /></Field>
               <div className="decision-actions"><button type="button" className="button button--quiet" onClick={() => setStageChoice("accept_queue")}>Move to accept queue</button><button type="button" className="button button--danger" disabled={Boolean(pending)} onClick={() => void commitDecision("rejected")}>Confirm decline</button></div>
             </div>
           ) : ["rejected", "withdrawn"].includes(proposal.status) ? (
@@ -261,7 +261,7 @@ function ReviewEditor({
                 </select>
               </label>
             )) : <InlineAlert tone="warning">This review round has no valid rubric. Ask an organizer to repair the round configuration before scoring.</InlineAlert>}
-            <Field label="Recommendation"><select disabled={locked} value={rubric.recommendation} onChange={(event) => setRubric({ ...rubric, recommendation: event.target.value as RubricState["recommendation"] })}><option value="strong_yes">Strong yes</option><option value="yes">Yes</option><option value="maybe">Maybe</option><option value="no">No</option></select></Field>
+            <Field label="Recommendation"><select disabled={locked} value={rubric.recommendation} onChange={(event) => setRubric({ ...rubric, recommendation: event.target.value as RubricState["recommendation"] })}><option value="strong_yes">Strong approve</option><option value="yes">Approve</option><option value="maybe">Maybe</option><option value="no">Deny</option></select></Field>
             <Field label="Evidence note" error={error} hint="Private to the review committee"><textarea rows={6} readOnly={locked} value={rubric.notes} onChange={(event) => { setRubric({ ...rubric, notes: event.target.value }); setError(""); }} placeholder="Point to the specific promise, risk, or missing proof that shaped your score." /></Field>
             <div className="rubric__actions"><button type="button" className="button button--quiet" disabled={locked || saving || !existing.rubric.length} onClick={() => void submit(false)}>Save draft</button><button type="submit" className="button button--primary" disabled={locked || saving || !existing.rubric.length}><CircleDot size={15} /> {locked ? "Review submitted" : saving ? "Submitting…" : "Submit review"}</button></div>
           </form>

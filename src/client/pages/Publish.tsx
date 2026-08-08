@@ -3,7 +3,6 @@ import {
   CalendarCheck,
   Check,
   CircleDashed,
-  CloudUpload,
   Download,
   Eye,
   FileJson,
@@ -18,6 +17,7 @@ import { Link } from "react-router-dom";
 import { projectConferenceExport } from "../../shared/conference-export";
 import { isAcceptedProposalStatus } from "../../shared/proposal-status";
 import type { CommunicationKind, ConferenceExportKind } from "../api";
+import type { MessageTemplateDefinition } from "../../shared/domain";
 import { conferenceApi } from "../api";
 import { Field, InlineAlert, PageHeader, ProgressBar, SectionHeading, StatusPill } from "../components";
 import { privateEventPath } from "../private-routes";
@@ -36,7 +36,25 @@ function batches(values: string[], size = 50) {
   );
 }
 
-function templatePreview(kind: CommunicationKind, eventName: string) {
+function templatePreview(kind: CommunicationKind, eventName: string, templates: MessageTemplateDefinition[]) {
+  const configured = templates.find((template) => template.kind === kind);
+  if (configured) {
+    const variables: Record<string, string> = {
+      "event.name": eventName,
+      "speaker.name": "[speaker]",
+      "proposal.title": "[proposal title]",
+      "decision.feedback": "[organizer feedback]",
+      "speaker.portal_url": "[speaker portal link]",
+      "task.count": "[open task count]",
+      "session.title": "[session title]",
+      "session.room": "[room]",
+    };
+    const render = (value: string) => Object.entries(variables).reduce(
+      (result, [key, replacement]) => result.replaceAll(`{{${key}}}`, replacement),
+      value,
+    );
+    return { subject: render(configured.subject), message: render(configured.text) };
+  }
   if (kind === "acceptance") {
     return {
       subject: `You’re speaking at ${eventName}`,
@@ -87,7 +105,7 @@ export function PublishCenter() {
   const pendingAgendaCount = workspace.sessions.filter((session) => session.status === "scheduled").length;
   const agendaLive = workspace.event.status === "agenda_published" || publishedSessionCount > 0;
   const hasPendingAgendaAdditions = pendingAgendaCount > 0;
-  const preview = templatePreview(kind, workspace.event.name);
+  const preview = templatePreview(kind, workspace.event.name, workspace.messageTemplates ?? []);
   const readiness = [
     { label: "Accepted speaker profiles", ready: accepted.every((proposal) => proposal.speakers.every((speaker) => speaker.profileComplete)), to: privateEventPath("/speaker-ops", eventId) },
     { label: "Accepted sessions on grid", ready: accepted.every((proposal) => workspace.sessions.some((session) => session.proposalId === proposal.id && session.status !== "unscheduled")), to: privateEventPath("/schedule", eventId) },
@@ -204,8 +222,8 @@ export function PublishCenter() {
 
         <section className="paper-panel communications-composer">
           <SectionHeading title="Communications queue" description="Each send is durable, retryable, and tracked by an idempotency key." action={<MailCheck size={19} />} />
-          <div className="field-grid field-grid--2"><Field label="Message"><select value={kind} onChange={(event) => { setKind(event.target.value as MessageKind); setSendError(null); }}><option value="acceptance">Acceptance & next steps</option><option value="reminder">Outstanding task reminder</option></select></Field><Field label="Eligible audience" hint="Audience rules prevent accidental sends to ineligible speakers."><input value={recipientLabel} readOnly /></Field></div>
-          <Field label="Template subject" hint="This is the operational template currently configured by the server."><input value={preview.subject} readOnly /></Field>
+          <div className="field-grid field-grid--2"><Field label="Message"><select value={kind} onChange={(event) => { setKind(event.target.value as MessageKind); setSendError(null); }}><option value="acceptance">Acceptance follow-up</option><option value="reminder">Outstanding task reminder</option></select></Field><Field label="Eligible audience" hint="Audience rules prevent accidental sends to ineligible speakers."><input value={recipientLabel} readOnly /></Field></div>
+          <Field label="Template subject" hint="Edit this operational template in Program setup → Communications."><input value={preview.subject} readOnly /></Field>
           <Field label="Template message"><textarea rows={5} value={preview.message} readOnly /></Field>
           {sendError && <InlineAlert tone="danger">{sendError}</InlineAlert>}
           <div className="send-proof"><ShieldCheck size={16} /><span><strong>{recipientIds.length} unique {recipientIds.length === 1 ? "recipient" : "recipients"}</strong><small>Resolved by speaker profile ID · batches are capped at 50 recipients</small></span></div>
@@ -213,8 +231,8 @@ export function PublishCenter() {
         </section>
 
         <section className="paper-panel integration-panel">
-          <SectionHeading title="Accelevents handoff" description="Exports contain accepted or directly programmed speakers and scheduled or public sessions only." action={<CloudUpload size={19} />} />
-          <div className="integration-state"><span className="integration-state__mark">AE</span><div><strong>Manual action required</strong><p>Enterprise API entitlement has not been confirmed. No remote records were changed.</p></div></div>
+          <SectionHeading title="Safe program exports" description="Download the accepted speakers and scheduled or public sessions approved for downstream use." action={<Download size={19} />} />
+          <div className="integration-state"><span className="integration-state__mark">CSV</span><div><strong>Portable handoff</strong><p>The pilot deliberately skips third-party event-platform sync. These scoped exports remain the reliable handoff.</p></div></div>
           {exportError && <InlineAlert tone="danger">{exportError}</InlineAlert>}
           <div className="export-list"><button type="button" disabled={exporting !== null} onClick={() => void downloadExport("speakers.csv")}><Users size={16} /><span><strong>Speakers.csv</strong><small>{exportedSpeakerCount} approved {exportedSpeakerCount === 1 ? "speaker" : "speakers"}</small></span><Download size={15} /></button><button type="button" disabled={exporting !== null} onClick={() => void downloadExport("sessions.csv")}><CalendarCheck size={16} /><span><strong>Sessions.csv</strong><small>{exportedSessionCount} scheduled or public {exportedSessionCount === 1 ? "session" : "sessions"}</small></span><Download size={15} /></button><button type="button" disabled={exporting !== null} onClick={() => void downloadExport("program.json")}><FileJson size={16} /><span><strong>Program.json</strong><small>{exportedSessionCount} {exportedSessionCount === 1 ? "session" : "sessions"} plus {exportedSpeakerCount} approved {exportedSpeakerCount === 1 ? "speaker" : "speakers"}</small></span><Download size={15} /></button></div>
         </section>

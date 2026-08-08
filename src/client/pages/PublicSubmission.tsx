@@ -22,6 +22,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router-dom";
 import type { FormField, Proposal } from "../../shared/domain";
+import { submissionCategoryField } from "../../shared/form-fields";
 import { ApiClientError, conferenceApi } from "../api";
 import { authClient } from "../auth-client";
 import { Field, InlineAlert, NoticeRegion, ProgressBar, StatusPill } from "../components";
@@ -62,10 +63,12 @@ const wizardSteps = [
 ] as const;
 
 function blankSubmission(fields: FormField[], minimumSpeakers = 1): ApplicantSubmission {
+  const initialCategory = initialConfiguredCategory(fields);
   return {
     title: "",
     summary: "",
-    category: initialConfiguredCategory(fields),
+    category: initialCategory,
+    categories: initialCategory ? [initialCategory] : [],
     format: "talk",
     level: "intermediate",
     repoUrl: "",
@@ -138,7 +141,9 @@ function answerForField(field: FormField, section: FormSection, submission: Appl
   if (section === "proposal") {
     if (field.id === "field-title" || ["title", "session title", "proposal title"].includes(label)) return submission.title;
     if (field.id === "field-summary" || ["abstract", "proposal summary", "session summary"].includes(label)) return submission.summary;
-    if (field.id === "field-category" || ["category", "program category", "program lane"].includes(label)) return submission.category;
+    if (field.id === "field-category" || ["category", "program category", "program lane"].includes(label)) {
+      return field.type === "multi_select" ? (submission.categories?.length ? submission.categories : submission.category ? [submission.category] : []) : submission.category;
+    }
     if (field.id === "field-format" || ["format", "preferred format", "session format"].includes(label)) {
       const label = submission.format === "lightning" ? "Lightning talk" : `${submission.format[0].toUpperCase()}${submission.format.slice(1)}`;
       return field.options?.find((option) => option.toLowerCase() === label.toLowerCase()) ?? label;
@@ -405,6 +410,8 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
     && hasAnswer(responses[field.id])
     && fields.findIndex((candidate) => candidate.field.id === field.id) === index);
   const categoryOptions = configuredCategoryOptions(builder.proposalFields);
+  const categoryField = submissionCategoryField(builder.proposalFields);
+  const allowsMultipleCategories = categoryField?.type === "multi_select";
   const collectsRepository = builder.proposalFields.some((field) => field.id === "field-repo");
   const collectsWorkshopNeeds = builder.proposalFields.some((field) => field.id === "field-workshop-needs");
   const accountState = submissionAccountState(source, session.isPending, sessionUser, primarySpeaker.email);
@@ -460,10 +467,14 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
       const stored = loadSubmissionBrowserDraft(window.localStorage, draftScope) as (ApplicantSubmission & { speaker?: ApplicantSpeaker }) | null;
       if (stored) {
         const availableCategories = configuredCategoryOptions(builder.proposalFields);
+        const storedCategories = (stored.categories?.length ? stored.categories : stored.category ? [stored.category] : [])
+          .filter((category) => availableCategories.includes(category));
+        const normalizedCategories = storedCategories.length ? storedCategories : [initialConfiguredCategory(builder.proposalFields)].filter(Boolean);
         setSubmission({
           ...empty,
           ...stored,
-          category: availableCategories.includes(stored.category) ? stored.category : initialConfiguredCategory(builder.proposalFields),
+          category: normalizedCategories[0] ?? "",
+          categories: normalizedCategories,
           responses: stored.responses ?? {},
           speakers: restoreApplicantSpeakers(stored.speakers, stored.speaker, builder.participantMin),
         });
@@ -656,7 +667,9 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
     if (currentStep.id === "submission") {
       if (submission.title.trim().length < 8) next.title = "Use at least 8 characters so the title is identifiable.";
       if (submission.summary.trim().length < 80) next.summary = "Give reviewers at least 80 characters of concrete context.";
-      if (!submission.category || !categoryOptions.includes(submission.category)) next.category = "Choose one of the published program categories.";
+      const selectedCategories = (submission.categories?.length ? submission.categories : submission.category ? [submission.category] : [])
+        .filter((category) => categoryOptions.includes(category));
+      if (!selectedCategories.length) next.category = `Choose at least one published program ${allowsMultipleCategories ? "track" : "category"}.`;
       if (submission.format === "workshop" && submission.workshopNeeds.trim().length < 20) next.workshopNeeds = "Tell us what attendees need to bring or install.";
       if (combinedCharacters > builder.combinedCharacterLimit) next.summary = "The combined long-text limit has been exceeded.";
       Object.assign(next, validateCustomFields(proposalCustomFields, responses));
@@ -918,7 +931,17 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
                   <Field label="Session title" error={errors.title} hint={`${submission.title.length} / 100`}><input maxLength={100} value={submission.title} onChange={(event) => setSubmission({ ...submission, title: event.target.value })} placeholder="The eval flywheel that caught our agent regressions" /></Field>
                   <Field label="Abstract" error={errors.summary} hint={`${submission.summary.length} characters`}><textarea rows={7} value={submission.summary} onChange={(event) => setSubmission({ ...submission, summary: event.target.value })} placeholder="What did you build, what went wrong, and what can another team reuse?" /></Field>
                   <div className="field-grid field-grid--2">
-                    <Field label="Program category" error={errors.category}><select value={submission.category} onChange={(event) => setSubmission({ ...submission, category: event.target.value })}><option value="">Select a category</option>{categoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}</select></Field>
+                    {allowsMultipleCategories ? (
+                      <Field label="Program tracks" error={errors.category} hint="Choose every track this talk should be reviewed in.">
+                        <fieldset className="category-multi-select">
+                          <legend className="sr-only">Program tracks</legend>
+                          {categoryOptions.map((category) => {
+                            const checked = (submission.categories ?? []).includes(category);
+                            return <label key={category}><input type="checkbox" checked={checked} onChange={(event) => { const categories = event.target.checked ? [...(submission.categories ?? []), category] : (submission.categories ?? []).filter((value) => value !== category); setSubmission({ ...submission, category: categories[0] ?? "", categories }); }} /><span>{category}</span></label>;
+                          })}
+                        </fieldset>
+                      </Field>
+                    ) : <Field label="Program category" error={errors.category}><select value={submission.category} onChange={(event) => setSubmission({ ...submission, category: event.target.value, categories: event.target.value ? [event.target.value] : [] })}><option value="">Select a category</option>{categoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}</select></Field>}
                     <Field label="Preferred format"><select value={submission.format} onChange={(event) => setSubmission({ ...submission, format: event.target.value as ApplicantSubmission["format"] })}><option value="talk">Talk · 30 min</option><option value="workshop">Workshop · 60 min</option><option value="panel">Panel · 45 min</option><option value="lightning">Lightning · 10 min</option></select></Field>
                     <Field label="Audience level"><select value={submission.level} onChange={(event) => setSubmission({ ...submission, level: event.target.value as ApplicantSubmission["level"] })}><option value="introductory">Introductory</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></Field>
                     {collectsRepository && <Field label="Project or repository" hint="Optional"><input type="url" value={submission.repoUrl} onChange={(event) => setSubmission({ ...submission, repoUrl: event.target.value })} placeholder="https://…" /></Field>}
@@ -976,7 +999,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
                 <div className="review-sheet">
                   <div><span>TITLE</span><strong>{submission.title || "Not supplied"}</strong><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
                   <div><span>FORMAT</span><strong>{submission.format} · {submission.level}</strong><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
-                  <div><span>PROGRAM LANE</span><strong>{submission.category}</strong><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
+                  <div><span>PROGRAM {allowsMultipleCategories ? "TRACKS" : "LANE"}</span><strong>{submission.categories?.length ? submission.categories.join(", ") : submission.category}</strong><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
                   {submission.speakers.map((speaker, index) => <div className="review-sheet__speaker" key={`${speaker.email}-${index}`}><span>{index === 0 ? "PRIMARY SPEAKER" : `CO-SPEAKER ${index + 1}`}</span><strong>{speaker.firstName} {speaker.lastName}<small>{speaker.email} · {speaker.title} · {speaker.company}</small></strong><button type="button" onClick={() => setStep(stepIndex(builder.collectParticipants ? "participant" : "submission"))}>Edit</button></div>)}
                   <div className="review-sheet__long"><span>ABSTRACT</span><p>{submission.summary}</p><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
                   {customReviewFields.map(({ field, section }) => <div key={field.id}><span>{field.label.toUpperCase()}</span><strong>{answerLabel(responses[field.id])}</strong><button type="button" onClick={() => setStep(stepIndex(section === "proposal" ? "submission" : "participant"))}>Edit</button></div>)}

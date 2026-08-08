@@ -58,6 +58,10 @@ export function proposalToApplicantSubmission(
   form: SubmissionFormShape,
 ): ApplicantSubmission {
   const responses = { ...(proposal.responses ?? {}) };
+  const categoryField = form.proposalFields.find((field) => field.id === "field-category" || ["category", "program category", "program lane"].includes(field.label.trim().toLowerCase()));
+  const storedCategories = categoryField && Array.isArray(responses[categoryField.id])
+    ? (responses[categoryField.id] as unknown[]).map(String).filter(Boolean)
+    : proposal.category.split(",").map((value) => value.trim()).filter(Boolean);
   const speakers = proposal.speakers.map((speaker) => ({
     ...blankApplicantSpeaker(),
     ...splitSpeakerName(speaker.name),
@@ -70,7 +74,8 @@ export function proposalToApplicantSubmission(
   return {
     title: proposal.title,
     summary: proposal.summary,
-    category: proposal.category,
+    category: storedCategories[0] ?? proposal.category,
+    categories: storedCategories,
     format: proposal.format,
     level: proposal.level,
     repoUrl: responseForCanonicalField(

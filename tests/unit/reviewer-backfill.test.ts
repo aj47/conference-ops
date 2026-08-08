@@ -9,6 +9,7 @@ describe("reviewer invitation backlog", () => {
     db = new DatabaseSync(":memory:");
     db.exec(`
       CREATE TABLE proposals (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, reviewer_group_id TEXT, status TEXT NOT NULL, updated_at INTEGER NOT NULL, owner_user_id TEXT NOT NULL);
+      CREATE TABLE proposal_reviewer_groups (proposal_id TEXT NOT NULL, reviewer_group_id TEXT NOT NULL, PRIMARY KEY (proposal_id, reviewer_group_id));
       CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, user_id TEXT);
       CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
       CREATE TABLE reviewer_groups (id TEXT PRIMARY KEY, event_id TEXT NOT NULL);
@@ -38,6 +39,15 @@ describe("reviewer invitation backlog", () => {
         ('proposal-draft', 'event-a', 'group-a', 'draft', 1, 'applicant-e'),
         ('proposal-withdrawn', 'event-a', 'group-a', 'withdrawn', 1, 'applicant-f'),
         ('proposal-other-event', 'event-b', 'group-other', 'submitted', 1, 'applicant-g');
+      INSERT INTO proposal_reviewer_groups VALUES
+        ('proposal-a', 'group-a'),
+        ('proposal-already-reviewing', 'group-a'),
+        ('proposal-owned', 'group-a'),
+        ('proposal-co-speaker', 'group-a'),
+        ('proposal-other-group', 'group-b'),
+        ('proposal-draft', 'group-a'),
+        ('proposal-withdrawn', 'group-a'),
+        ('proposal-other-event', 'group-other');
       INSERT INTO speaker_profiles VALUES ('speaker-reviewer', 'event-a', 'reviewer-new');
       INSERT INTO proposal_speakers VALUES ('proposal-co-speaker', 'speaker-reviewer');
     `);

@@ -26,7 +26,9 @@ The App Worker terminates HTTP requests, runs Better Auth, enforces event roles,
 
 Every state-changing operation should remain event-scoped and auditable. Optimistic versions protect editable forms, proposals, and sessions from stale writes. A published form points to `published_version`; organizers can continue an unpublished `current_version` without changing the public CFP.
 
-Fresh-event creation is a transactional workflow rather than an empty database shell. It grants the creator organizer membership and initializes a private CFP draft/version with standard proposal and participant fields, a General reviewer group and active weighted review round, a Main room and General track, a slide file request, profile/slides/calendar task templates, and agenda/gallery embeds. Organizers can create, edit, and delete event-scoped rooms and tracks afterward; duplicate resources and deletion of resources already used by sessions are rejected.
+Fresh-event creation is a transactional workflow rather than an empty database shell. It grants the creator organizer membership and initializes a private CFP draft/version with standard proposal and participant fields, a General reviewer group and active weighted review round, a Main room and General track, hotel-stay and flight-reimbursement portal forms, a slide file request, profile/slides/calendar task templates, five editable workflow messages, two scheduled reminder rules, and agenda/gallery embeds. Program setup exposes event-scoped track/reviewer routing, persistent task/form/file-request authoring, message/reminder editing, and a read-only readiness assistant. Organizers can create, edit, and delete event-scoped rooms and tracks afterward; duplicate resources and deletion of resources already used by sessions are rejected.
+
+Submitted proposals store every selected CFP track and materialize the union of eligible reviewers covering those tracks. Final acceptance is one guarded D1 batch: it records the decision, activates claimed speaker membership/publication, creates one linked unscheduled session, attaches its speaker roster, instantiates contact- and proposal-scoped onboarding tasks, and persists the configured decision email before Queue dispatch.
 
 ### D1
 
@@ -40,7 +42,7 @@ The uploads bucket is private. D1 stores metadata and ownership while R2 stores 
 
 ### Queue and jobs Worker
 
-Email, calendar, and Accelevents work enters the environment-specific jobs queue. The Worker records idempotency keys in the D1 outbox before delivery, retries transient failures with backoff, and routes exhausted messages to a dedicated DLQ. The scheduled trigger re-enqueues due `queued` or `failed` outbox records.
+Email and calendar work enters the environment-specific jobs queue. The Worker records idempotency keys in the D1 outbox before delivery, retries transient failures with backoff, and routes exhausted messages to a dedicated DLQ. The scheduled trigger marks due speaker tasks overdue, persists deduplicated overdue-task and CFP-draft reminders from organizer-configured rules, and re-enqueues due `queued` or `failed` outbox records.
 
 This creates two recovery views: Cloudflare Queue/DLQ for transport failures and D1 outbox rows for product-level status and operator context. Replaying either path must preserve the original idempotency key.
 

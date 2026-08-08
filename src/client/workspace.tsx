@@ -33,6 +33,7 @@ import { sectionedFormFields, splitFormFields } from "../shared/form-fields";
 import { defaultFormVersionSettings, normalizeFormVersionSettings } from "../shared/form-settings";
 import { evaluateReviewScores } from "../shared/review-rubric";
 import { ApiClientError, conferenceApi, safeDownloadFileName, type CreateEventPayload } from "./api";
+import { activateDemoAcceptance } from "./demo-acceptance";
 import { dateTimeLocalToInstant, instantToDateTimeLocal } from "./event-time";
 import { isPrivateWorkspaceRole } from "./private-routes";
 import { actorWithRole } from "./role-selection";
@@ -83,6 +84,8 @@ export interface ApplicantSubmission {
   title: string;
   summary: string;
   category: string;
+  /** Supports forms that route one talk to more than one program track. */
+  categories?: string[];
   format: Proposal["format"];
   level: Proposal["level"];
   repoUrl: string;
@@ -129,6 +132,7 @@ interface WorkspaceContextValue {
   publicEventState: PublicEventLoadState;
   privateWorkspaceEventId: string | null;
   publicSpeakers: Array<Omit<SpeakerProfile, "email">>;
+  updateProgramConfiguration: (patch: Partial<Pick<WorkspaceSnapshot, "reviewerGroups" | "taskTemplates" | "messageTemplates" | "reminderRules">>) => void;
   setNotice: (notice: string | null) => void;
   switchActor: (actorId: string, role?: Role) => void;
   createEvent: (payload: CreateEventPayload) => Promise<void>;
@@ -334,7 +338,9 @@ function responseForField(
   const label = field.label.trim().toLowerCase();
   if (section === "proposal" && (field.id === "field-title" || ["title", "session title", "proposal title"].includes(label))) return payload.title;
   if (section === "proposal" && (field.id === "field-summary" || ["abstract", "proposal summary", "session summary"].includes(label))) return payload.summary;
-  if (section === "proposal" && (field.id === "field-category" || ["category", "program category", "program lane"].includes(label))) return payload.category;
+  if (section === "proposal" && (field.id === "field-category" || ["category", "program category", "program lane"].includes(label))) {
+    return field.type === "multi_select" ? (payload.categories?.length ? payload.categories : payload.category ? [payload.category] : []) : payload.category;
+  }
   if (section === "proposal" && (field.id === "field-format" || ["format", "preferred format", "session format"].includes(label))) {
     const label = payload.format === "lightning" ? "Lightning talk" : `${payload.format[0].toUpperCase()}${payload.format.slice(1)}`;
     return field.options?.find((option) => option.toLowerCase() === label.toLowerCase()) ?? label;
@@ -615,6 +621,10 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       return actor ? { ...current, actor } : createDemoWorkspace(actorId);
     });
     setNotice(null);
+  }, []);
+
+  const updateProgramConfiguration = useCallback((patch: Partial<Pick<WorkspaceSnapshot, "reviewerGroups" | "taskTemplates" | "messageTemplates" | "reminderRules">>) => {
+    setWorkspace((current) => ({ ...current, ...patch }));
   }, []);
 
   const updateBuilder = useCallback((patch: Partial<BuilderConfig>) => {
@@ -926,7 +936,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       const requestPayload = {
         title: payload.title,
         summary: payload.summary,
-        category: payload.category,
+        category: payload.categories?.[0] ?? payload.category,
         format: payload.format,
         durationMinutes,
         level: payload.level,
@@ -979,7 +989,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
         version: response.version ?? (draft ? (draft.version ?? 0) + 1 : 1),
         title: payload.title,
         summary: payload.summary,
-        category: payload.category,
+        category: payload.categories?.length ? payload.categories.join(", ") : payload.category,
         format: payload.format,
         durationMinutes,
         level: payload.level,
@@ -988,7 +998,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
         submittedAt: response.submittedAt ?? draft?.submittedAt ?? new Date().toISOString(),
         reviewCount: draft?.reviewCount ?? 0,
         reviewerGroup:
-          payload.category === "Evaluation & safety" ? "Evaluation committee" : "Agent systems committee",
+          (payload.categories?.[0] ?? payload.category) === "Evaluation & safety" ? "Evaluation committee" : "Agent systems committee",
         tags: draft?.tags ?? (payload.format === "workshop" ? ["workshop", "new"] : ["new"]),
         responses: requestPayload.responses,
         customResponses: draft?.customResponses,
@@ -1045,23 +1055,34 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       status: Extract<ProposalStatus, "accept_queue" | "accepted" | "decline_queue" | "rejected" | "waitlisted">,
       note?: string,
     ) => {
+      let result: Awaited<ReturnType<typeof conferenceApi.decide>> | undefined;
       try {
-        await conferenceApi.decide(workspace.actor.id, workspace.event.id, proposalId, status, note);
+        result = await conferenceApi.decide(workspace.actor.id, workspace.event.id, proposalId, status, note);
       } catch (error) {
         if (!mayUseDemoFallback(error, source)) {
           setNotice(error instanceof Error ? error.message : "The proposal decision could not be saved.");
           throw error;
         }
       }
-      setWorkspace((current) => ({
-        ...current,
-        proposals: current.proposals.map((proposal) =>
-          proposal.id === proposalId ? { ...proposal, status } : proposal,
-        ),
-      }));
-      setNotice(`Decision recorded: ${status.replace("_", " ")}.`);
+      if (source === "api") {
+        const next = await conferenceApi.bootstrap(workspace.actor.id, workspace.event.id, workspace.actor.role);
+        setWorkspace(next);
+      } else {
+        setWorkspace((current) => status === "accepted"
+          ? activateDemoAcceptance(current, proposalId, result?.sessionId)
+          : {
+              ...current,
+              proposals: current.proposals.map((proposal) =>
+                proposal.id === proposalId ? { ...proposal, status } : proposal,
+              ),
+            });
+      }
+      const activation = status === "accepted"
+        ? ` Session created, ${result?.speakerTasksCreated ?? "speaker"} onboarding tasks assigned, and ${result?.messagesQueued ?? 1} decision ${result?.messagesQueued === 1 ? "email" : "emails"} queued.`
+        : status === "rejected" ? ` ${result?.messagesQueued ?? 1} decision ${result?.messagesQueued === 1 ? "email" : "emails"} queued.` : "";
+      setNotice(`Decision recorded: ${status.replace("_", " ")}.${activation}`);
     },
-    [source, workspace.actor.id, workspace.event.id],
+    [source, workspace.actor.id, workspace.actor.role, workspace.event.id],
   );
 
   const saveReview = useCallback(
@@ -1559,6 +1580,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       publicEventState,
       privateWorkspaceEventId,
       publicSpeakers,
+      updateProgramConfiguration,
       setNotice,
       switchActor,
       createEvent,
@@ -1603,6 +1625,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       publicEventState,
       privateWorkspaceEventId,
       publicSpeakers,
+      updateProgramConfiguration,
       switchActor,
       createEvent,
       updateEvent,

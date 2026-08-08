@@ -1,19 +1,22 @@
 import { ArrowRight, KeyRound, LockKeyhole, Mail, ShieldCheck } from "lucide-react";
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { authClient } from "../auth-client";
 import { Field, InlineAlert, LogoMark } from "../components";
 import { safeReturnTo } from "../return-to";
 
-type AuthMode = "sign_in" | "sign_up" | "reset";
+type AuthMode = "sign_in" | "sign_up" | "request_reset" | "set_password";
 
 export function AuthPage() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const returnTo = safeReturnTo(searchParams.get("returnTo"));
-  const [mode, setMode] = useState<AuthMode>("sign_in");
+  const resetToken = searchParams.get("token")?.trim() ?? "";
+  const [mode, setMode] = useState<AuthMode>(resetToken ? "set_password" : "sign_in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -23,13 +26,25 @@ export function AuthPage() {
     setError("");
     setMessage("");
     try {
-      if (mode === "reset") {
+      if (mode === "request_reset") {
         const result = await authClient.requestPasswordReset({
           email,
           redirectTo: `${window.location.origin}/auth?returnTo=${encodeURIComponent(returnTo)}`,
         });
         if (result.error) throw new Error(result.error.message ?? "Reset instructions could not be sent.");
         setMessage("Password reset instructions are on their way. Check the verified inbox for this account.");
+        return;
+      }
+      if (mode === "set_password") {
+        if (!resetToken) throw new Error("This reset link is incomplete. Request a new password reset link.");
+        if (password !== confirmPassword) throw new Error("The new passwords do not match.");
+        const result = await authClient.resetPassword({ newPassword: password, token: resetToken });
+        if (result.error) throw new Error(result.error.message ?? "The password could not be changed.");
+        setPassword("");
+        setConfirmPassword("");
+        setMode("sign_in");
+        setMessage("Password changed. Sign in with your new password.");
+        navigate(`/auth?returnTo=${encodeURIComponent(returnTo)}`, { replace: true });
         return;
       }
       if (mode === "sign_up") {
@@ -63,18 +78,19 @@ export function AuthPage() {
       <section className="auth-card">
         <div className="auth-card__mark"><LockKeyhole size={20} /></div>
         <p className="eyebrow">Conference account</p>
-        <h2>{mode === "sign_in" ? "Welcome back." : mode === "sign_up" ? "Create your account." : "Reset your password."}</h2>
-        <p>{mode === "reset" ? "We’ll send a secure recovery link to your verified address." : "Use the address that should own your proposals and speaker profile."}</p>
+        <h2>{mode === "sign_in" ? "Welcome back." : mode === "sign_up" ? "Create your account." : mode === "set_password" ? "Choose a new password." : "Reset your password."}</h2>
+        <p>{mode === "request_reset" ? "We’ll send a secure recovery link to your verified address." : mode === "set_password" ? "Use at least 12 characters. This link can only be used once." : "Use the address that should own your proposals and speaker profile."}</p>
         <form onSubmit={(event) => { event.preventDefault(); void submit(); }} className="form-stack">
           {mode === "sign_up" && <Field label="Full name"><input required minLength={2} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} /></Field>}
-          <Field label="Email"><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
-          {mode !== "reset" && <Field label="Password" hint={mode === "sign_up" ? "12 characters minimum" : undefined}><input required minLength={12} type="password" autoComplete={mode === "sign_up" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} /></Field>}
+          {mode !== "set_password" && <Field label="Email"><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>}
+          {mode !== "request_reset" && <Field label={mode === "set_password" ? "New password" : "Password"} hint={mode === "sign_up" || mode === "set_password" ? "12 characters minimum" : undefined}><input required minLength={12} type="password" autoComplete={mode === "sign_up" || mode === "set_password" ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} /></Field>}
+          {mode === "set_password" && <Field label="Confirm new password"><input required minLength={12} type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></Field>}
           {error && <InlineAlert tone="danger">{error}</InlineAlert>}
           {message && <InlineAlert tone="info">{message}</InlineAlert>}
-          <button type="submit" className="button button--primary button--large button--full" disabled={busy}>{busy ? "Working…" : mode === "sign_in" ? "Sign in" : mode === "sign_up" ? "Create & verify account" : "Send reset link"} <ArrowRight size={16} /></button>
+          <button type="submit" className="button button--primary button--large button--full" disabled={busy}>{busy ? "Working…" : mode === "sign_in" ? "Sign in" : mode === "sign_up" ? "Create & verify account" : mode === "set_password" ? "Set new password" : "Send reset link"} <ArrowRight size={16} /></button>
         </form>
         <div className="auth-card__switch">
-          {mode === "sign_in" ? <><button type="button" onClick={() => setMode("sign_up")}>Create an account</button><button type="button" onClick={() => setMode("reset")}>Forgot password?</button></> : <button type="button" onClick={() => setMode("sign_in")}>Return to sign in</button>}
+          {mode === "sign_in" ? <><button type="button" onClick={() => setMode("sign_up")}>Create an account</button><button type="button" onClick={() => setMode("request_reset")}>Forgot password?</button></> : mode === "set_password" ? <button type="button" onClick={() => { setMode("request_reset"); setPassword(""); setConfirmPassword(""); }}>Request another reset link</button> : <button type="button" onClick={() => setMode("sign_in")}>Return to sign in</button>}
         </div>
         <Link to={returnTo} className="text-link">Return without signing in</Link>
       </section>

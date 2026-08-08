@@ -27,6 +27,7 @@ const AuthPage = lazy(() => import("./pages/Auth").then((module) => ({ default: 
 const InvitationPage = lazy(() => import("./pages/Invitation").then((module) => ({ default: module.InvitationPage })));
 const SpeakerClaimPage = lazy(() => import("./pages/SpeakerClaim").then((module) => ({ default: module.SpeakerClaimPage })));
 const EventSetupPage = lazy(() => import("./pages/EventSetup").then((module) => ({ default: module.EventSetupPage })));
+const ProgramSettings = lazy(() => import("./pages/ProgramSettings").then((module) => ({ default: module.ProgramSettings })));
 
 function WorkspaceLayout() {
   const { authRequired, loading, noEvent } = useWorkspace();
@@ -121,6 +122,7 @@ export default function App() {
         <Route element={<WorkspaceLayout />}>
           <Route path="/workspace" element={<RoleRoute roles={["organizer"]}><ControlRoom /></RoleRoute>} />
           <Route path="/forms" element={<RoleRoute roles={["organizer"]}><FormBuilder /></RoleRoute>} />
+          <Route path="/program-settings" element={<RoleRoute roles={["organizer"]}><ProgramSettings /></RoleRoute>} />
           <Route path="/proposals" element={<RoleRoute roles={["organizer", "reviewer"]}><ProposalBoard /></RoleRoute>} />
           <Route path="/reviews" element={<RoleRoute roles={["organizer", "reviewer"]}><ReviewDesk /></RoleRoute>} />
           <Route path="/schedule" element={<RoleRoute roles={["organizer"]}><ScheduleBoard /></RoleRoute>} />

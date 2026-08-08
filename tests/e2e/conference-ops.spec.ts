@@ -37,6 +37,40 @@ test("organizer can initialize a fresh event workspace", async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
+test("organizer can configure routing, onboarding, communications, and readiness", async ({ page, isMobile }) => {
+  await page.goto("/workspace?eventId=event-aie-2026&role=organizer");
+  if (isMobile) await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("link", { name: "Program setup", exact: true }).click();
+  await expect(page).toHaveURL(/\/program-settings\?eventId=event-aie-2026&role=organizer$/);
+
+  await expect(page.getByRole("heading", { name: "Route each submitted track to its reviewers." })).toBeVisible();
+  const developerLane = page.getByRole("article").filter({ hasText: "Developer experience" });
+  await developerLane.getByRole("checkbox", { name: /Dev Patel/ }).check();
+  await page.getByRole("button", { name: "Save routing" }).click();
+  await expect(page.getByText("4/4", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /Onboarding plan/ }).click();
+  await expect(page.getByText("Hotel stay requirements", { exact: true })).toBeVisible();
+  await expect(page.getByText("Flight reimbursement", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Add task" }).click();
+  await expect(page.getByRole("dialog", { name: "Add onboarding task" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await page.getByRole("button", { name: /Communications/ }).click();
+  await expect(page.getByRole("heading", { name: "Write the messages the workflow actually sends." })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Calendar invitation/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Reminder rules" })).toBeVisible();
+
+  await page.getByRole("button", { name: /Readiness assistant/ }).click();
+  await page.getByRole("button", { name: "Publish readiness" }).click();
+  await expect(page.getByText(/Before publishing, work these evidence-backed items/)).toBeVisible();
+  await page.getByRole("button", { name: "Fix reviewer routing" }).click();
+  await expect(page.getByRole("heading", { name: "Route each submitted track to its reviewers." })).toBeVisible();
+  await expect(page).toHaveURL(/role=organizer/);
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
 test("a selected secondary event survives organizer navigation and mutations", async ({ page, isMobile }) => {
   test.skip(isMobile, "The desktop lifecycle run covers multi-event navigation scope.");
   const selectedEventId = "event-secondary";
@@ -67,6 +101,9 @@ test("a selected secondary event survives organizer navigation and mutations", a
 
   await page.getByRole("link", { name: "Schedule board", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/schedule\\?eventId=${selectedEventId}$`));
+  await page.getByRole("link", { name: "Program setup", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/program-settings\\?eventId=${selectedEventId}$`));
+  await expect(page.getByRole("heading", { name: "Configure the workflow behind the forms." })).toBeVisible();
   await page.getByRole("link", { name: "Control room" }).click();
   await expect(page).toHaveURL(new RegExp(`/workspace\\?eventId=${selectedEventId}$`));
 

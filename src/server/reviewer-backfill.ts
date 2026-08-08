@@ -17,8 +17,10 @@ export const backfillReviewerAssignmentsSql = `INSERT OR IGNORE INTO review_assi
     ?,
     ?
   FROM proposals p
+  JOIN proposal_reviewer_groups prg
+    ON prg.proposal_id = p.id
   JOIN reviewer_groups rg
-    ON rg.id = p.reviewer_group_id
+    ON rg.id = prg.reviewer_group_id
     AND rg.event_id = p.event_id
   JOIN reviewer_group_members rgm
     ON rgm.reviewer_group_id = rg.id

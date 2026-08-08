@@ -19,6 +19,7 @@ import {
   type OutboxKind,
   type StoredOutboxRow,
 } from "./outbox";
+import { prepareScheduledReminders } from "./reminders";
 
 async function ensureOutbox(env: Bindings, job: JobBody) {
   const now = Date.now();
@@ -170,6 +171,7 @@ export default {
   async scheduled(_controller: ScheduledController, env: Bindings) {
     if (!env.JOBS_QUEUE) return;
     const now = Date.now();
+    await prepareScheduledReminders(env, now);
     // A worker may terminate after claiming a row but before its catch block can
     // record the final attempt. Close those stale leases before selecting due
     // work so Cron cannot create a fresh, unbounded retry cycle.

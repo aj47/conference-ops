@@ -122,6 +122,11 @@ function createDatabase() {
     );
     CREATE TABLE reviewer_groups (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, category TEXT NOT NULL, created_at INTEGER NOT NULL);
     CREATE TABLE reviewer_group_members (reviewer_group_id TEXT NOT NULL, user_id TEXT NOT NULL);
+    CREATE TABLE proposal_reviewer_groups (
+      proposal_id TEXT NOT NULL,
+      reviewer_group_id TEXT NOT NULL,
+      PRIMARY KEY (proposal_id, reviewer_group_id)
+    );
     CREATE TABLE review_rounds (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, round INTEGER NOT NULL, rubric TEXT NOT NULL, status TEXT NOT NULL);
     CREATE TABLE speaker_profiles (
       id TEXT PRIMARY KEY,
@@ -165,6 +170,15 @@ function createDatabase() {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE message_templates (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      kind TEXT,
+      subject TEXT NOT NULL,
+      html TEXT NOT NULL,
+      text TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
 
     INSERT INTO events VALUES ('event-a', 'Conference A');
     INSERT INTO event_memberships VALUES
@@ -189,6 +203,7 @@ function createDatabase() {
       'draft', NULL, 1, 1, 1
     );
     INSERT INTO reviewer_groups VALUES ('group-build', 'event-a', 'Build', 1);
+    INSERT INTO proposal_reviewer_groups VALUES ('proposal-a', 'group-build');
     INSERT INTO reviewer_group_members VALUES ('group-build', 'reviewer-a'), ('group-build', 'reviewer-b');
     INSERT INTO review_rounds VALUES ('round-a', 'event-a', 1, '[{"id":"fit","label":"Program fit","weight":1,"maxScore":5}]', 'active');
     INSERT INTO speaker_profiles VALUES
@@ -355,6 +370,41 @@ describe("production proposal lifecycle API", () => {
     expect(payload.data).toMatchObject({ assignments: 1, status: "under_review" });
     expect(d1.database.prepare("SELECT reviewer_user_id FROM review_assignments WHERE proposal_id = ?").all(payload.data.id)).toEqual([
       { reviewer_user_id: "reviewer-b" },
+    ]);
+  });
+
+  it("routes one submission to the union of reviewers covering every selected track", async () => {
+    const d1 = createDatabase();
+    d1.database.prepare("UPDATE form_versions SET fields = ? WHERE id = 'form-version-a'").run(JSON.stringify([
+      { id: "field-category", label: "Program category", type: "multi_select", required: true, section: "proposal", options: ["Build", "Evaluate"] },
+    ]));
+    d1.database.exec(`
+      INSERT INTO reviewer_groups VALUES ('group-evaluate', 'event-a', 'Evaluate', 1);
+      INSERT INTO reviewer_group_members VALUES ('group-evaluate', 'reviewer-history');
+    `);
+    const body = {
+      ...newSubmissionBody(true, "multi-track@example.com"),
+      category: "Forged lane that must be ignored",
+      responses: { "field-category": ["Build", "Evaluate"] },
+    };
+
+    const response = await apiRequest(d1, "/api/v1/events/event-a/submissions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json() as { data: { id: string } };
+
+    expect(response.status).toBe(201);
+    expect(d1.database.prepare("SELECT category FROM proposals WHERE id = ?").get(payload.data.id)).toEqual({ category: "Build, Evaluate" });
+    expect(d1.database.prepare("SELECT reviewer_group_id FROM proposal_reviewer_groups WHERE proposal_id = ? ORDER BY reviewer_group_id").all(payload.data.id)).toEqual([
+      { reviewer_group_id: "group-build" },
+      { reviewer_group_id: "group-evaluate" },
+    ]);
+    expect(d1.database.prepare("SELECT reviewer_user_id FROM review_assignments WHERE proposal_id = ? ORDER BY reviewer_user_id").all(payload.data.id)).toEqual([
+      { reviewer_user_id: "reviewer-a" },
+      { reviewer_user_id: "reviewer-b" },
+      { reviewer_user_id: "reviewer-history" },
     ]);
   });
 

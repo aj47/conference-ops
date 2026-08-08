@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Actor } from "../../src/shared/domain";
-import { actorForRoleOption, actorRoleOptionValue, actorWithRole } from "../../src/client/role-selection";
+import { actorForRoleOption, actorRoleOptionValue, actorWithRole, selectablePersonaActors } from "../../src/client/role-selection";
 
 const actors: Actor[] = [
   { id: "same-user", name: "Arash", email: "organizer@example.com", role: "applicant" },
@@ -8,6 +8,12 @@ const actors: Actor[] = [
 ];
 
 describe("multi-role actor selection", () => {
+  it("limits production persona switching to the signed-in identity", () => {
+    const otherReviewer: Actor = { id: "other-user", name: "Reviewer", email: "reviewer@example.com", role: "reviewer" };
+    expect(selectablePersonaActors([...actors, otherReviewer], actors[0], false)).toEqual(actors);
+    expect(selectablePersonaActors([...actors, otherReviewer], actors[0], true)).toEqual([...actors, otherReviewer]);
+  });
+
   it("gives memberships with the same user id distinct option values", () => {
     expect(actors.map((actor) => actorRoleOptionValue(actor, actors))).toEqual([
       "same-user:applicant",

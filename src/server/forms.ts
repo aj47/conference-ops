@@ -149,12 +149,19 @@ export function configuredSubmissionCategory(
   fields: FormField[],
   responses: Record<string, unknown>,
 ) {
+  return configuredSubmissionCategories(fields, responses)[0];
+}
+
+export function configuredSubmissionCategories(
+  fields: FormField[],
+  responses: Record<string, unknown>,
+) {
   const field = submissionCategoryField(fields);
-  if (!field || field.type !== "select") return undefined;
+  if (!field || (field.type !== "select" && field.type !== "multi_select")) return [];
   const value = responses[field.id];
-  return typeof value === "string" && field.options?.includes(value)
-    ? value
-    : undefined;
+  const selected = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const configured = new Set(field.options ?? []);
+  return [...new Set(selected.filter((item): item is string => typeof item === "string" && configured.has(item)))];
 }
 
 /**

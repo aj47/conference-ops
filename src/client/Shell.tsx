@@ -10,6 +10,7 @@ import {
   PanelLeftClose,
   Search,
   Send,
+  Settings2,
   Sparkles,
   Users,
 } from "lucide-react";
@@ -35,6 +36,7 @@ const navSections = [
     label: "Build",
     items: [
       { to: "/forms", label: "CFP builder", icon: BookOpen, roles: ["organizer"] },
+      { to: "/program-settings", label: "Program setup", icon: Settings2, roles: ["organizer"] },
       { to: "/schedule", label: "Schedule board", icon: CalendarDays, roles: ["organizer"] },
     ],
   },

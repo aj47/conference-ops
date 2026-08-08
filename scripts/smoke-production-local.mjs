@@ -448,7 +448,12 @@ async function main() {
   const freshWorkspace = await api(`/api/v1/bootstrap?eventId=${encodeURIComponent(createdEventId)}`);
   assert(freshWorkspace.response.status === 200, `Fresh event bootstrap failed: ${JSON.stringify(freshWorkspace.body)}`);
   assert(freshWorkspace.body?.data?.actor?.role === "organizer", "Fresh event did not grant organizer membership");
-  assert(freshWorkspace.body?.data?.forms?.length === 1 && freshWorkspace.body.data.forms[0].status === "draft", "Fresh event did not initialize one private CFP draft");
+  const freshForms = freshWorkspace.body?.data?.forms ?? [];
+  assert(freshForms.filter((form) => form.kind === "cfp" && form.status === "draft").length === 1, "Fresh event did not initialize one private CFP draft");
+  assert(freshForms.filter((form) => form.kind === "portal" && form.status === "published").length === 2, "Fresh event did not initialize hotel and flight portal forms");
+  assert(freshWorkspace.body?.data?.taskTemplates?.length === 5, "Fresh event did not initialize the five-task onboarding plan");
+  assert(freshWorkspace.body?.data?.messageTemplates?.length === 5, "Fresh event did not initialize workflow message templates");
+  assert(freshWorkspace.body?.data?.reminderRules?.length === 2, "Fresh event did not initialize scheduled reminder rules");
   assert(freshWorkspace.body?.data?.rooms?.length === 1 && freshWorkspace.body?.data?.tracks?.length === 1, "Fresh event did not initialize schedule resources");
 
   cookies.clear();
@@ -502,19 +507,26 @@ async function main() {
       (SELECT COUNT(*) FROM proposals WHERE id = '${draftProposalId}' AND owner_user_id = 'user-applicant' AND status = 'withdrawn' AND version = 4) AS withdrawn_drafts,
       (SELECT COUNT(*) FROM proposal_speakers ps JOIN speaker_profiles sp ON sp.id = ps.speaker_profile_id WHERE ps.proposal_id = '${draftProposalId}' AND sp.email IN ('leah@example.com', 'bo.chen@example.com')) AS resumed_draft_speakers,
       (SELECT COUNT(*) FROM events WHERE id = '${createdEventId}' AND status = 'draft') AS fresh_events,
-      (SELECT COUNT(*) FROM submission_forms WHERE event_id = '${createdEventId}' AND status = 'draft') AS fresh_forms,
+      (SELECT COUNT(*) FROM submission_forms WHERE event_id = '${createdEventId}' AND kind = 'cfp' AND status = 'draft') AS fresh_cfp_forms,
+      (SELECT COUNT(*) FROM submission_forms WHERE event_id = '${createdEventId}' AND kind = 'portal' AND status = 'published') AS fresh_portal_forms,
       (SELECT COUNT(*) FROM review_rounds WHERE event_id = '${createdEventId}' AND status = 'active') AS fresh_review_rounds,
       (SELECT COUNT(*) FROM task_templates WHERE event_id = '${createdEventId}') AS fresh_task_templates,
+      (SELECT COUNT(*) FROM message_templates WHERE event_id = '${createdEventId}' AND kind IS NOT NULL) AS fresh_message_templates,
+      (SELECT COUNT(*) FROM communication_schedules WHERE event_id = '${createdEventId}') AS fresh_reminder_rules,
       (SELECT COUNT(*) FROM task_responses WHERE task_id = '${acceptedFormTask.id}' AND status = 'submitted' AND json_extract(responses, '$.field-layout') = 'Classroom') AS validated_task_responses,
       (SELECT COUNT(*) FROM pragma_foreign_key_check) AS foreign_key_violations;`,
   ], { capture: true });
   const row = JSON.parse(verification.stdout)[0]?.results?.[0];
   assert(row, "D1 verification returned no row");
-  for (const key of ["sessions", "proposals", "canonical_routing", "speaker_links", "assignments", "outbox_rows", "communication_outbox_rows", "accepted_speaker_tasks", "accepted_submission_tasks", "accepted_contact_tasks", "agenda_revision", "completed_tasks", "withdrawn_drafts", "resumed_draft_speakers", "fresh_events", "fresh_forms", "fresh_review_rounds", "fresh_task_templates", "validated_task_responses"]) {
+  for (const key of ["sessions", "proposals", "canonical_routing", "speaker_links", "assignments", "outbox_rows", "communication_outbox_rows", "accepted_speaker_tasks", "accepted_submission_tasks", "accepted_contact_tasks", "agenda_revision", "completed_tasks", "withdrawn_drafts", "resumed_draft_speakers", "fresh_events", "fresh_cfp_forms", "fresh_portal_forms", "fresh_review_rounds", "fresh_task_templates", "fresh_message_templates", "fresh_reminder_rules", "validated_task_responses"]) {
     assert(Number(row[key]) >= 1, `Expected persisted ${key}; received ${row[key]}`);
   }
   assert(Number(row.accepted_submission_tasks) === 2, `Expected two proposal-target tasks; received ${row.accepted_submission_tasks}`);
-  assert(Number(row.accepted_contact_tasks) === 2, `Expected two speaker-target tasks without proposal duplication; received ${row.accepted_contact_tasks}`);
+  assert(Number(row.accepted_contact_tasks) === 4, `Expected four speaker-target tasks without proposal duplication; received ${row.accepted_contact_tasks}`);
+  assert(Number(row.fresh_portal_forms) === 2, `Expected two fresh-event portal forms; received ${row.fresh_portal_forms}`);
+  assert(Number(row.fresh_task_templates) === 5, `Expected five fresh-event onboarding templates; received ${row.fresh_task_templates}`);
+  assert(Number(row.fresh_message_templates) === 5, `Expected five fresh-event message templates; received ${row.fresh_message_templates}`);
+  assert(Number(row.fresh_reminder_rules) === 2, `Expected two fresh-event reminder rules; received ${row.fresh_reminder_rules}`);
   assert(Number(row.foreign_key_violations) === 0, `D1 has ${row.foreign_key_violations} foreign-key violations`);
 
   process.stdout.write(`${JSON.stringify({
@@ -526,7 +538,7 @@ async function main() {
     submission: { status: "accepted", reviewAssignments: 1, canonicalCategoryRouting: true, unknownResponsesRejected: true, confirmationIntent: "outbox+local-queue", onboardingTasks: "instantiated" },
     agenda: { publishedSessions: 2, outsideWindowRejected: true },
     communications: { acceptanceIntent: "outbox+local-queue" },
-    freshEvent: { id: createdEventId, cfp: "draft", roomAndTrack: "initialized", reviewRound: "active", onboardingTemplates: 3 },
+    freshEvent: { id: createdEventId, cfp: "draft", portalForms: 2, roomAndTrack: "initialized", reviewRound: "active", onboardingTemplates: 5, messageTemplates: 5, reminderRules: 2 },
     task: { id: "task-4", status: "complete", formResponseValidated: true, unknownResponsesRejected: true },
     persistence: "isolated-local-d1",
     foreignKeyViolations: 0,

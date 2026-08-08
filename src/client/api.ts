@@ -3,10 +3,15 @@ import type {
   FormDefinition,
   FormField,
   FormVersionSettings,
+  MessageTemplateDefinition,
   ProgramSession,
+  ReadinessInsight,
+  ReminderRule,
   ResourcePage,
+  ReviewerGroupConfig,
   Room,
   SpeakerProfile,
+  TaskTemplateDefinition,
   Track,
   WorkspaceSnapshot,
 } from "../shared/domain";
@@ -301,7 +306,7 @@ export const conferenceApi = {
     status: "accept_queue" | "accepted" | "decline_queue" | "rejected" | "waitlisted",
     note?: string,
   ) {
-    return request<{ proposalId: string; status: string }>(
+    return request<{ proposalId: string; status: string; sessionId?: string; sessionCreated?: boolean; speakerTasksCreated?: number; messagesQueued?: number; messagesDispatched?: number }>(
       `/api/v1/events/${eventId}/proposals/${proposalId}/decision`,
       actorId,
       { method: "POST", body: JSON.stringify({ status, note }) },
@@ -427,6 +432,84 @@ export const conferenceApi = {
       `/api/v1/events/${encodeURIComponent(eventId)}/tracks/${encodeURIComponent(trackId)}`,
       actorId,
       { method: "DELETE" },
+    );
+  },
+
+  saveReviewerRouting(
+    actorId: string,
+    eventId: string,
+    groups: Array<Pick<ReviewerGroupConfig, "name" | "category" | "reviewerIds"> & { id?: string }>,
+  ) {
+    return request<{ groups: ReviewerGroupConfig[]; assignmentsRebuilt: true }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/reviewer-routing`,
+      actorId,
+      { method: "PUT", body: JSON.stringify({ groups }) },
+    );
+  },
+
+  createTaskTemplate(
+    actorId: string,
+    eventId: string,
+    payload: Omit<TaskTemplateDefinition, "id" | "completionMode" | "formId" | "fileRequestId" | "formFields"> & { fields?: FormField[] },
+  ) {
+    return request<TaskTemplateDefinition>(`/api/v1/events/${encodeURIComponent(eventId)}/task-templates`, actorId, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateTaskTemplate(
+    actorId: string,
+    eventId: string,
+    templateId: string,
+    payload: Omit<TaskTemplateDefinition, "id" | "completionMode" | "formId" | "fileRequestId" | "formFields"> & { fields?: FormField[] },
+  ) {
+    return request<TaskTemplateDefinition>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/task-templates/${encodeURIComponent(templateId)}`,
+      actorId,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+  },
+
+  deleteTaskTemplate(actorId: string, eventId: string, templateId: string) {
+    return request<{ id: string; deleted: true }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/task-templates/${encodeURIComponent(templateId)}`,
+      actorId,
+      { method: "DELETE" },
+    );
+  },
+
+  saveMessageTemplate(
+    actorId: string,
+    eventId: string,
+    kind: MessageTemplateDefinition["kind"],
+    payload: Pick<MessageTemplateDefinition, "name" | "subject" | "text" | "html">,
+  ) {
+    return request<MessageTemplateDefinition>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/message-templates/${encodeURIComponent(kind)}`,
+      actorId,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+  },
+
+  saveReminderRule(
+    actorId: string,
+    eventId: string,
+    kind: ReminderRule["kind"],
+    payload: Pick<ReminderRule, "enabled" | "offsetDays">,
+  ) {
+    return request<ReminderRule>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/reminder-rules/${encodeURIComponent(kind)}`,
+      actorId,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+  },
+
+  askReadinessAssistant(actorId: string, eventId: string, question?: string) {
+    return request<{ answer: string; insights: ReadinessInsight[]; generatedAt: string; mode: "grounded" }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/assistant`,
+      actorId,
+      { method: "POST", body: JSON.stringify({ question }) },
     );
   },
 
