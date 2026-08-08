@@ -10,6 +10,7 @@ import { useEffect, useId } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ProposalStatus, TaskStatus } from "../shared/domain";
 import { eventRoleLandingPath } from "./private-routes";
+import { actorForRoleOption, actorRoleOptionValue } from "./role-selection";
 import { useWorkspace } from "./workspace";
 
 export function LogoMark({ compact = false }: { compact?: boolean }) {
@@ -52,16 +53,19 @@ export function PersonaSwitcher({ compact = false }: { compact?: boolean }) {
       <select
         aria-labelledby={compact ? undefined : labelId}
         aria-label={compact ? "Switch demo persona" : undefined}
-        value={workspace.actor.id}
+        value={actorRoleOptionValue(workspace.actor, workspace.actors)}
         onChange={(event) => {
-          const actor = workspace.actors.find((candidate) => candidate.id === event.target.value);
+          const actor = actorForRoleOption(workspace.actors, event.target.value);
           if (!actor) return;
-          switchActor(actor.id);
+          switchActor(actor.id, actor.role);
           navigate(eventRoleLandingPath(actor.role, eventId, workspace.event.slug));
         }}
       >
         {workspace.actors.map((actor) => (
-          <option key={actor.id} value={actor.id}>
+          <option
+            key={actorRoleOptionValue(actor, workspace.actors)}
+            value={actorRoleOptionValue(actor, workspace.actors)}
+          >
             {actor.name} · {actor.role}
           </option>
         ))}

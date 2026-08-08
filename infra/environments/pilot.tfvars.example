@@ -1,0 +1,17 @@
+cloudflare_account_id = "00000000000000000000000000000000"
+cloudflare_zone_id    = null
+environment           = "pilot"
+
+d1_primary_location_hint = "wnam"
+r2_location              = "wnam"
+jobs_queue_retention_seconds = 86400
+jobs_dlq_retention_seconds   = 86400
+
+# The pilot uses its Workers.dev hostname and application authorization.
+enable_preview_access            = false
+preview_access_hostname          = null
+preview_access_allowed_emails    = []
+preview_access_allowed_idps      = []
+preview_access_service_token_ids = []
+
+dns_records = {}

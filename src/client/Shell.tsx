@@ -109,6 +109,13 @@ export function ProductShell({ children }: PropsWithChildren) {
   const mobileReturnFocusRef = useRef<HTMLElement | null>(null);
   const paletteReturnFocusRef = useRef<HTMLElement | null>(null);
   const mobileNavActive = mobileViewport && mobileOpen;
+  const closePalette = () => {
+    const returnTarget = paletteReturnFocusRef.current;
+    setPaletteOpen(false);
+    window.setTimeout(() => {
+      if (returnTarget?.isConnected) returnTarget.focus();
+    }, 0);
+  };
   const sidebarRef = useDialogA11y<HTMLElement>(() => setMobileOpen(false), mobileNavActive, mobileReturnFocusRef);
 
   useEffect(() => {
@@ -223,7 +230,7 @@ export function ProductShell({ children }: PropsWithChildren) {
         <main id="main-content" className="page-canvas" tabIndex={-1}>{children}</main>
       </div>
       <NoticeRegion />
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} returnFocusRef={paletteReturnFocusRef} />}
+      {paletteOpen && <CommandPalette onClose={closePalette} returnFocusRef={paletteReturnFocusRef} />}
     </div>
   );
 }

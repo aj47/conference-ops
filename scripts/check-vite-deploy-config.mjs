@@ -10,7 +10,7 @@ function requireMatch(actual, wanted, label) {
 }
 
 export function validateGeneratedViteConfig(config, environment) {
-  if (!["staging", "production"].includes(environment)) throw new Error("Environment must be staging or production");
+  if (!["pilot", "staging", "production"].includes(environment)) throw new Error("Environment must be pilot, staging, or production");
   const expected = {
     name: `conference-ops-${environment}-app`,
     database: `conference-ops-${environment}`,
@@ -96,6 +96,6 @@ export async function checkViteDeployConfig(environment, rootDirectory = process
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
 if (import.meta.url === invokedPath) {
   const environment = process.argv[2];
-  if (!["staging", "production"].includes(environment)) throw new Error("First argument must be staging or production");
+  if (!["pilot", "staging", "production"].includes(environment)) throw new Error("First argument must be pilot, staging, or production");
   process.stdout.write(`${JSON.stringify(await checkViteDeployConfig(environment))}\n`);
 }

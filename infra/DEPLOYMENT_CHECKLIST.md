@@ -1,13 +1,13 @@
 # Deployment and secret checklist
 
-Use this checklist for the first environment deployment and every production promotion.
+Use this checklist for the first pilot/staging environment deployment and every production promotion.
 
 ## Cloudflare foundation
 
-- [ ] Account ID is the intended account; staging and production names are distinct.
+- [ ] Account ID is the intended account; pilot, staging, and production names are distinct.
 - [ ] R2 Terraform-state bucket exists and bootstrap state is encrypted/backed up.
 - [ ] Dedicated state-bucket access key is stored only as `TF_STATE_ACCESS_KEY_ID` / `TF_STATE_SECRET_ACCESS_KEY`.
-- [ ] Backend key is `conference-ops/staging.tfstate` or `conference-ops/production.tfstate` as appropriate.
+- [ ] Backend key is `conference-ops/pilot.tfstate`, `conference-ops/staging.tfstate`, or `conference-ops/production.tfstate` as appropriate.
 - [ ] Terraform plan creates or updates only the selected environment.
 - [ ] D1, upload R2, jobs queue, DLQ, and state bucket retain `prevent_destroy`.
 - [ ] No resource is simultaneously owned by Terraform and Wrangler.
@@ -20,7 +20,7 @@ Use this checklist for the first environment deployment and every production pro
 - [ ] `APP_CUSTOM_DOMAIN` — optional hostname only, no scheme/path
 - [ ] `MAIL_FROM` — Email Routing-authorized sender
 - [ ] `MAIL_REPLY_TO` — monitored reply address; defaults to sender if omitted
-- [ ] `ENABLE_CLOUDFLARE_EMAIL` — `true` in production after Email Routing scope and sender verification; staging may disable it for demo-only use
+- [ ] `ENABLE_CLOUDFLARE_EMAIL` — `true` in pilot and production after Email Routing scope and sender verification; staging may disable it for demo-only use
 - [ ] `ACCELEVENTS_EVENT_URL` — event identifier expected by the connector, or blank when integration is disabled
 - [ ] `ACCELEVENTS_ENABLED` — keep `false`; enable only after jobs-only credentials plus tested speaker/session upserts and read-back exist
 - [ ] `ENABLE_PREVIEW_ACCESS`, `PREVIEW_ACCESS_HOSTNAME`, reviewer email/IdP JSON, and optional service-token ID JSON describe the intended staging policy.
@@ -48,6 +48,7 @@ Use this checklist for the first environment deployment and every production pro
 - [ ] Staging Access, if enabled, protects the exact custom hostname and includes the intended reviewers.
 - [ ] Production does not inherit the preview-only Access configuration.
 - [ ] Staging contains synthetic data only; its demo persona mode is never used for real event or attendee records.
+- [ ] Pilot uses `DEMO_MODE=false`, a distinct database/bucket/queues, and representative test data only; no pilot account shares the demo staging workspace.
 - [ ] Confirm whether the public iframe should remain universally embeddable for the event site; origin allowlist enforcement is not enabled in the MVP.
 - [ ] When `ENABLE_CLOUDFLARE_EMAIL=true`, Email Routing is active and `MAIL_FROM` is an allowed sender for the Jobs Worker binding. Email-disabled staging must remain synthetic/demo-only and must not exercise delivery.
 - [ ] Before production, authentication, communication, and REQUEST calendar create/update messages reach a controlled test mailbox.

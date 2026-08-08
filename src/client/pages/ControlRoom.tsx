@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock3,
   FileText,
+  Flag,
   MailPlus,
   MapPin,
   Pencil,
@@ -15,7 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { isAcceptedProposalStatus } from "../../shared/proposal-status";
 import { isOutstandingTaskStatus } from "../../shared/task-status";
 import { EmptyState, Field, InlineAlert, PageHeader, ProgressBar, SectionHeading, StatusPill } from "../components";
@@ -31,6 +32,7 @@ import {
   timeZoneAbbreviation,
 } from "../event-time";
 import { privateEventPath } from "../private-routes";
+import { organizerTrialSteps } from "../trial-checklist";
 import { useWorkspace } from "../workspace";
 
 function EventSettingsDialog({ onClose }: { onClose: () => void }) {
@@ -94,7 +96,7 @@ function EventSettingsDialog({ onClose }: { onClose: () => void }) {
           <Field label="Event website"><input type="url" value={draft.websiteUrl} onChange={(event) => setDraft({ ...draft, websiteUrl: event.target.value })} /></Field>
           <div className="brand-swatches" aria-label="Event accent color">
             {["#e05b3f", "#2d6a6c", "#7564a8", "#bd8b2f"].map((color) => (
-              <button key={color} type="button" className={draft.accent === color ? "selected" : ""} style={{ background: color }} onClick={() => setDraft({ ...draft, accent: color })} aria-label={`Use ${color} as event accent`} />
+              <button key={color} type="button" className={draft.accent === color ? "selected" : ""} style={{ background: color }} onClick={() => setDraft({ ...draft, accent: color })} aria-label={`Use ${color} as event accent`} aria-pressed={draft.accent === color} />
             ))}
           </div>
           {error && <InlineAlert tone="danger">{error}</InlineAlert>}
@@ -163,6 +165,16 @@ export function ControlRoom() {
   const eventId = privateWorkspaceEventId ?? workspace.event.id;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const inviteActive = inviteOpen || searchParams.get("action") === "invite-staff";
+  const closeInvite = () => {
+    setInviteOpen(false);
+    if (searchParams.get("action") === "invite-staff") {
+      const next = new URLSearchParams(searchParams);
+      next.delete("action");
+      setSearchParams(next, { replace: true });
+    }
+  };
   const acceptedProposals = workspace.proposals.filter((proposal) => proposal.eventId === eventId && isAcceptedProposalStatus(proposal.status));
   const accepted = acceptedProposals.length;
   const acceptedSpeakers = [...new Map(acceptedProposals.flatMap((proposal) => proposal.speakers).map((speaker) => [speaker.id, speaker])).values()];
@@ -176,6 +188,8 @@ export function ControlRoom() {
   const primaryIntervention = interventionItems[0];
   const now = new Date().toISOString();
   const currentWeekday = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: workspace.event.timezone }).format(new Date(now));
+  const trialSteps = organizerTrialSteps(workspace, eventId);
+  const completedTrialSteps = trialSteps.filter((step) => step.complete).length;
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -222,7 +236,7 @@ export function ControlRoom() {
         eyebrow={`Program control room · ${currentWeekday} shift`}
         title="The conference is a living system."
         description="One operational view of what needs judgment now, what is waiting on people, and what the public will see next."
-        actions={<><button type="button" className="button button--quiet" onClick={() => setInviteOpen(true)}><MailPlus size={16} /> Invite staff</button><button type="button" className="button button--quiet" onClick={() => setSettingsOpen(true)}><Settings2 size={16} /> Event details</button></>}
+        actions={<><a className="button button--quiet" href="/conference-ops-organizer-trial-guide.pdf" target="_blank" rel="noreferrer"><FileText size={16} /> Organizer guide</a><Link className="button button--quiet" to="/events/new"><Sparkles size={16} /> New event</Link><button type="button" className="button button--quiet" onClick={() => setInviteOpen(true)}><MailPlus size={16} /> Invite staff</button><button type="button" className="button button--quiet" onClick={() => setSettingsOpen(true)}><Settings2 size={16} /> Event details</button></>}
       />
 
       <section className="event-brief" aria-label="Current event details">
@@ -230,6 +244,25 @@ export function ControlRoom() {
         <div><MapPin size={15} /> {workspace.event.venue}</div>
         <div><CalendarClock size={15} /> {formatEventDateRange(workspace.event)} · {timeZoneAbbreviation(workspace.event.startsAt, workspace.event.timezone)}</div>
         <button type="button" onClick={() => setSettingsOpen(true)}><Pencil size={14} /> Edit</button>
+      </section>
+
+      <section className="trial-runway" aria-labelledby="trial-runway-title">
+        <div className="trial-runway__intro">
+          <p className="eyebrow">Organizer trial runway</p>
+          <h2 id="trial-runway-title">Run one complete event loop.</h2>
+          <p>Use your own event data. Each completed step reflects committed workspace state, so you can leave, reload, and continue later.</p>
+          <ProgressBar label={`${completedTrialSteps} of ${trialSteps.length} steps complete`} value={completedTrialSteps} max={trialSteps.length} />
+        </div>
+        <ol className="trial-runway__steps">
+          {trialSteps.map((step, index) => (
+            <li key={step.id} className={step.complete ? "complete" : ""}>
+              <span className="trial-runway__marker" aria-hidden="true">{step.complete ? <CheckCircle2 size={15} /> : String(index + 1).padStart(2, "0")}</span>
+              <span><strong>{step.label}</strong><small>{step.detail}</small></span>
+              <Link to={step.to} target={step.external ? "_blank" : undefined} rel={step.external ? "noreferrer" : undefined} aria-label={`${step.label}: ${step.detail}`}><ArrowUpRight size={15} /></Link>
+            </li>
+          ))}
+        </ol>
+        <div className="trial-runway__foot"><Flag size={16} /><span><strong>Use the guide as your test script.</strong> Credentials and private invitation links should be shared separately.</span></div>
       </section>
 
       <div className="control-layout">
@@ -291,7 +324,7 @@ export function ControlRoom() {
         </section>
       </div>
       {settingsOpen && <EventSettingsDialog onClose={() => setSettingsOpen(false)} />}
-      {inviteOpen && <StaffInviteDialog onClose={() => setInviteOpen(false)} />}
+      {inviteActive && <StaffInviteDialog onClose={closeInvite} />}
     </>
   );
 }

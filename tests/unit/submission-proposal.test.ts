@@ -15,7 +15,7 @@ const proposal: Proposal = {
   status: "draft",
   version: 3,
   responses: {
-    "repo-question": "https://example.com/queue",
+    "field-repo": "https://example.com/queue",
     "field-workshop-needs": "A laptop with a recent Node.js runtime.",
     "custom-proof": "A month of production traces",
   },
@@ -34,7 +34,7 @@ describe("proposal draft restoration", () => {
     const restored = proposalToApplicantSubmission(proposal, {
       participantMin: 1,
       proposalFields: [
-        { id: "repo-question", label: "Relevant project or repository", type: "url", required: false },
+        { id: "field-repo", label: "Relevant project or repository", type: "url", required: false },
         { id: "field-workshop-needs", label: "Workshop setup requirements", type: "long_text", required: true },
       ],
     });
@@ -49,6 +49,24 @@ describe("proposal draft restoration", () => {
       expect.objectContaining({ firstName: "Ada María", lastName: "Rivera", email: "ada@example.com" }),
       expect.objectContaining({ firstName: "Bo", lastName: "Chen", email: "bo@example.com" }),
     ]);
+  });
+
+  it("keeps an arbitrary Project URL question in dynamic responses instead of treating its label as a built-in field", () => {
+    const restored = proposalToApplicantSubmission({
+      ...proposal,
+      responses: {
+        "custom-proof": "A month of production traces",
+        "repo-question": "https://example.com/custom-project",
+      },
+    }, {
+      participantMin: 1,
+      proposalFields: [
+        { id: "repo-question", label: "Project URL", type: "url", required: false },
+      ],
+    });
+
+    expect(restored.repoUrl).toBe("");
+    expect(restored.responses["repo-question"]).toBe("https://example.com/custom-project");
   });
 
   it("uses one verified owner for participant-disabled forms without changing enabled rosters", () => {

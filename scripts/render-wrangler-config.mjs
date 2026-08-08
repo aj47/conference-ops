@@ -15,8 +15,8 @@ function parseArgs(argv) {
     else if (argument === "--out-dir") result.outDir = argv[++index] ?? result.outDir;
     else throw new Error(`Unknown argument: ${argument}`);
   }
-  if (!["staging", "production"].includes(result.environment)) {
-    throw new Error("--environment must be staging or production");
+  if (!["pilot", "staging", "production"].includes(result.environment)) {
+    throw new Error("--environment must be pilot, staging, or production");
   }
   return result;
 }

@@ -7,9 +7,9 @@
 - a least-privilege Cloudflare API token
 - a dedicated R2 S3 access key pair for Terraform state
 - verified Email Routing sender address
-- separate staging and production hostnames, variables, secrets, and GitHub Environments
+- separate pilot, staging, and production hostnames, variables, secrets, and Terraform state keys
 
-Email Routing is optional for a demo staging deployment. Set `ENABLE_CLOUDFLARE_EMAIL=false` to remove the native binding from rendered Jobs configuration. Do not exercise delivery in that mode: attempted email jobs fail into the D1 outbox, retry through the queue, and eventually surface in the DLQ. Production requires `ENABLE_CLOUDFLARE_EMAIL=true` because account verification depends on delivery; deployment preflight fails until the sender/domain and token scope are ready.
+Email Routing is optional for a demo staging deployment. Set `ENABLE_CLOUDFLARE_EMAIL=false` to remove the native binding from rendered Jobs configuration. Do not exercise delivery in that mode: attempted email jobs fail into the D1 outbox, retry through the queue, and eventually surface in the DLQ. Pilot and production require `ENABLE_CLOUDFLARE_EMAIL=true` because account verification depends on delivery; deployment preflight fails until the sender/domain and token scope are ready.
 
 Run all examples from the repository root unless a command changes directories.
 
@@ -50,6 +50,8 @@ terraform output wrangler_bindings
 ```
 
 For production, use the production backend and variables. Always confirm the plan names only the intended environment. Never pass application secrets as Terraform variables.
+
+For the isolated prospective-client pilot, substitute `pilot.tfvars.example` and `pilot.s3.tfbackend`. Its reviewed canonical origin is `https://conference-ops-pilot-app.techfren.workers.dev`; leave `custom_domain` empty, `enable_preview_access=false`, `demo_mode=false`, and all external integrations disabled. The pilot requires a verified email sender before first account creation.
 
 If Terraform discovers existing manually-created resources, import them into the correct environment state rather than recreating them. Retain `prevent_destroy` after import.
 
@@ -117,7 +119,7 @@ curl --fail --retry 5 --header "Authorization: Bearer $REALTIME_TOKEN" "$PUBLIC_
 
 Vite writes the App Worker deployment redirect with its built static-assets directory; deploying the rendered source config directly omits those generated assets. Run manual deployments only from a clean checkout. Delete rendered secret files and restore the three checked-in Wrangler templates afterward if the checkout is not ephemeral.
 
-The example above is the integrations-off/no-Access path. When Access is enabled, export matching `APP_CUSTOM_DOMAIN` and `PREVIEW_ACCESS_HOSTNAME`, configure the service-token ID in Terraform, and pass its client ID/secret headers to the readiness request. When Email is enabled, export the verified sender/reply-to and confirm the deployment token has Email Routing scope.
+The example above is the integrations-off/no-Access path. When Access is enabled, export matching `APP_CUSTOM_DOMAIN` and `PREVIEW_ACCESS_HOSTNAME`, configure the service-token ID in Terraform, and pass its client ID/secret headers to the readiness request. When Email is enabled, export the verified sender/reply-to and confirm the deployment token has Email Routing scope. For a pilot deploy, replace `staging` with `pilot` throughout and set `PUBLIC_APP_URL` to the canonical Workers.dev origin; the checked-in pilot Wrangler sections already use isolated Worker, D1, R2, queue, and DLQ names.
 
 ## Demo seed
 

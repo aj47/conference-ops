@@ -26,7 +26,13 @@ export function VenueSettingsDrawer({ open, onClose }: { open: boolean; onClose:
   const [deleteCandidate, setDeleteCandidate] = useState<DeleteCandidate | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const drawerRef = useDialogA11y<HTMLDivElement>(onClose, open);
+  const drawerRef = useDialogA11y<HTMLDivElement>(() => {
+    if (deleteCandidate) {
+      setDeleteCandidate(null);
+      return;
+    }
+    onClose();
+  }, open);
 
   useEffect(() => {
     if (!open) return;

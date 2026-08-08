@@ -4,6 +4,7 @@ import { Navigate } from "react-router-dom";
 import type { CreateEventPayload } from "../api";
 import { Field, InlineAlert } from "../components";
 import { dateTimeLocalToInstant, instantToDateTimeLocal } from "../event-time";
+import { cfpDeadlineValidation } from "../event-setup-validation";
 import { useWorkspace } from "../workspace";
 
 const DAY = 86_400_000;
@@ -43,6 +44,10 @@ export function EventSetupPage() {
   const [slugTouched, setSlugTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const cfpDeadlineError = useMemo(
+    () => cfpDeadlineValidation(draft.cfpClosesAt, draft.startsAt, draft.timezone),
+    [draft.cfpClosesAt, draft.startsAt, draft.timezone],
+  );
   const ready = useMemo(() => Boolean(
     draft.organizationName.trim()
     && draft.name.trim().length >= 3
@@ -51,7 +56,8 @@ export function EventSetupPage() {
     && draft.startsAt
     && draft.endsAt
     && draft.cfpClosesAt
-  ), [draft]);
+    && !cfpDeadlineError
+  ), [cfpDeadlineError, draft]);
 
   if (loading) return <div className="route-loader">Preparing your event workspace…</div>;
   if (authRequired) return <Navigate to="/auth?returnTo=%2Fevents%2Fnew" replace />;
@@ -108,9 +114,9 @@ export function EventSetupPage() {
             <Field label="Event starts"><input required type="datetime-local" value={draft.startsAt} onChange={(event) => setDraft({ ...draft, startsAt: event.target.value })} /></Field>
             <Field label="Event ends"><input required type="datetime-local" value={draft.endsAt} onChange={(event) => setDraft({ ...draft, endsAt: event.target.value })} /></Field>
           </div>
-          <Field label="CFP closes" hint="Must be before the event starts."><input required type="datetime-local" value={draft.cfpClosesAt} onChange={(event) => setDraft({ ...draft, cfpClosesAt: event.target.value })} /></Field>
+          <Field label="CFP closes" hint="Must be before the event starts." error={cfpDeadlineError}><input required type="datetime-local" aria-invalid={Boolean(cfpDeadlineError)} value={draft.cfpClosesAt} onChange={(event) => setDraft({ ...draft, cfpClosesAt: event.target.value })} /></Field>
           <Field label="Event website"><input type="url" value={draft.websiteUrl} onChange={(event) => setDraft({ ...draft, websiteUrl: event.target.value })} placeholder="https://" /></Field>
-          <fieldset className="event-color-field"><legend>Accent color</legend><div className="brand-swatches">{["#e05b3f", "#2d6a6c", "#7564a8", "#bd8b2f"].map((color) => <button key={color} type="button" className={draft.accent === color ? "selected" : ""} style={{ background: color }} onClick={() => setDraft({ ...draft, accent: color })} aria-label={`Use ${color} as event accent`} />)}</div></fieldset>
+          <fieldset className="event-color-field"><legend>Accent color</legend><div className="brand-swatches">{["#e05b3f", "#2d6a6c", "#7564a8", "#bd8b2f"].map((color) => <button key={color} type="button" className={draft.accent === color ? "selected" : ""} style={{ background: color }} onClick={() => setDraft({ ...draft, accent: color })} aria-label={`Use ${color} as event accent`} aria-pressed={draft.accent === color} />)}</div></fieldset>
           {error && <InlineAlert tone="danger">{error}</InlineAlert>}
         </div>
         <div className="event-setup-card__foot"><p>Your event remains private until you publish its CFP or agenda.</p><button className="button button--primary" disabled={!ready || saving} type="submit">{saving ? "Building workspace…" : "Create event workspace"}<ArrowRight size={16} /></button></div>

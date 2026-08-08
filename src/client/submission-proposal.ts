@@ -47,14 +47,9 @@ export function submissionForPersistence(
 function responseForCanonicalField(
   responses: Record<string, unknown>,
   fields: FormField[],
-  ids: string[],
-  labels: string[],
+  id: string,
 ) {
-  for (const id of ids) {
-    if (typeof responses[id] === "string") return String(responses[id]);
-  }
-  const normalizedLabels = new Set(labels.map((label) => label.toLowerCase()));
-  const field = fields.find((candidate) => normalizedLabels.has(candidate.label.trim().toLowerCase()));
+  const field = fields.find((candidate) => candidate.id === id);
   return field && typeof responses[field.id] === "string" ? String(responses[field.id]) : "";
 }
 
@@ -81,14 +76,12 @@ export function proposalToApplicantSubmission(
     repoUrl: responseForCanonicalField(
       responses,
       form.proposalFields,
-      ["field-repo"],
-      ["project or repository", "relevant project or repository", "project url", "repository url"],
+      "field-repo",
     ),
     workshopNeeds: responseForCanonicalField(
       responses,
       form.proposalFields,
-      ["field-workshop-needs"],
-      ["workshop needs", "workshop requirements", "workshop setup requirements"],
+      "field-workshop-needs",
     ),
     responses,
     speakers: withMinimumSpeakers(speakers, form.participantMin),

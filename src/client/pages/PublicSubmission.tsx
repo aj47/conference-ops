@@ -103,13 +103,6 @@ function isCanonicalField(field: FormField, section: FormSection) {
         "format",
         "preferred format",
         "session format",
-        "project or repository",
-        "relevant project or repository",
-        "project url",
-        "repository url",
-        "workshop needs",
-        "workshop requirements",
-        "workshop setup requirements",
       ].includes(label);
   }
   return field.id === "speaker-first"
@@ -150,7 +143,7 @@ function answerForField(field: FormField, section: FormSection, submission: Appl
       const label = submission.format === "lightning" ? "Lightning talk" : `${submission.format[0].toUpperCase()}${submission.format.slice(1)}`;
       return field.options?.find((option) => option.toLowerCase() === label.toLowerCase()) ?? label;
     }
-    if (field.id === "field-repo" || ["project or repository", "relevant project or repository", "project url", "repository url"].includes(label)) return submission.repoUrl;
+    if (field.id === "field-repo") return submission.repoUrl;
     return submission.workshopNeeds;
   }
   const primarySpeaker = submission.speakers[0] ?? blankApplicantSpeaker();
@@ -412,6 +405,8 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
     && hasAnswer(responses[field.id])
     && fields.findIndex((candidate) => candidate.field.id === field.id) === index);
   const categoryOptions = configuredCategoryOptions(builder.proposalFields);
+  const collectsRepository = builder.proposalFields.some((field) => field.id === "field-repo");
+  const collectsWorkshopNeeds = builder.proposalFields.some((field) => field.id === "field-workshop-needs");
   const accountState = submissionAccountState(source, session.isPending, sessionUser, primarySpeaker.email);
   const returnTo = safeReturnTo(`${location.pathname}${location.search}${location.hash}`);
   const authPath = authPathFor(returnTo);
@@ -610,6 +605,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
   };
 
   const startNewProposal = () => {
+    setSubmittedId(null);
     const empty = blankSubmission(builder.proposalFields, builder.participantMin);
     const verifiedEmail = accountState.kind === "verified" ? accountState.email : "";
     setSubmission({
@@ -814,7 +810,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
           <h1 ref={stepHeadingRef} tabIndex={-1}>You’re in the review queue.</h1>
           <p>{builder.successMessage}</p>
           <div className="success-receipt"><span><Mail size={18} /><span><strong>Confirmation queued</strong><small>{primarySpeaker.email}</small></span></span><span><ShieldCheck size={18} /><span><strong>Submission locked to V{builder.version}</strong><small>Your speaker profile stays editable. Contact the organizer to revise proposal answers.</small></span></span></div>
-          <div className="success-actions"><a className="button button--primary button--large" href={portalPath}>Continue to speaker portal <ArrowRight size={16} /></a><button type="button" className="button button--quiet" onClick={() => { const empty = blankSubmission(builder.proposalFields, builder.participantMin); setSubmittedId(null); setStep(0); setPermissionConfirmed(false); setSubmission({ ...empty, speakers: withMinimumSpeakers([{ ...primarySpeaker }], builder.participantMin) }); }}>Submit another session</button></div>
+          <div className="success-actions"><a className="button button--primary button--large" href={portalPath}>Continue to speaker portal <ArrowRight size={16} /></a><button type="button" className="button button--quiet" onClick={startNewProposal}>Submit another session</button></div>
           {builder.autoRedirect && <p className="countdown">Continuing automatically in <strong>{Math.max(0, countdown)}</strong> seconds.</p>}
         </main>
         <NoticeRegion />
@@ -925,9 +921,9 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
                     <Field label="Program category" error={errors.category}><select value={submission.category} onChange={(event) => setSubmission({ ...submission, category: event.target.value })}><option value="">Select a category</option>{categoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}</select></Field>
                     <Field label="Preferred format"><select value={submission.format} onChange={(event) => setSubmission({ ...submission, format: event.target.value as ApplicantSubmission["format"] })}><option value="talk">Talk · 30 min</option><option value="workshop">Workshop · 60 min</option><option value="panel">Panel · 45 min</option><option value="lightning">Lightning · 10 min</option></select></Field>
                     <Field label="Audience level"><select value={submission.level} onChange={(event) => setSubmission({ ...submission, level: event.target.value as ApplicantSubmission["level"] })}><option value="introductory">Introductory</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></Field>
-                    <Field label="Project or repository" hint="Optional"><input type="url" value={submission.repoUrl} onChange={(event) => setSubmission({ ...submission, repoUrl: event.target.value })} placeholder="https://…" /></Field>
+                    {collectsRepository && <Field label="Project or repository" hint="Optional"><input type="url" value={submission.repoUrl} onChange={(event) => setSubmission({ ...submission, repoUrl: event.target.value })} placeholder="https://…" /></Field>}
                   </div>
-                  {submission.format === "workshop" && <Field label="Workshop setup requirements" error={errors.workshopNeeds}><textarea rows={4} value={submission.workshopNeeds} onChange={(event) => setSubmission({ ...submission, workshopNeeds: event.target.value })} placeholder="Attendee prerequisites, software, room layout, helpers…" /></Field>}
+                  {collectsWorkshopNeeds && submission.format === "workshop" && <Field label="Workshop setup requirements" error={errors.workshopNeeds}><textarea rows={4} value={submission.workshopNeeds} onChange={(event) => setSubmission({ ...submission, workshopNeeds: event.target.value })} placeholder="Attendee prerequisites, software, room layout, helpers…" /></Field>}
                   {visibleProposalCustomFields.map((field) => <CustomField key={field.id} field={field} value={responses[field.id]} error={errors[field.id]} onChange={(value) => updateResponse(field.id, value)} />)}
                   <div className={`combined-counter${combinedCharacters > builder.combinedCharacterLimit ? " combined-counter--over" : ""}`}><span>Combined long-text budget</span><strong>{combinedCharacters.toLocaleString()} / {builder.combinedCharacterLimit.toLocaleString()}</strong></div>
                 </div>

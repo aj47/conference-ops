@@ -270,7 +270,7 @@ test("organizer authors a one-level conditional CFP question", async ({ page, is
   await expect(newField.getByText("When Preferred format is Workshop", { exact: true })).toBeVisible();
 });
 
-test("organizer creates, places, and resolves a direct-session conflict", async ({ page }) => {
+test("organizer creates, places, and resolves a direct-session conflict", async ({ page, isMobile }) => {
   await page.goto("/schedule");
   await expect(page.getByRole("heading", { name: "Every room, track, and speaker gets one place." })).toBeVisible();
 
@@ -295,6 +295,18 @@ test("organizer creates, places, and resolves a direct-session conflict", async 
   await page.getByRole("textbox", { name: /Override reason/ }).fill("Stage manager approved the intentional overlap.");
   await page.getByRole("button", { name: "Override & place" }).click();
   await expect(page.getByText("Session scheduled with an audited override.")).toBeVisible();
+
+  const overriddenCard = page.locator(".schedule-card").filter({ hasText: "Designing the first ten minutes of an AI SDK" });
+  const overriddenReschedule = overriddenCard.getByRole("button", { name: "Reschedule Designing the first ten minutes of an AI SDK" });
+  await overriddenReschedule.click();
+  const placementDialog = page.getByRole("dialog", { name: "Place session" });
+  await expect(placementDialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  if (!isMobile) await expect(overriddenReschedule).toBeFocused();
+
+  const publishedCard = page.locator(".schedule-card").filter({ hasText: "Opening call" });
+  await publishedCard.getByRole("button", { name: "Reschedule Opening call" }).click();
+  await expect(placementDialog).toBeVisible();
 });
 
 test("submitter completes the public CFP and sees a confirmation", async ({ page, isMobile }) => {

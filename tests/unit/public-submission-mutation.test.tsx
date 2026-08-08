@@ -67,6 +67,7 @@ const publicForm: FormDefinition = {
     { id: "production-abstract", label: "Abstract", type: "long_text", required: true, section: "proposal" },
     { id: "production-lane", label: "Program lane", type: "select", required: true, section: "proposal", options: ["Operating AI"] },
     { id: "production-format", label: "Preferred format", type: "select", required: true, section: "proposal", options: ["Talk"] },
+    { id: "production-project-url", label: "Project URL", type: "url", required: false, section: "proposal" },
     { id: "production-evidence", label: "Evidence available", type: "long_text", required: false, section: "proposal" },
   ],
   submissions: 0,
@@ -81,7 +82,10 @@ const applicantSubmission: ApplicantSubmission = {
   level: "advanced",
   repoUrl: "",
   workshopNeeds: "",
-  responses: { "production-evidence": "Thirty days of traces and incident reports." },
+  responses: {
+    "production-project-url": "https://example.com/durable-agent-queue",
+    "production-evidence": "Thirty days of traces and incident reports.",
+  },
   speakers: [{
     firstName: "Ada",
     lastName: "Rivera",
@@ -164,6 +168,7 @@ describe("production public submission mutation contract", () => {
           "production-abstract": applicantSubmission.summary,
           "production-lane": applicantSubmission.category,
           "production-format": "Talk",
+          "production-project-url": applicantSubmission.responses["production-project-url"],
           "production-evidence": applicantSubmission.responses["production-evidence"],
         },
       }),
@@ -270,6 +275,7 @@ describe("production public submission mutation contract", () => {
         { id: "v1-abstract", label: "Abstract", type: "long_text", required: true, section: "proposal" },
         { id: "v1-lane", label: "Program lane", type: "select", required: true, section: "proposal", options: ["Legacy lane"] },
         { id: "v1-format", label: "Preferred format", type: "select", required: true, section: "proposal", options: ["Talk"] },
+        { id: "v1-project-url", label: "Project URL", type: "url", required: false, section: "proposal" },
         { id: "v1-evidence", label: "Version seven evidence", type: "long_text", required: false, section: "proposal" },
       ],
     };
@@ -302,6 +308,7 @@ describe("production public submission mutation contract", () => {
         "v1-abstract": "Stale canonical abstract",
         "v1-lane": "Stale lane",
         "v1-format": "Workshop",
+        "v1-project-url": "https://example.com/version-seven-project",
         "v1-evidence": "Evidence retained from version seven.",
         "removed-response": "This hidden answer must not be re-sent.",
       },
@@ -356,6 +363,8 @@ describe("production public submission mutation contract", () => {
     expect(container.textContent).toContain("immutable form version 7; new proposals use version 8");
     expect(container.textContent).toContain("Version seven evidence");
     expect(container.textContent).not.toContain("New required evidence");
+    const projectUrl = container.querySelector<HTMLInputElement>('input[type="url"]');
+    expect(projectUrl?.value).toBe("https://example.com/version-seven-project");
     await click(/^Continue/);
     await vi.waitFor(() => expect(container.textContent).toContain("Who will be on stage?"));
     await click(/^Continue/);
@@ -376,11 +385,18 @@ describe("production public submission mutation contract", () => {
           "v1-abstract": draft.summary,
           "v1-lane": draft.category,
           "v1-format": "Talk",
+          "v1-project-url": "https://example.com/version-seven-project",
           "v1-evidence": "Evidence retained from version seven.",
         },
       }),
     );
     expect(update.mock.calls[0][3].responses).not.toHaveProperty("removed-response");
     expect(update.mock.calls[0][3].responses).not.toHaveProperty("v2-required");
+
+    await vi.waitFor(() => expect(container.textContent).toContain("Submit another session"));
+    await click(/Submit another session/);
+    expect(window.location.pathname).toBe(`/submit/${event.slug}`);
+    expect(window.location.search).toBe("");
+    expect(container.textContent).not.toContain("Editing account draft.");
   });
 });

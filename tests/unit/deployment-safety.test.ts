@@ -7,7 +7,9 @@ import type { Bindings } from "../../src/server/env";
 
 const readinessToken = "readiness-token-that-is-at-least-32-characters";
 
-function preflight(environment: "staging" | "production", emailEnabled: boolean) {
+type DeployEnvironment = "pilot" | "staging" | "production";
+
+function preflight(environment: DeployEnvironment, emailEnabled: boolean) {
   return spawnSync(process.execPath, ["scripts/check-deploy-prerequisites.mjs", environment, "--inputs-only"], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -29,7 +31,7 @@ function preflight(environment: "staging" | "production", emailEnabled: boolean)
   });
 }
 
-function generatedConfig(environment: "staging" | "production") {
+function generatedConfig(environment: DeployEnvironment) {
   return {
     name: `conference-ops-${environment}-app`,
     main: "index.js",
@@ -88,21 +90,22 @@ describe("deployment preflight", () => {
     expect(mutatingDeployScripts).toEqual([]);
   });
 
-  it("requires native email delivery for production account verification", () => {
-    const result = preflight("production", false);
+  it.each(["pilot", "production"] as const)("requires native email delivery for %s account verification", (environment) => {
+    const result = preflight(environment, false);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Production requires ENABLE_CLOUDFLARE_EMAIL=true");
+    expect(result.stderr).toContain(`${environment} requires ENABLE_CLOUDFLARE_EMAIL=true`);
   });
 
-  it("allows email-disabled staging and email-enabled production", () => {
+  it("allows email-disabled staging and requires email-enabled persistent environments", () => {
     expect(preflight("staging", false).status).toBe(0);
+    expect(preflight("pilot", true).status).toBe(0);
     expect(preflight("production", true).status).toBe(0);
   });
 });
 
 describe("generated Vite deployment configuration", () => {
-  it.each(["staging", "production"] as const)("accepts a complete %s topology", (environment) => {
+  it.each(["pilot", "staging", "production"] as const)("accepts a complete %s topology", (environment) => {
     expect(validateGeneratedViteConfig(generatedConfig(environment), environment)).toMatchObject({
       name: `conference-ops-${environment}-app`,
       queue: `conference-ops-${environment}-jobs`,

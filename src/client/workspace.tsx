@@ -22,6 +22,7 @@ import type {
   ProposalStatus,
   PublicEventLoadState,
   ReviewAssignment,
+  Role,
   Room,
   ScheduleConflict,
   SpeakerProfile,
@@ -34,6 +35,7 @@ import { evaluateReviewScores } from "../shared/review-rubric";
 import { ApiClientError, conferenceApi, safeDownloadFileName, type CreateEventPayload } from "./api";
 import { dateTimeLocalToInstant, instantToDateTimeLocal } from "./event-time";
 import { isPrivateWorkspaceRole } from "./private-routes";
+import { actorWithRole } from "./role-selection";
 import { privateDraftPreviewEventId, publicEventRouteFromPath } from "./public-routes";
 import type { ApplicantSpeaker } from "./submission-speakers";
 import { taskUploadPurpose } from "./upload-purpose";
@@ -128,7 +130,7 @@ interface WorkspaceContextValue {
   privateWorkspaceEventId: string | null;
   publicSpeakers: Array<Omit<SpeakerProfile, "email">>;
   setNotice: (notice: string | null) => void;
-  switchActor: (actorId: string) => void;
+  switchActor: (actorId: string, role?: Role) => void;
   createEvent: (payload: CreateEventPayload) => Promise<void>;
   updateEvent: (patch: Partial<WorkspaceSnapshot["event"]>) => Promise<void>;
   createRoom: (payload: Pick<Room, "name" | "capacity">) => Promise<Room>;
@@ -337,8 +339,8 @@ function responseForField(
     const label = payload.format === "lightning" ? "Lightning talk" : `${payload.format[0].toUpperCase()}${payload.format.slice(1)}`;
     return field.options?.find((option) => option.toLowerCase() === label.toLowerCase()) ?? label;
   }
-  if (section === "proposal" && (field.id === "field-repo" || ["project or repository", "relevant project or repository", "project url", "repository url"].includes(label))) return payload.repoUrl;
-  if (section === "proposal" && (field.id === "field-workshop-needs" || ["workshop needs", "workshop requirements", "workshop setup requirements"].includes(label))) return payload.workshopNeeds;
+  if (section === "proposal" && field.id === "field-repo") return payload.repoUrl;
+  if (section === "proposal" && field.id === "field-workshop-needs") return payload.workshopNeeds;
   if (section === "participant" && (field.id === "speaker-first" || label === "first name")) return primarySpeaker?.firstName;
   if (section === "participant" && (field.id === "speaker-last" || label === "last name")) return primarySpeaker?.lastName;
   if (section === "participant" && (field.id === "speaker-email" || ["email", "email address", "contact email", "speaker email"].includes(label))) return primarySpeaker?.email;
@@ -606,10 +608,10 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
     refresh: refreshAuthenticatedWorkspace,
   });
 
-  const switchActor = useCallback((actorId: string) => {
+  const switchActor = useCallback((actorId: string, role?: Role) => {
     storeActorId(actorId);
     setWorkspace((current) => {
-      const actor = current.actors.find((candidate) => candidate.id === actorId);
+      const actor = actorWithRole(current.actors, actorId, role);
       return actor ? { ...current, actor } : createDemoWorkspace(actorId);
     });
     setNotice(null);

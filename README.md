@@ -8,6 +8,12 @@ The staging walkthrough starts in demo mode and includes an in-product persona s
 
 Organizers can also start from a clean account instead of seed data. Creating an event grants organizer access and initializes a private CFP draft, a routed review round, a Main room and General track, speaker file and onboarding requirements, and public agenda/gallery embeds. Rooms and tracks remain fully organizer-managed as the venue plan changes.
 
+## Prospective-client pilot
+
+The persistent organizer pilot is a separate, non-demo Workers.dev environment. Each prospect creates and verifies an account, receives an isolated organization, and creates an event from scratch. The in-product Control Room includes a nine-step trial runway and links to the bundled [Organizer Trial Guide](public/conference-ops-organizer-trial-guide.pdf).
+
+The pilot defaults to a 30-day evaluation, synthetic or representative test data, Cloudflare D1 as the authoritative database, native Cloudflare email, and disabled Airtable/Accelevents integrations. Provision it with the `pilot` Terraform and Wrangler environment; do not reuse the demo staging database or its persona switcher.
+
 ## Stack
 
 - React and Vite for the browser application
@@ -18,7 +24,7 @@ Organizers can also start from a clean account instead of seed data. Creating an
 - a Durable Object Worker for event-scoped realtime updates
 - Terraform for stateful account resources; Wrangler for Worker code, bindings, routes, and Durable Object migrations
 
-The deployment model requires staging and production to use separate databases, buckets, queues, Workers, secrets, and Terraform state keys whenever both environments are provisioned. See [ARCHITECTURE.md](ARCHITECTURE.md) for the service boundaries and [infra/OPERATIONS.md](infra/OPERATIONS.md) for the runbook.
+The deployment model requires pilot, staging, and production to use separate databases, buckets, queues, Workers, secrets, and Terraform state keys whenever those environments are provisioned. See [ARCHITECTURE.md](ARCHITECTURE.md) for the service boundaries and [infra/OPERATIONS.md](infra/OPERATIONS.md) for the runbook.
 
 ## Local development
 

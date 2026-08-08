@@ -49,6 +49,62 @@
     }
   ],
   "env": {
+    "pilot": {
+      "name": "conference-ops-pilot-app",
+      "workers_dev": true,
+      "vars": {
+        "ENVIRONMENT": "pilot",
+        "DEMO_MODE": "false",
+        "PUBLIC_APP_URL": "__PUBLIC_APP_URL__",
+        "BETTER_AUTH_URL": "__PUBLIC_APP_URL__",
+        "ACCELEVENTS_ENABLED": "__ACCELEVENTS_ENABLED__",
+        "MAIL_FROM": "__MAIL_FROM__",
+        "MAIL_REPLY_TO": "__MAIL_REPLY_TO__"
+      },
+      "secrets": {
+        "required": ["BETTER_AUTH_SECRET", "REALTIME_TOKEN"]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "conference-ops-pilot",
+          "database_id": "__D1_DATABASE_ID__",
+          "migrations_dir": "./migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "UPLOADS",
+          "bucket_name": "conference-ops-pilot-uploads"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "JOBS_QUEUE",
+            "queue": "conference-ops-pilot-jobs"
+          }
+        ]
+      },
+      "services": [
+        {
+          "binding": "REALTIME",
+          "service": "conference-ops-pilot-realtime"
+        }
+      ],
+      "observability": {
+        "enabled": true,
+        "logs": {
+          "enabled": true,
+          "head_sampling_rate": 1,
+          "invocation_logs": true
+        },
+        "traces": {
+          "enabled": true,
+          "head_sampling_rate": 1
+        }
+      }
+    },
     "staging": {
       "name": "conference-ops-staging-app",
       "workers_dev": true,

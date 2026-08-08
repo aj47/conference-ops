@@ -12,7 +12,7 @@ export interface GeneratedViteConfig {
 
 export function validateGeneratedViteConfig(
   config: GeneratedViteConfig,
-  environment: "staging" | "production",
+  environment: "pilot" | "staging" | "production",
 ): {
   name: string;
   database: string;
@@ -24,7 +24,7 @@ export function validateGeneratedViteConfig(
 export function validateStaticAssetHeaders(source: string): true;
 
 export function checkViteDeployConfig(
-  environment: "staging" | "production",
+  environment: "pilot" | "staging" | "production",
   rootDirectory?: string,
 ): Promise<{
   environment: string;

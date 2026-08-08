@@ -31,6 +31,21 @@
     "required": ["REALTIME_TOKEN"]
   },
   "env": {
+    "pilot": {
+      "name": "conference-ops-pilot-realtime",
+      "workers_dev": false,
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "EVENT_REALTIME",
+            "class_name": "EventRealtime"
+          }
+        ]
+      },
+      "secrets": {
+        "required": ["REALTIME_TOKEN"]
+      }
+    },
     "staging": {
       "name": "conference-ops-staging-realtime",
       "workers_dev": false,

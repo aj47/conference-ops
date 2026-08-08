@@ -12,7 +12,7 @@ function parseArgs(argv) {
     else if (argument === "--out-file") result.outFile = argv[++index] ?? "";
     else throw new Error(`Unknown argument: ${argument}`);
   }
-  if (!["staging", "production"].includes(result.environment)) throw new Error("--environment must be staging or production");
+  if (!["pilot", "staging", "production"].includes(result.environment)) throw new Error("--environment must be pilot, staging, or production");
   result.outFile ||= `artifacts/terraform/${result.environment}.tfvars.json`;
   return result;
 }

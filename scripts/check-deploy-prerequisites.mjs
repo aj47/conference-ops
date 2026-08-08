@@ -8,7 +8,7 @@ const environment = process.argv[2];
 const inputsOnly = process.argv.includes("--inputs-only");
 const directoryArgument = process.argv.slice(3).find((argument) => argument !== "--inputs-only");
 const directory = directoryArgument ?? "artifacts/wrangler";
-if (!["staging", "production"].includes(environment)) throw new Error("First argument must be staging or production");
+if (!["pilot", "staging", "production"].includes(environment)) throw new Error("First argument must be pilot, staging, or production");
 
 function requiredEnvironment(name, minimumLength = 1) {
   const value = process.env[name] ?? "";
@@ -34,8 +34,8 @@ if (inputsOnly) {
   requiredEnvironment("REALTIME_TOKEN", 32);
 
   const emailEnabled = optionalBoolean("ENABLE_CLOUDFLARE_EMAIL");
-  if (environment === "production" && !emailEnabled) {
-    throw new Error("Production requires ENABLE_CLOUDFLARE_EMAIL=true because account verification is mandatory");
+  if (["pilot", "production"].includes(environment) && !emailEnabled) {
+    throw new Error(`${environment} requires ENABLE_CLOUDFLARE_EMAIL=true because account verification is mandatory`);
   }
   if (emailEnabled) requiredEnvironment("MAIL_FROM");
 
