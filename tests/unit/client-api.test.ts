@@ -56,7 +56,7 @@ describe("conference client communication and export requests", () => {
     );
 
     expect(result.fileName).toBe("summit-speakers.csv");
-    expect(result.blob).toBeInstanceOf(Blob);
+    expect(result.blob.type).toBe("text/csv");
     expect(result.blob.size).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/events/event-aie-2026/exports/speakers.csv",
