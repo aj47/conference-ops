@@ -2,7 +2,7 @@
 
 Conference Ops is a Cloudflare-native workspace for running a call for proposals through review, speaker onboarding, scheduling, publishing, and external event-platform handoff. It is designed around the work an organizer actually needs to finish: versioned forms, review queues, conflict-aware scheduling, task-linked forms and file requests, a speaker portal, public embeds, communications, audit history, and operational reporting.
 
-**Live walkthrough:** [conference-ops-staging-app.techfren.workers.dev](https://conference-ops-staging-app.techfren.workers.dev) · [Public CFP](https://conference-ops-staging-app.techfren.workers.dev/submit/ai-engineer-summit-2026) · [Published agenda](https://conference-ops-staging-app.techfren.workers.dev/agenda)
+**Live walkthrough:** [conference-ops-staging-app.techfren.workers.dev](https://conference-ops-staging-app.techfren.workers.dev) · [Public CFP](https://conference-ops-staging-app.techfren.workers.dev/submit/ai-engineer-summit-2026) · [Published agenda](https://conference-ops-staging-app.techfren.workers.dev/events/ai-engineer-summit-2026/agenda)
 
 The staging walkthrough starts in demo mode and includes an in-product persona switcher for organizer, reviewer, applicant, and speaker journeys. No setup or credentials are required.
 
@@ -18,7 +18,7 @@ Organizers can also start from a clean account instead of seed data. Creating an
 - a Durable Object Worker for event-scoped realtime updates
 - Terraform for stateful account resources; Wrangler for Worker code, bindings, routes, and Durable Object migrations
 
-The staging and production environments use separate databases, buckets, queues, Workers, secrets, and Terraform state keys. See [ARCHITECTURE.md](ARCHITECTURE.md) for the service boundaries and [infra/OPERATIONS.md](infra/OPERATIONS.md) for the runbook.
+The deployment model requires staging and production to use separate databases, buckets, queues, Workers, secrets, and Terraform state keys whenever both environments are provisioned. See [ARCHITECTURE.md](ARCHITECTURE.md) for the service boundaries and [infra/OPERATIONS.md](infra/OPERATIONS.md) for the runbook.
 
 ## Local development
 
@@ -89,6 +89,8 @@ Infrastructure is split deliberately:
 - `.github/workflows/deploy.yml` serializes Terraform, D1 migration, and the realtime → jobs → app rollout.
 
 Pushes to `main` always verify. They deploy staging only after the repository variable `DEPLOY_ENABLED=true` is deliberately set; this keeps the initial repository green before Cloudflare state and secrets exist. Production is manual and should use a protected GitHub Environment with required reviewers. Demo seeding is an explicit staging-only workflow option and defaults off.
+
+Release status on 2026-08-08: the linked demo staging environment was provisioned manually and is not yet imported into Terraform state; production is not provisioned. Do not run Terraform apply against the live staging resources until the state bucket exists and those exact resources have been imported and reconciled to a zero-change plan.
 
 Before the first deployment, complete [infra/DEPLOYMENT_CHECKLIST.md](infra/DEPLOYMENT_CHECKLIST.md). Integration behavior and the manual import path are in [infra/ACCELEVENTS.md](infra/ACCELEVENTS.md).
 

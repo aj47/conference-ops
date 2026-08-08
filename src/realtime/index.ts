@@ -35,6 +35,18 @@ export class EventRealtime extends DurableObject {
   webSocketMessage(socket: WebSocket, message: ArrayBuffer | string) {
     if (message === "ping") socket.send("pong");
   }
+
+  webSocketClose(socket: WebSocket, code: number, reason: string) {
+    socket.close(code, reason);
+  }
+
+  webSocketError(socket: WebSocket) {
+    try {
+      socket.close(1011, "WebSocket error");
+    } catch {
+      // The runtime may report an error after the socket has already closed.
+    }
+  }
 }
 
 export default {

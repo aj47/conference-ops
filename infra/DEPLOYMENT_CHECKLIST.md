@@ -26,7 +26,10 @@ Use this checklist for the first environment deployment and every production pro
 - [ ] `ENABLE_PREVIEW_ACCESS`, `PREVIEW_ACCESS_HOSTNAME`, reviewer email/IdP JSON, and optional service-token ID JSON describe the intended staging policy.
 - [ ] `DNS_RECORDS_JSON`, D1/R2 location, and D1 replication variables reflect reviewed Terraform desired state.
 - [ ] Queue and DLQ retention are 86400 seconds on Free, or a supported paid-plan value.
-- [ ] `DEPLOY_ENABLED=true` is set only after the first four sections of this checklist are complete.
+
+## GitHub repository variables
+
+- [ ] `DEPLOY_ENABLED=true` is set at repository or organization scope only after the Cloudflare foundation, GitHub configuration, applicable domain/email gates, and data/migration checks are complete. Do not configure this gate only on a GitHub Environment; job-level conditions are evaluated before environment variables are available.
 
 ## GitHub Environment secrets
 
@@ -41,14 +44,14 @@ Use this checklist for the first environment deployment and every production pro
 
 ## Domain, Access, and email
 
-- [ ] Worker custom domain resolves to the App Worker and is Wrangler-owned.
+- [ ] If a custom domain is configured, it resolves to the App Worker and is Wrangler-owned; otherwise the reviewed canonical `workers.dev` URL is used.
 - [ ] Staging Access, if enabled, protects the exact custom hostname and includes the intended reviewers.
 - [ ] Production does not inherit the preview-only Access configuration.
 - [ ] Staging contains synthetic data only; its demo persona mode is never used for real event or attendee records.
 - [ ] Confirm whether the public iframe should remain universally embeddable for the event site; origin allowlist enforcement is not enabled in the MVP.
-- [ ] Email Routing is active and `MAIL_FROM` is an allowed sender for the Jobs Worker binding.
-- [ ] Authentication, communication, and REQUEST calendar create/update messages reach a controlled test mailbox.
-- [ ] SPF, DKIM, and DMARC alignment is reviewed for the sending domain.
+- [ ] When `ENABLE_CLOUDFLARE_EMAIL=true`, Email Routing is active and `MAIL_FROM` is an allowed sender for the Jobs Worker binding. Email-disabled staging must remain synthetic/demo-only and must not exercise delivery.
+- [ ] Before production, authentication, communication, and REQUEST calendar create/update messages reach a controlled test mailbox.
+- [ ] Before production, SPF, DKIM, and DMARC alignment is reviewed for the sending domain.
 
 ## Data and migration
 
@@ -73,9 +76,9 @@ Use this checklist for the first environment deployment and every production pro
 
 ## Integration and fallback
 
-- [ ] Accelevents preflight confirms the API key can access the intended event.
-- [ ] One speaker and one session upsert are tested before bulk sync.
-- [ ] Read-back confirms remote IDs and values; mappings are recorded locally.
+- [ ] `ACCELEVENTS_ENABLED=false` remains the default until entity upserts and read-back are implemented and tested; the current Worker intentionally stops after preflight rather than claiming a sync.
+- [ ] Before any future `ACCELEVENTS_ENABLED=true` rollout, preflight confirms the API key can access the intended event.
+- [ ] Before any future bulk sync, one speaker and one session upsert are tested and read-back confirms remote IDs and values; mappings are recorded locally.
 - [ ] Delete propagation is disabled; local deletions require an explicit human decision remotely.
 - [ ] Organizer has the CSV fallback package and understands the reconciliation procedure in [ACCELEVENTS.md](ACCELEVENTS.md).
 
