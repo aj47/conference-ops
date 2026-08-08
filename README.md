@@ -6,6 +6,8 @@ Conference Ops is a Cloudflare-native workspace for running a call for proposals
 
 The staging walkthrough starts in demo mode and includes an in-product persona switcher for organizer, reviewer, applicant, and speaker journeys. No setup or credentials are required.
 
+Organizers can also start from a clean account instead of seed data. Creating an event grants organizer access and initializes a private CFP draft, a routed review round, a Main room and General track, speaker file and onboarding requirements, and public agenda/gallery embeds. Rooms and tracks remain fully organizer-managed as the venue plan changes.
+
 ## Stack
 
 - React and Vite for the browser application
@@ -54,6 +56,7 @@ The seed is intentionally outside `migrations/`; it is never applied as part of 
 
 ```bash
 pnpm verify
+pnpm smoke:production-local
 pnpm test:e2e
 pnpm audit --prod
 bash scripts/verify-migrations.sh
@@ -63,6 +66,10 @@ terraform fmt -check -recursive infra
 The end-to-end suite covers the organizer schedule lifecycle, public CFP, speaker portal, agenda/embed, communications, and exports in desktop Chromium and a mobile WebKit viewport.
 
 `verify-migrations.sh` creates an isolated temporary D1, applies every generated migration, renders the password hash, loads the realistic seed, checks representative row counts, and runs `PRAGMA foreign_key_check`.
+
+`pnpm smoke:production-local` is the stateful release-path gate that demo mode cannot provide. It creates an isolated local D1/R2/Queue sandbox and ephemeral credentials, starts the Worker with `DEMO_MODE=false`, and signs in real applicant and organizer accounts through Better Auth. The harness creates, restores, edits, submits, and withdraws an account-owned multi-speaker draft; routes another submission to review; completes a task; accepts the proposal and verifies onboarding-task instantiation; rejects an out-of-window schedule write; atomically publishes an agenda selection; persists durable submission and acceptance communications; and initializes a fresh event with its operational defaults. It then checks the resulting workflow records and foreign-key integrity directly in D1, always removes its temporary state, and never invokes Wrangler with `--remote`.
+
+The harness deliberately uses loopback HTTP with `ENVIRONMENT=local` so the session cookie can be tested without a local TLS certificate. It does not replace deployment checks for Secure cookies, Cloudflare Access, Email Routing delivery, Realtime service bindings, or remote resource permissions.
 
 When the schema changes, edit `src/server/db/schema.ts`, then generate rather than hand-writing the migration:
 

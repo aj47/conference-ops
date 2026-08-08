@@ -34,6 +34,9 @@ if (inputsOnly) {
   requiredEnvironment("REALTIME_TOKEN", 32);
 
   const emailEnabled = optionalBoolean("ENABLE_CLOUDFLARE_EMAIL");
+  if (environment === "production" && !emailEnabled) {
+    throw new Error("Production requires ENABLE_CLOUDFLARE_EMAIL=true because account verification is mandatory");
+  }
   if (emailEnabled) requiredEnvironment("MAIL_FROM");
 
   const publicUrl = process.env.PUBLIC_APP_URL || (process.env.APP_CUSTOM_DOMAIN ? `https://${process.env.APP_CUSTOM_DOMAIN}` : "");

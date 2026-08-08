@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Clock3,
   FileText,
+  MailPlus,
   MapPin,
   Pencil,
   Radio,
@@ -15,30 +16,46 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { isAcceptedProposalStatus } from "../../shared/proposal-status";
+import { isOutstandingTaskStatus } from "../../shared/task-status";
 import { EmptyState, Field, InlineAlert, PageHeader, ProgressBar, SectionHeading, StatusPill } from "../components";
+import { conferenceApi } from "../api";
+import { useDialogA11y } from "../dialog-a11y";
+import { controlRoomExceptions } from "../control-room-exceptions";
+import {
+  dateTimeLocalToInstant,
+  formatEventDateRange,
+  formatEventDateTime,
+  formatShortDate,
+  instantToDateTimeLocal,
+  timeZoneAbbreviation,
+} from "../event-time";
+import { privateEventPath } from "../private-routes";
 import { useWorkspace } from "../workspace";
-
-function formatWhen(value: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-}
 
 function EventSettingsDialog({ onClose }: { onClose: () => void }) {
   const { workspace, updateEvent } = useWorkspace();
+  const dialogRef = useDialogA11y<HTMLFormElement>(onClose);
   const [draft, setDraft] = useState(workspace.event);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const updateLocalInstant = (field: "startsAt" | "endsAt" | "cfpClosesAt", value: string) => {
+    try {
+      setDraft({ ...draft, [field]: dateTimeLocalToInstant(value, draft.timezone) });
+      setError("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Choose a valid event time.");
+    }
+  };
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <form
+        ref={dialogRef}
         className="drawer drawer--wide"
         role="dialog"
         aria-modal="true"
         aria-labelledby="event-settings-title"
+        tabIndex={-1}
         onMouseDown={(event) => event.stopPropagation()}
         onSubmit={async (event) => {
           event.preventDefault();
@@ -59,7 +76,7 @@ function EventSettingsDialog({ onClose }: { onClose: () => void }) {
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close event settings"><X size={18} /></button>
         </div>
         <div className="drawer__body form-stack">
-          <Field label="Event name"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
+          <Field label="Event name"><input data-dialog-initial-focus value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
           <div className="field-grid field-grid--2">
             <Field label="Short name"><input value={draft.shortName} onChange={(event) => setDraft({ ...draft, shortName: event.target.value })} /></Field>
             <Field label="Public slug"><input value={draft.slug} onChange={(event) => setDraft({ ...draft, slug: event.target.value })} /></Field>
@@ -70,8 +87,9 @@ function EventSettingsDialog({ onClose }: { onClose: () => void }) {
           <div className="field-grid field-grid--2">
             <Field label="Venue"><input value={draft.venue} onChange={(event) => setDraft({ ...draft, venue: event.target.value })} /></Field>
             <Field label="Timezone"><select value={draft.timezone} onChange={(event) => setDraft({ ...draft, timezone: event.target.value })}><option>America/Los_Angeles</option><option>America/New_York</option><option>Europe/London</option><option>Asia/Singapore</option></select></Field>
-            <Field label="Starts"><input type="datetime-local" value={draft.startsAt.slice(0, 16)} onChange={(event) => setDraft({ ...draft, startsAt: new Date(event.target.value).toISOString() })} /></Field>
-            <Field label="Ends"><input type="datetime-local" value={draft.endsAt.slice(0, 16)} onChange={(event) => setDraft({ ...draft, endsAt: new Date(event.target.value).toISOString() })} /></Field>
+            <Field label="Starts"><input type="datetime-local" value={instantToDateTimeLocal(draft.startsAt, draft.timezone)} onChange={(event) => updateLocalInstant("startsAt", event.target.value)} /></Field>
+            <Field label="Ends"><input type="datetime-local" value={instantToDateTimeLocal(draft.endsAt, draft.timezone)} onChange={(event) => updateLocalInstant("endsAt", event.target.value)} /></Field>
+            <Field label="CFP closes"><input type="datetime-local" value={instantToDateTimeLocal(draft.cfpClosesAt, draft.timezone)} onChange={(event) => updateLocalInstant("cfpClosesAt", event.target.value)} /></Field>
           </div>
           <Field label="Event website"><input type="url" value={draft.websiteUrl} onChange={(event) => setDraft({ ...draft, websiteUrl: event.target.value })} /></Field>
           <div className="brand-swatches" aria-label="Event accent color">
@@ -87,15 +105,77 @@ function EventSettingsDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
+function StaffInviteDialog({ onClose }: { onClose: () => void }) {
+  const { workspace, setNotice } = useWorkspace();
+  const dialogRef = useDialogA11y<HTMLFormElement>(onClose);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"reviewer" | "organizer">("reviewer");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <form
+        ref={dialogRef}
+        className="drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="staff-invite-title"
+        tabIndex={-1}
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setSending(true);
+          setError("");
+          try {
+            const invitation = await conferenceApi.inviteStaff(
+              workspace.actor.id,
+              workspace.event.id,
+              { email: email.trim(), role },
+            );
+            setNotice(`Invitation queued for ${invitation.email}. It expires in seven days.`);
+            onClose();
+          } catch (reason) {
+            setError(reason instanceof Error ? reason.message : "The staff invitation could not be queued.");
+          } finally {
+            setSending(false);
+          }
+        }}
+      >
+        <div className="drawer__head">
+          <div><p className="eyebrow">Event team</p><h2 id="staff-invite-title">Invite a collaborator</h2></div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close staff invitation"><X size={18} /></button>
+        </div>
+        <div className="drawer__body form-stack">
+          <p className="muted">The invitation is delivered through the durable message queue. Reviewers are added to the event’s category routing groups after they accept.</p>
+          <Field label="Email address"><input data-dialog-initial-focus required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="reviewer@example.com" /></Field>
+          <Field label="Event role"><select value={role} onChange={(event) => setRole(event.target.value as typeof role)}><option value="reviewer">Reviewer</option><option value="organizer">Organizer</option></select></Field>
+          {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+        </div>
+        <div className="drawer__foot"><button type="button" className="button button--quiet" onClick={onClose} disabled={sending}>Cancel</button><button className="button button--primary" type="submit" disabled={sending || !email.trim()}>{sending ? "Queuing…" : "Queue invitation"}</button></div>
+      </form>
+    </div>
+  );
+}
+
 export function ControlRoom() {
-  const { workspace } = useWorkspace();
+  const { workspace, privateWorkspaceEventId } = useWorkspace();
+  const eventId = privateWorkspaceEventId ?? workspace.event.id;
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const accepted = workspace.proposals.filter((proposal) => proposal.status === "accepted").length;
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const acceptedProposals = workspace.proposals.filter((proposal) => proposal.eventId === eventId && isAcceptedProposalStatus(proposal.status));
+  const accepted = acceptedProposals.length;
+  const acceptedSpeakers = [...new Map(acceptedProposals.flatMap((proposal) => proposal.speakers).map((speaker) => [speaker.id, speaker])).values()];
+  const acceptedSpeakerIds = new Set(acceptedSpeakers.map((speaker) => speaker.id));
   const reviewPending = workspace.proposals.filter((proposal) => ["submitted", "under_review"].includes(proposal.status)).length;
   const unscheduled = workspace.sessions.filter((session) => session.status === "unscheduled").length;
-  const openTasks = workspace.tasks.filter((task) => task.status !== "complete");
+  const openTasks = workspace.tasks.filter((task) => task.eventId === eventId && acceptedSpeakerIds.has(task.speakerId) && isOutstandingTaskStatus(task.status));
   const overdueTasks = openTasks.filter((task) => task.status === "overdue");
-  const incompleteProfiles = workspace.proposals.flatMap((proposal) => proposal.speakers).filter((speaker) => !speaker.profileComplete);
+  const incompleteProfiles = acceptedSpeakers.filter((speaker) => !speaker.profileComplete);
+  const interventionItems = controlRoomExceptions(eventId, overdueTasks, incompleteProfiles, unscheduled);
+  const primaryIntervention = interventionItems[0];
+  const now = new Date().toISOString();
+  const currentWeekday = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: workspace.event.timezone }).format(new Date(now));
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -106,31 +186,31 @@ export function ControlRoom() {
   const phases = [
     {
       marker: "NOW",
-      date: "08 AUG",
+      date: formatShortDate(now, workspace.event.timezone),
       title: "Review the evidence",
       detail: `${reviewPending} proposals still need a committee signal before decisions lock.`,
       action: "Open review desk",
-      to: "/reviews",
+      to: privateEventPath("/reviews", eventId),
       tone: "rust",
       icon: FileText,
     },
     {
       marker: "NEXT",
-      date: "13 AUG",
+      date: formatShortDate(workspace.event.cfpClosesAt, workspace.event.timezone),
       title: "Close the call",
-      detail: `CFP closes ${formatWhen(workspace.event.cfpClosesAt)}. Draft reminders are queued 48 hours before.`,
+      detail: `CFP closes ${formatEventDateTime(workspace.event.cfpClosesAt, workspace.event.timezone)}. Review saved drafts and plan outreach 48 hours before.`,
       action: "Check form rules",
-      to: "/forms",
+      to: privateEventPath("/forms", eventId),
       tone: "ochre",
       icon: Clock3,
     },
     {
       marker: "THEN",
-      date: "18 AUG",
+      date: formatShortDate(workspace.event.startsAt, workspace.event.timezone),
       title: "Lock the room grid",
       detail: `${accepted} accepted sessions, ${unscheduled} still waiting for a room and start time.`,
       action: "Open schedule board",
-      to: "/schedule",
+      to: privateEventPath("/schedule", eventId),
       tone: "teal",
       icon: CalendarClock,
     },
@@ -139,16 +219,16 @@ export function ControlRoom() {
   return (
     <>
       <PageHeader
-        eyebrow="Program control room · Saturday shift"
+        eyebrow={`Program control room · ${currentWeekday} shift`}
         title="The conference is a living system."
         description="One operational view of what needs judgment now, what is waiting on people, and what the public will see next."
-        actions={<button type="button" className="button button--quiet" onClick={() => setSettingsOpen(true)}><Settings2 size={16} /> Event details</button>}
+        actions={<><button type="button" className="button button--quiet" onClick={() => setInviteOpen(true)}><MailPlus size={16} /> Invite staff</button><button type="button" className="button button--quiet" onClick={() => setSettingsOpen(true)}><Settings2 size={16} /> Event details</button></>}
       />
 
       <section className="event-brief" aria-label="Current event details">
         <div className="event-brief__title"><span className="live-dot" /> <strong>{workspace.event.name}</strong><StatusPill status={workspace.event.status} /></div>
         <div><MapPin size={15} /> {workspace.event.venue}</div>
-        <div><CalendarClock size={15} /> Aug 28–29 · {workspace.event.timezone.replace("America/", "")}</div>
+        <div><CalendarClock size={15} /> {formatEventDateRange(workspace.event)} · {timeZoneAbbreviation(workspace.event.startsAt, workspace.event.timezone)}</div>
         <button type="button" onClick={() => setSettingsOpen(true)}><Pencil size={14} /> Edit</button>
       </section>
 
@@ -167,22 +247,19 @@ export function ControlRoom() {
               </article>
             );
           })}
-          <div className="call-sheet__footer"><Radio size={16} /><span>Realtime changes are reflected here after each committed workflow action.</span></div>
+          <div className="call-sheet__footer"><Radio size={16} /><span>Committed workflow actions update this workspace immediately; other open workspaces refresh automatically about every 25 seconds.</span></div>
         </section>
 
         <aside className="risk-ledger" aria-labelledby="risk-title">
           <SectionHeading title="Needs intervention" description="Exceptions before they become day-of problems." />
           <div className="risk-ledger__count"><strong>{overdueTasks.length + incompleteProfiles.length + unscheduled}</strong><span>open exceptions</span></div>
           <div className="risk-list">
-            {overdueTasks.map((task) => (
-              <Link to="/speaker-ops" key={task.id}><AlertCircle size={16} /><span><strong>{task.title}</strong><small>Overdue · speaker task</small></span><ChevronMini /></Link>
-            ))}
-            {incompleteProfiles.slice(0, 2).map((speaker) => (
-              <Link to="/speaker-ops" key={speaker.id}><Users size={16} /><span><strong>{speaker.name}</strong><small>Public profile incomplete</small></span><ChevronMini /></Link>
-            ))}
-            {unscheduled > 0 && <Link to="/schedule"><CalendarClock size={16} /><span><strong>{unscheduled} unscheduled session</strong><small>Needs room and time</small></span><ChevronMini /></Link>}
+            {interventionItems.map((item) => {
+              const Icon = item.kind === "task" ? AlertCircle : item.kind === "profile" ? Users : CalendarClock;
+              return <Link to={item.to} key={item.key}><Icon size={16} /><span><strong>{item.title}</strong><small>{item.detail}</small></span><ChevronMini /></Link>;
+            })}
           </div>
-          <Link to="/speaker-ops" className="button button--dark button--full">Work the exception queue</Link>
+          {primaryIntervention && <Link to={primaryIntervention.to} className="button button--dark button--full">{primaryIntervention.action}</Link>}
         </aside>
       </div>
 
@@ -206,7 +283,7 @@ export function ControlRoom() {
               {workspace.activity.map((activity) => (
                 <li key={activity.id} className={`activity-list__item activity-list__item--${activity.tone}`}>
                   <span className="activity-list__icon">{activity.tone === "positive" ? <CheckCircle2 size={15} /> : activity.tone === "warning" ? <AlertCircle size={15} /> : <Sparkles size={15} />}</span>
-                  <div><strong>{activity.actor}</strong> {activity.action} <b>{activity.target}</b><small>{formatWhen(activity.at)}</small></div>
+                  <div><strong>{activity.actor}</strong> {activity.action} <b>{activity.target}</b><small>{formatEventDateTime(activity.at, workspace.event.timezone)}</small></div>
                 </li>
               ))}
             </ol>
@@ -214,6 +291,7 @@ export function ControlRoom() {
         </section>
       </div>
       {settingsOpen && <EventSettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {inviteOpen && <StaffInviteDialog onClose={() => setInviteOpen(false)} />}
     </>
   );
 }

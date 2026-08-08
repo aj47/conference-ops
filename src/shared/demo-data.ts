@@ -3,6 +3,13 @@ import type {
   FormDefinition,
   WorkspaceSnapshot,
 } from "./domain";
+import { defaultFormVersionSettings } from "./form-settings";
+
+export const defaultReviewRubric = [
+  { id: "relevance", label: "Audience relevance", description: "Right problem for this program", weight: 2, maxScore: 5 },
+  { id: "evidence", label: "Evidence and specificity", description: "Concrete proof, demo, or field lesson", weight: 3, maxScore: 5 },
+  { id: "delivery", label: "Likely delivery quality", description: "The proposal supports a clear attendee outcome", weight: 1, maxScore: 5 },
+];
 
 export const demoActors: Actor[] = [
   { id: "user-organizer", name: "Maya Chen", email: "maya@aiengineer.events", role: "organizer" },
@@ -32,6 +39,7 @@ export const defaultForm: FormDefinition = {
   redirectToPortal: true,
   confirmationEmailEnabled: true,
   allowMultipleDrafts: true,
+  settings: defaultFormVersionSettings,
   submissions: 84,
   updatedAt: "2026-08-08T07:30:00.000Z",
   fields: [
@@ -59,7 +67,7 @@ export function createDemoWorkspace(actorId = "user-organizer"): WorkspaceSnapsh
     jon: { id: "speaker-jon", name: "Jon Bell", email: "jon@example.com", title: "Developer Advocate", company: "Patchwork", bio: "Teaches teams how to debug and ship AI products.", city: "Seattle, WA", profileComplete: true },
   };
 
-  return {
+  const workspace: WorkspaceSnapshot = {
     demoMode: true,
     actor,
     actors: demoActors,
@@ -87,13 +95,13 @@ export function createDemoWorkspace(actorId = "user-organizer"): WorkspaceSnapsh
       { id: "proposal-5", eventId: "event-aie-2026", title: "Serving small models at the edge", summary: "Latency and cost lessons from routing compact models near users.", category: "Model infrastructure", format: "lightning", durationMinutes: 10, level: "intermediate", status: "submitted", speakers: [speakers.marco], submittedAt: "2026-08-08T04:10:00.000Z", reviewCount: 0, reviewerGroup: "Infrastructure committee", tags: ["edge", "latency"] },
     ],
     reviews: [
-      { id: "review-1", proposalId: "proposal-2", reviewerId: "user-reviewer", round: 1, status: "in_progress", score: 4.2, recommendation: "yes", notes: "Strong operational detail; ask for a clearer failure story." },
-      { id: "review-2", proposalId: "proposal-5", reviewerId: "user-reviewer", round: 1, status: "pending" },
+      { id: "review-1", proposalId: "proposal-2", reviewerId: "user-reviewer", round: 1, roundName: "Program review", status: "in_progress", rubric: defaultReviewRubric, scores: { relevance: 5, evidence: 4, delivery: 4 }, score: 4.33, recommendation: "yes", notes: "Strong operational detail; ask for a clearer failure story." },
+      { id: "review-2", proposalId: "proposal-5", reviewerId: "user-reviewer", round: 1, roundName: "Program review", status: "pending", rubric: defaultReviewRubric, scores: {} },
     ],
     tasks: [
       { id: "task-1", eventId: "event-aie-2026", speakerId: "speaker-marco", title: "Confirm speaker profile", description: "Review your title, company, bio, and public headshot.", dueAt: "2026-08-15T23:59:00.000Z", status: "complete", type: "profile" },
-      { id: "task-2", eventId: "event-aie-2026", speakerId: "speaker-marco", title: "Upload final slides", description: "PDF or PPTX, maximum 50 MB.", dueAt: "2026-08-24T23:59:00.000Z", status: "in_progress", type: "upload" },
-      { id: "task-3", eventId: "event-aie-2026", speakerId: "speaker-priya", title: "Workshop logistics", description: "Tell production what attendees need to bring and install.", dueAt: "2026-08-18T23:59:00.000Z", status: "not_started", type: "form", formId: "form-logistics" },
+      { id: "task-2", eventId: "event-aie-2026", speakerId: "speaker-marco", proposalId: "proposal-1", targetTitle: "The eval flywheel that caught our agent regressions", title: "Upload final slides", description: "PDF or PPTX, maximum 50 MB.", dueAt: "2026-08-24T23:59:00.000Z", status: "in_progress", type: "upload" },
+      { id: "task-3", eventId: "event-aie-2026", speakerId: "speaker-priya", proposalId: "proposal-3", targetTitle: "Red-team your tool-using model", title: "Workshop logistics", description: "Tell production what attendees need to bring and install.", dueAt: "2026-08-18T23:59:00.000Z", status: "not_started", type: "form", formId: "form-logistics" },
       { id: "task-4", eventId: "event-aie-2026", speakerId: "speaker-leah", title: "Complete public profile", description: "Add a bio and upload a headshot.", dueAt: "2026-08-13T23:59:00.000Z", status: "overdue", type: "profile" },
       { id: "task-5", eventId: "event-aie-2026", speakerId: "speaker-priya", title: "Accept calendar invitation", description: "Confirm the scheduled workshop time.", dueAt: "2026-08-20T23:59:00.000Z", status: "not_started", type: "calendar" },
     ],
@@ -108,9 +116,9 @@ export function createDemoWorkspace(actorId = "user-organizer"): WorkspaceSnapsh
       { id: "room-firehouse", name: "Firehouse", capacity: 90 },
     ],
     sessions: [
-      { id: "session-opening", eventId: "event-aie-2026", title: "Opening call", description: "What we are here to build together.", speakerIds: ["speaker-jon"], speakerNames: ["Jon Bell"], trackId: "track-build", roomId: "room-cowell", startsAt: "2026-08-28T16:00:00.000Z", endsAt: "2026-08-28T16:20:00.000Z", status: "published" },
-      { id: "session-evals", eventId: "event-aie-2026", proposalId: "proposal-1", title: "The eval flywheel that caught our agent regressions", description: "A production case study.", speakerIds: ["speaker-marco"], speakerNames: ["Marco Ruiz"], trackId: "track-evaluate", roomId: "room-cowell", startsAt: "2026-08-28T16:30:00.000Z", endsAt: "2026-08-28T17:00:00.000Z", status: "scheduled" },
-      { id: "session-redteam", eventId: "event-aie-2026", proposalId: "proposal-3", title: "Red-team your tool-using model", description: "Hands-on workshop.", speakerIds: ["speaker-priya"], speakerNames: ["Priya Nair"], trackId: "track-evaluate", roomId: "room-gallery", startsAt: "2026-08-28T17:10:00.000Z", endsAt: "2026-08-28T18:10:00.000Z", status: "scheduled" },
+      { id: "session-opening", eventId: "event-aie-2026", origin: "direct_program", title: "Opening call", description: "What we are here to build together.", speakerIds: ["speaker-jon"], speakerNames: ["Jon Bell"], trackId: "track-build", roomId: "room-cowell", startsAt: "2026-08-28T16:00:00.000Z", endsAt: "2026-08-28T16:20:00.000Z", status: "published" },
+      { id: "session-evals", eventId: "event-aie-2026", proposalId: "proposal-1", title: "The eval flywheel that caught our agent regressions", description: "A production case study.", speakerIds: ["speaker-marco"], speakerNames: ["Marco Ruiz"], trackId: "track-evaluate", roomId: "room-cowell", startsAt: "2026-08-28T16:30:00.000Z", endsAt: "2026-08-28T17:00:00.000Z", status: "published" },
+      { id: "session-redteam", eventId: "event-aie-2026", proposalId: "proposal-3", title: "Red-team your tool-using model", description: "Hands-on workshop.", speakerIds: ["speaker-priya"], speakerNames: ["Priya Nair"], trackId: "track-evaluate", roomId: "room-gallery", startsAt: "2026-08-28T17:10:00.000Z", endsAt: "2026-08-28T18:10:00.000Z", status: "published" },
       { id: "session-unscheduled", eventId: "event-aie-2026", proposalId: "proposal-4", title: "Designing the first ten minutes of an AI SDK", description: "Developer experience case study.", speakerIds: ["speaker-jon"], speakerNames: ["Jon Bell"], status: "unscheduled" },
     ],
     resources: [
@@ -128,4 +136,14 @@ export function createDemoWorkspace(actorId = "user-organizer"): WorkspaceSnapsh
       { id: "activity-3", actor: "Conference Ops", action: "flagged overdue task", target: "Complete public profile · Leah Okafor", at: "2026-08-08T05:00:00.000Z", tone: "warning" },
     ],
   };
+  if (actor.role === "reviewer") {
+    const reviews = workspace.reviews.filter((review) => review.reviewerId === actor.id);
+    const assignedProposalIds = new Set(reviews.map((review) => review.proposalId));
+    return {
+      ...workspace,
+      proposals: workspace.proposals.filter((proposal) => assignedProposalIds.has(proposal.id)),
+      reviews,
+    };
+  }
+  return workspace;
 }

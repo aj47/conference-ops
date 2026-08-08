@@ -9,6 +9,9 @@ interface RealtimeBindings {
 export class EventRealtime extends DurableObject {
   async fetch(request: Request) {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname.endsWith("/health")) {
+      return Response.json({ status: "ok", service: "conference-ops-realtime", durableObject: true });
+    }
     if (request.method === "POST") {
       const event = (await request.json()) as RealtimeEvent;
       for (const socket of this.ctx.getWebSockets()) {
@@ -37,7 +40,8 @@ export class EventRealtime extends DurableObject {
 export default {
   async fetch(request: Request, env: RealtimeBindings) {
     const url = new URL(request.url);
-    const eventId = url.pathname.split("/").filter(Boolean).at(-1);
+    const readiness = url.pathname === "/health";
+    const eventId = readiness ? "__readiness__" : url.pathname.split("/").filter(Boolean).at(-1);
     if (!eventId) return new Response("Missing event id", { status: 400 });
     if (request.headers.get("authorization") !== `Bearer ${env.REALTIME_TOKEN}`) return new Response("Unauthorized", { status: 401 });
     const id = env.EVENT_REALTIME.idFromName(eventId);

@@ -15,12 +15,16 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { projectConferenceExport } from "../../shared/conference-export";
+import { isAcceptedProposalStatus } from "../../shared/proposal-status";
 import type { CommunicationKind, ConferenceExportKind } from "../api";
 import { conferenceApi } from "../api";
 import { Field, InlineAlert, PageHeader, ProgressBar, SectionHeading, StatusPill } from "../components";
+import { privateEventPath } from "../private-routes";
+import { publicAgendaPath } from "../public-routes";
 import { useWorkspace } from "../workspace";
 
-type RecipientGroup = "accepted" | "incomplete" | "all";
+type MessageKind = Exclude<CommunicationKind, "calendar">;
 
 function unique(values: string[]) {
   return [...new Set(values)];
@@ -52,42 +56,53 @@ function templatePreview(kind: CommunicationKind, eventName: string) {
 }
 
 export function PublishCenter() {
-  const { workspace, builder, setNotice, publishAgenda } = useWorkspace();
-  const [agendaRevision, setAgendaRevision] = useState(2);
-  const [agendaLive, setAgendaLive] = useState(workspace.event.status === "agenda_published");
+  const { workspace, setNotice, publishAgenda, privateWorkspaceEventId } = useWorkspace();
+  const eventId = privateWorkspaceEventId ?? workspace.event.id;
   const [agendaPublishing, setAgendaPublishing] = useState(false);
-  const [kind, setKind] = useState<CommunicationKind>("acceptance");
-  const [recipients, setRecipients] = useState<RecipientGroup>("accepted");
+  const [kind, setKind] = useState<MessageKind>("acceptance");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [calendarSending, setCalendarSending] = useState(false);
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [exporting, setExporting] = useState<ConferenceExportKind | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
-  const accepted = workspace.proposals.filter((proposal) => proposal.status === "accepted");
-  const allSpeakerIds = unique(workspace.proposals.flatMap((proposal) => proposal.speakers.map((speaker) => speaker.id)));
-  const knownSpeakerIds = new Set(allSpeakerIds);
+  const accepted = workspace.proposals.filter((proposal) =>
+    proposal.eventId === workspace.event.id && isAcceptedProposalStatus(proposal.status));
+  const exportProjection = projectConferenceExport(workspace);
+  const exportedSpeakerCount = exportProjection.speakers.length;
+  const exportedSessionCount = exportProjection.sessions.length;
   const acceptedSpeakerIds = unique(accepted.flatMap((proposal) => proposal.speakers.map((speaker) => speaker.id)));
+  const acceptedSpeakerIdSet = new Set(acceptedSpeakerIds);
   const openTaskSpeakerIds = unique(
     workspace.tasks
-      .filter((task) => task.status !== "complete" && task.status !== "waived" && knownSpeakerIds.has(task.speakerId))
+      .filter((task) => task.status !== "complete" && task.status !== "waived" && acceptedSpeakerIdSet.has(task.speakerId))
       .map((task) => task.speakerId),
   );
-  const recipientIds = recipients === "accepted" ? acceptedSpeakerIds : recipients === "incomplete" ? openTaskSpeakerIds : allSpeakerIds;
+  const recipientIds = kind === "acceptance" ? acceptedSpeakerIds : openTaskSpeakerIds;
+  const recipientLabel = kind === "acceptance" ? "Accepted speakers" : "People with open tasks";
   const calendarSpeakerIds = unique(
-    workspace.sessions
-      .filter((session) => session.status === "scheduled" || session.status === "published")
-      .flatMap((session) => session.speakerIds)
-      .filter((speakerId) => knownSpeakerIds.has(speakerId)),
+    exportProjection.sessions.flatMap((session) => session.speakerIds),
   );
+  const publishedSessionCount = workspace.sessions.filter((session) => session.status === "published").length;
+  const pendingAgendaCount = workspace.sessions.filter((session) => session.status === "scheduled").length;
+  const agendaLive = workspace.event.status === "agenda_published" || publishedSessionCount > 0;
+  const hasPendingAgendaAdditions = pendingAgendaCount > 0;
   const preview = templatePreview(kind, workspace.event.name);
   const readiness = [
-    { label: "CFP confirmation email", ready: builder.confirmationEnabled, to: "/forms" },
-    { label: "Accepted speaker profiles", ready: accepted.every((proposal) => proposal.speakers.every((speaker) => speaker.profileComplete)), to: "/speaker-ops" },
-    { label: "Accepted sessions on grid", ready: accepted.every((proposal) => workspace.sessions.some((session) => session.proposalId === proposal.id && session.status !== "unscheduled")), to: "/schedule" },
-    { label: "Published speaker resources", ready: workspace.resources.some((resource) => resource.status === "published"), to: "/speaker-ops" },
+    { label: "Accepted speaker profiles", ready: accepted.every((proposal) => proposal.speakers.every((speaker) => speaker.profileComplete)), to: privateEventPath("/speaker-ops", eventId) },
+    { label: "Accepted sessions on grid", ready: accepted.every((proposal) => workspace.sessions.some((session) => session.proposalId === proposal.id && session.status !== "unscheduled")), to: privateEventPath("/schedule", eventId) },
   ];
   const readyCount = readiness.filter((item) => item.ready).length;
+  const agendaPath = publicAgendaPath(workspace.event.slug);
+
+  const copyAgendaPreview = async () => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}${agendaPath}`);
+      setNotice("Agenda preview link copied.");
+    } catch {
+      setNotice("Could not copy the agenda link. Open Public preview and copy the address from your browser.");
+    }
+  };
 
   const queueMessage = async () => {
     if (!recipientIds.length) {
@@ -174,22 +189,22 @@ export function PublishCenter() {
 
   return (
     <>
-      <PageHeader eyebrow="Publication desk · Controlled release" title="Make the public promise match operations." description="Publish immutable agenda revisions, queue transactional communication, and export the same records downstream." actions={<Link to="/agenda" className="button button--quiet"><Eye size={16} /> Public preview</Link>} />
+      <PageHeader eyebrow="Publication desk · Controlled release" title="Make the public promise match operations." description="Release scheduled additions to the public agenda, queue transactional communication, and export the same records downstream." actions={<Link to={agendaPath} className="button button--quiet"><Eye size={16} /> Public preview</Link>} />
       <div className="publish-readiness">
         <div><p className="eyebrow">Release readiness</p><strong>{readyCount}/{readiness.length}</strong><ProgressBar label="Checks passing" value={readyCount} max={readiness.length} /></div>
         <div className="readiness-checks">{readiness.map((item) => <Link key={item.label} to={item.to} className={item.ready ? "ready" : "blocked"}>{item.ready ? <Check size={15} /> : <CircleDashed size={15} />}<span>{item.label}</span><ArrowUpRight size={13} /></Link>)}</div>
       </div>
       <div className="publish-grid">
         <section className="paper-panel publish-agenda">
-          <SectionHeading title="Agenda revision" description="A release is a frozen public snapshot, not the live editor state." action={<StatusPill status={agendaLive ? "published" : "draft"} />} />
-          <div className="revision-ticket"><div><span>REVISION</span><strong>R{agendaRevision}</strong></div><div><span>SESSIONS</span><strong>{workspace.sessions.filter((session) => session.status !== "unscheduled").length}</strong></div><div><span>ROOMS</span><strong>{workspace.rooms.length}</strong></div><div><span>UPDATED</span><strong>08 AUG / 09:42</strong></div></div>
-          <InlineAlert tone={readyCount === readiness.length ? "info" : "warning"}>{readyCount === readiness.length ? "All release checks pass. This revision is safe to publish." : `${readiness.length - readyCount} release checks need attention. You may still publish a draft preview, but the public release remains guarded.`}</InlineAlert>
-          <div className="button-row"><button type="button" className="button button--quiet" onClick={() => setNotice("Private agenda preview link copied.")}><Eye size={15} /> Preview revision</button><button type="button" className="button button--primary" onClick={async () => { setAgendaPublishing(true); try { await publishAgenda(); setAgendaLive(true); setAgendaRevision((value) => value + 1); } finally { setAgendaPublishing(false); } }} disabled={readyCount !== readiness.length || agendaLive || agendaPublishing}><Radio size={15} /> {agendaPublishing ? "Publishing…" : agendaLive ? `R${agendaRevision - 1} is public` : `Publish R${agendaRevision}`}</button></div>
+          <SectionHeading title="Agenda release" description="Publishing adds scheduled sessions. Rescheduling a published session updates the live program immediately." action={<StatusPill status={agendaLive && hasPendingAgendaAdditions ? "additions pending" : agendaLive ? "published" : "draft"} />} />
+          <div className="revision-ticket"><div><span>PUBLIC</span><strong>{publishedSessionCount}</strong></div><div><span>TO PUBLISH</span><strong>{pendingAgendaCount}</strong></div><div><span>ROOMS</span><strong>{workspace.rooms.length}</strong></div><div><span>LIVE EDITS</span><strong>Immediate</strong></div></div>
+          <InlineAlert tone={readyCount === readiness.length ? "info" : "warning"}>{readyCount === readiness.length ? "All release checks pass. Scheduled additions are ready to publish." : `${readiness.length - readyCount} release checks need attention before scheduled additions can go public. Already-published session edits remain live.`}</InlineAlert>
+          <div className="button-row"><button type="button" className="button button--quiet" onClick={() => void copyAgendaPreview()}><Eye size={15} /> Copy preview link</button><button type="button" className="button button--primary" onClick={async () => { setAgendaPublishing(true); try { await publishAgenda(); } finally { setAgendaPublishing(false); } }} disabled={readyCount !== readiness.length || (agendaLive && !hasPendingAgendaAdditions) || agendaPublishing}><Radio size={15} /> {agendaPublishing ? "Publishing…" : agendaLive && !hasPendingAgendaAdditions ? "Agenda is live" : agendaLive ? `Publish ${pendingAgendaCount} ${pendingAgendaCount === 1 ? "addition" : "additions"}` : "Publish agenda"}</button></div>
         </section>
 
         <section className="paper-panel communications-composer">
           <SectionHeading title="Communications queue" description="Each send is durable, retryable, and tracked by an idempotency key." action={<MailCheck size={19} />} />
-          <div className="field-grid field-grid--2"><Field label="Message"><select value={kind} onChange={(event) => { setKind(event.target.value as CommunicationKind); setSendError(null); }}><option value="acceptance">Acceptance & next steps</option><option value="reminder">Outstanding task reminder</option><option value="calendar">Calendar update</option></select></Field><Field label="Recipients"><select value={recipients} onChange={(event) => { setRecipients(event.target.value as RecipientGroup); setSendError(null); }}><option value="accepted">Accepted speakers</option><option value="incomplete">People with open tasks</option><option value="all">All submitters</option></select></Field></div>
+          <div className="field-grid field-grid--2"><Field label="Message"><select value={kind} onChange={(event) => { setKind(event.target.value as MessageKind); setSendError(null); }}><option value="acceptance">Acceptance & next steps</option><option value="reminder">Outstanding task reminder</option></select></Field><Field label="Eligible audience" hint="Audience rules prevent accidental sends to ineligible speakers."><input value={recipientLabel} readOnly /></Field></div>
           <Field label="Template subject" hint="This is the operational template currently configured by the server."><input value={preview.subject} readOnly /></Field>
           <Field label="Template message"><textarea rows={5} value={preview.message} readOnly /></Field>
           {sendError && <InlineAlert tone="danger">{sendError}</InlineAlert>}
@@ -198,15 +213,15 @@ export function PublishCenter() {
         </section>
 
         <section className="paper-panel integration-panel">
-          <SectionHeading title="Accelevents handoff" description="API publishing is opportunistic; inspectable export is always available." action={<CloudUpload size={19} />} />
+          <SectionHeading title="Accelevents handoff" description="Exports contain accepted or directly programmed speakers and scheduled or public sessions only." action={<CloudUpload size={19} />} />
           <div className="integration-state"><span className="integration-state__mark">AE</span><div><strong>Manual action required</strong><p>Enterprise API entitlement has not been confirmed. No remote records were changed.</p></div></div>
           {exportError && <InlineAlert tone="danger">{exportError}</InlineAlert>}
-          <div className="export-list"><button type="button" disabled={exporting !== null} onClick={() => void downloadExport("speakers.csv")}><Users size={16} /><span><strong>Speakers.csv</strong><small>{allSpeakerIds.length} unique records</small></span><Download size={15} /></button><button type="button" disabled={exporting !== null} onClick={() => void downloadExport("program.json")}><FileJson size={16} /><span><strong>Program.json</strong><small>{workspace.sessions.length} sessions plus speaker and event records</small></span><Download size={15} /></button></div>
+          <div className="export-list"><button type="button" disabled={exporting !== null} onClick={() => void downloadExport("speakers.csv")}><Users size={16} /><span><strong>Speakers.csv</strong><small>{exportedSpeakerCount} approved {exportedSpeakerCount === 1 ? "speaker" : "speakers"}</small></span><Download size={15} /></button><button type="button" disabled={exporting !== null} onClick={() => void downloadExport("sessions.csv")}><CalendarCheck size={16} /><span><strong>Sessions.csv</strong><small>{exportedSessionCount} scheduled or public {exportedSessionCount === 1 ? "session" : "sessions"}</small></span><Download size={15} /></button><button type="button" disabled={exporting !== null} onClick={() => void downloadExport("program.json")}><FileJson size={16} /><span><strong>Program.json</strong><small>{exportedSessionCount} {exportedSessionCount === 1 ? "session" : "sessions"} plus {exportedSpeakerCount} approved {exportedSpeakerCount === 1 ? "speaker" : "speakers"}</small></span><Download size={15} /></button></div>
         </section>
 
         <section className="paper-panel calendar-panel">
-          <SectionHeading title="Calendar delivery" description="Create, reschedule, and cancel with one stable invitation identity." action={<CalendarCheck size={19} />} />
-          <ol className="delivery-steps"><li className="done"><Check size={14} /><span><strong>UIDs assigned</strong><small>Stable across every update</small></span></li><li className="done"><Check size={14} /><span><strong>Sequences calculated</strong><small>Revision changes increment</small></span></li><li><CircleDashed size={14} /><span><strong>{calendarSpeakerIds.length} speakers selected</strong><small>Only speakers on scheduled or published sessions</small></span></li></ol>
+          <SectionHeading title="Calendar delivery" description="Create invitations and resend schedule updates with one stable invitation identity." action={<CalendarCheck size={19} />} />
+          <ol className="delivery-steps"><li className="done"><Check size={14} /><span><strong>UIDs assigned</strong><small>Stable across every update</small></span></li><li className="done"><Check size={14} /><span><strong>Sequences calculated</strong><small>Invite-field revisions increment</small></span></li><li><CircleDashed size={14} /><span><strong>{calendarSpeakerIds.length} speakers selected</strong><small>Only speakers on scheduled or published sessions</small></span></li></ol>
           {calendarError && <InlineAlert tone="danger">{calendarError}</InlineAlert>}
           <button type="button" className="button button--quiet button--full" disabled={calendarSending || calendarSpeakerIds.length === 0} onClick={() => void queueCalendarInvitations()}><Send size={15} /> {calendarSending ? "Queuing invitations…" : `Queue calendar invitations (${calendarSpeakerIds.length})`}</button>
         </section>

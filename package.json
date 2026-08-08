@@ -15,14 +15,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "smoke:production-local": "node scripts/smoke-production-local.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:seed:local": "wrangler d1 execute DB --local --file=./seed.sql",
     "cf:types": "wrangler types",
-    "cf:dry-run": "wrangler deploy --dry-run",
-    "deploy:staging": "CLOUDFLARE_ENV=staging vite build && wrangler deploy --env staging",
-    "deploy:production": "CLOUDFLARE_ENV=production vite build && wrangler deploy --env production"
+    "cf:dry-run": "wrangler deploy --dry-run"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",

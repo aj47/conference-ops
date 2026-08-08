@@ -26,6 +26,12 @@ describe("event-scoped mutation SQL", () => {
         status TEXT NOT NULL,
         current_version INTEGER NOT NULL,
         published_version INTEGER,
+        submission_type TEXT NOT NULL,
+        collects_participants INTEGER NOT NULL,
+        max_submissions_per_user INTEGER,
+        redirect_to_portal INTEGER NOT NULL,
+        confirmation_email_enabled INTEGER NOT NULL,
+        closes_at INTEGER,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE form_versions (
@@ -51,8 +57,8 @@ describe("event-scoped mutation SQL", () => {
 
       INSERT INTO events VALUES ('event-a', 'draft', 1), ('event-b', 'draft', 1);
       INSERT INTO submission_forms VALUES
-        ('form-a', 'event-a', 'draft', 1, NULL, 1),
-        ('form-b', 'event-b', 'draft', 1, NULL, 1);
+        ('form-a', 'event-a', 'draft', 1, NULL, 'abstract', 1, 3, 1, 1, 100, 1),
+        ('form-b', 'event-b', 'draft', 1, NULL, 'abstract', 1, 3, 1, 1, 100, 1);
       INSERT INTO form_versions VALUES
         ('version-a-1', 'form-a', 1, NULL),
         ('version-b-1', 'form-b', 1, NULL);
@@ -68,7 +74,7 @@ describe("event-scoped mutation SQL", () => {
   it("does not publish another event's form or advance the caller event", () => {
     const now = 20;
     const version = db.prepare(publishFormVersionSql).run(now, "form-b", 1, "event-a", 1);
-    const form = db.prepare(publishSubmissionFormSql).run(1, 1, now, "form-b", "event-a", 1, 1);
+    const form = db.prepare(publishSubmissionFormSql).run(1, 1, "session", 0, 5, 0, 1, 200, now, "form-b", "event-a", 1, 1);
     const event = db.prepare(publishFormEventSql).run(now, "event-a", "form-b", 1, 1);
 
     expect(version.changes).toBe(0);
@@ -81,10 +87,18 @@ describe("event-scoped mutation SQL", () => {
   it("publishes only a current version belonging to the event", () => {
     const now = 20;
     expect(db.prepare(publishFormVersionSql).run(now, "form-a", 1, "event-a", 1).changes).toBe(1);
-    expect(db.prepare(publishSubmissionFormSql).run(1, 1, now, "form-a", "event-a", 1, 1).changes).toBe(1);
+    expect(db.prepare(publishSubmissionFormSql).run(1, 1, "session", 0, 5, 0, 1, 200, now, "form-a", "event-a", 1, 1).changes).toBe(1);
     expect(db.prepare(publishFormEventSql).run(now, "event-a", "form-a", 1, 1).changes).toBe(1);
 
     expect(db.prepare("SELECT status, published_version FROM submission_forms WHERE id = 'form-a'").get()).toEqual({ status: "published", published_version: 1 });
+    expect(db.prepare("SELECT submission_type, collects_participants, max_submissions_per_user, redirect_to_portal, confirmation_email_enabled, closes_at FROM submission_forms WHERE id = 'form-a'").get()).toEqual({
+      submission_type: "session",
+      collects_participants: 0,
+      max_submissions_per_user: 5,
+      redirect_to_portal: 0,
+      confirmation_email_enabled: 1,
+      closes_at: 200,
+    });
     expect(db.prepare("SELECT status FROM events WHERE id = 'event-a'").get()).toEqual({ status: "cfp_open" });
     expect(db.prepare("SELECT status FROM events WHERE id = 'event-b'").get()).toEqual({ status: "draft" });
   });

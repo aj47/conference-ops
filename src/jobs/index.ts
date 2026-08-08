@@ -8,9 +8,12 @@ import {
   OUTBOX_STALE_AFTER_MS,
   claimOutboxSql,
   isRetryableJobError,
+  markExhaustedOutboxByIdSql,
+  markExhaustedOutboxSql,
   markOutboxFailedSql,
   markOutboxSentSql,
   outboxFailureState,
+  selectDueOutboxSql,
   settleQueueFailure,
   type JobBody,
   type OutboxKind,
@@ -101,7 +104,7 @@ async function sendCommunicationEmail(env: Bindings, payload: Record<string, unk
   await env.EMAIL.send(new EmailMessage(env.MAIL_FROM, recipient, raw));
 }
 
-async function processJob(env: Bindings, job: JobBody) {
+export async function processJob(env: Bindings, job: JobBody) {
   const row = await ensureOutbox(env, job);
   if (!row || row.status === "sent") return;
   if (row.status === "dead") throw new ExhaustedOutboxError();
@@ -112,7 +115,17 @@ async function processJob(env: Bindings, job: JobBody) {
     .run();
   // A fresh processing row is already owned by another delivery. Acknowledge this
   // duplicate without performing the external side effect a second time.
-  if (!claim.meta.changes) return;
+  if (!claim.meta.changes) {
+    // Fresh processing rows belong to another consumer and duplicate queue
+    // deliveries are safe to acknowledge. A capped stale lease is different:
+    // transition it once to D1 dead state and keep retrying this Queue message
+    // so Cloudflare's configured max_retries also routes it to the DLQ.
+    const exhausted = await env.DB.prepare(markExhaustedOutboxByIdSql)
+      .bind(claimedAt, row.id, claimedAt - OUTBOX_STALE_AFTER_MS)
+      .run();
+    if (exhausted.meta.changes) throw new ExhaustedOutboxError();
+    return;
+  }
   try {
     // Once an idempotency key exists, the D1 row is canonical. Never deliver a
     // conflicting queue body's payload under an existing key.
@@ -157,10 +170,13 @@ export default {
   async scheduled(_controller: ScheduledController, env: Bindings) {
     if (!env.JOBS_QUEUE) return;
     const now = Date.now();
-    const due = await env.DB.prepare(`SELECT id, idempotency_key, kind, payload FROM outbox
-      WHERE available_at <= ?
-        AND (status IN ('queued', 'failed') OR (status = 'processing' AND updated_at <= ?))
-      ORDER BY available_at LIMIT 50`)
+    // A worker may terminate after claiming a row but before its catch block can
+    // record the final attempt. Close those stale leases before selecting due
+    // work so Cron cannot create a fresh, unbounded retry cycle.
+    await env.DB.prepare(markExhaustedOutboxSql)
+      .bind(now, now - OUTBOX_STALE_AFTER_MS)
+      .run();
+    const due = await env.DB.prepare(selectDueOutboxSql)
       .bind(now, now - OUTBOX_STALE_AFTER_MS)
       .all<{ id: string; idempotency_key: string; kind: OutboxKind; payload: string }>();
     for (const row of due.results) {

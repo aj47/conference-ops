@@ -1,5 +1,13 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { detectScheduleConflicts, intervalsOverlap, type ScheduleCandidate } from "../../src/server/schedule";
+import {
+  detectScheduleConflicts,
+  intervalsOverlap,
+  scheduleWindowError,
+  sessionPlacementUpdateBindings,
+  updateSessionPlacementSql,
+  type ScheduleCandidate,
+} from "../../src/server/schedule";
 import type { ProgramSession } from "../../src/shared/domain";
 
 const names = {
@@ -64,6 +72,79 @@ describe("intervalsOverlap", () => {
         "2026-08-28T18:00:00.000Z",
       ),
     ).toBe(false);
+  });
+});
+
+describe("scheduleWindowError", () => {
+  const eventStart = "2026-08-28T15:00:00.000Z";
+  const eventEnd = "2026-08-30T01:00:00.000Z";
+
+  it("accepts a session fully contained in the event window", () => {
+    expect(scheduleWindowError(
+      "2026-08-28T16:00:00.000Z",
+      "2026-08-28T17:00:00.000Z",
+      eventStart,
+      eventEnd,
+    )).toBeNull();
+  });
+
+  it("rejects reversed, invalid, and out-of-event intervals", () => {
+    expect(scheduleWindowError(eventStart, eventStart, eventStart, eventEnd)).toBe("INVALID_INTERVAL");
+    expect(scheduleWindowError("not-a-date", eventEnd, eventStart, eventEnd)).toBe("INVALID_INTERVAL");
+    expect(scheduleWindowError("2026-08-28T14:59:00.000Z", "2026-08-28T16:00:00.000Z", eventStart, eventEnd)).toBe("OUTSIDE_EVENT_WINDOW");
+    expect(scheduleWindowError("2026-08-29T23:00:00.000Z", "2026-08-30T01:01:00.000Z", eventStart, eventEnd)).toBe("OUTSIDE_EVENT_WINDOW");
+  });
+});
+
+describe("live agenda placement updates", () => {
+  it.each([
+    ["published", "published"],
+    ["scheduled", "scheduled"],
+    ["unscheduled", "scheduled"],
+  ] as const)("moves a %s session without taking an already-live record offline", (initialStatus, expectedStatus) => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      CREATE TABLE program_sessions (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        room_id TEXT,
+        track_id TEXT,
+        starts_at INTEGER,
+        ends_at INTEGER,
+        status TEXT NOT NULL,
+        override_reason TEXT,
+        calendar_sequence INTEGER NOT NULL,
+        version INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE session_speakers (
+        session_id TEXT NOT NULL,
+        speaker_profile_id TEXT NOT NULL
+      );
+    `);
+    db.prepare("INSERT INTO program_sessions VALUES (?, 'event-a', 'room-old', 'track-old', 100, 200, ?, NULL, 0, 1, 1)")
+      .run("session-a", initialStatus);
+
+    const result = db.prepare(updateSessionPlacementSql).run(...sessionPlacementUpdateBindings({
+      eventId: "event-a",
+      sessionId: "session-a",
+      roomId: "room-new",
+      trackId: "track-new",
+      startsAt: 300,
+      endsAt: 400,
+      now: 20,
+    }));
+
+    expect(result.changes).toBe(1);
+    expect(db.prepare("SELECT room_id, track_id, starts_at, ends_at, status, calendar_sequence, version FROM program_sessions WHERE id = 'session-a'").get()).toEqual({
+      room_id: "room-new",
+      track_id: "track-new",
+      starts_at: 300,
+      ends_at: 400,
+      status: expectedStatus,
+      calendar_sequence: 1,
+      version: 2,
+    });
   });
 });
 

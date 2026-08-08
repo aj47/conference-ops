@@ -216,15 +216,15 @@ INSERT OR REPLACE INTO review_assignments
    recommendation, notes, submitted_at, created_at, updated_at)
 VALUES
   ('review-1', 'proposal-2', 'round-1', 'user-reviewer', 'in_progress',
-   '{"relevance":5,"evidence":4,"delivery":4}', 26, 'yes',
+   '{"relevance":5,"evidence":4,"delivery":4}', 4.33, 'yes',
    'Strong operational detail; ask for a clearer failure story.', NULL, 1785585600000, 1786174200000),
   ('review-2', 'proposal-5', 'round-1', 'user-reviewer', 'pending',
    '{}', NULL, NULL, NULL, NULL, 1785585600000, 1786174200000),
   ('review-3', 'proposal-1', 'round-1', 'user-reviewer', 'submitted',
-   '{"relevance":5,"evidence":5,"delivery":4}', 29, 'strong_yes',
+   '{"relevance":5,"evidence":5,"delivery":4}', 4.83, 'strong_yes',
    'Concrete and immediately useful.', 1786174200000, 1785585600000, 1786174200000),
   ('review-4', 'proposal-6', 'round-1', 'user-reviewer', 'submitted',
-   '{"relevance":3,"evidence":3,"delivery":3}', 18, 'maybe',
+   '{"relevance":3,"evidence":3,"delivery":3}', 3.0, 'maybe',
    'Useful premise but overlaps the observability session.', 1786174200000, 1785585600000, 1786174200000);
 
 INSERT OR REPLACE INTO tracks
@@ -300,25 +300,25 @@ VALUES
    'manual', 5, NULL, NULL, 1785585600000, 1786174200000);
 
 INSERT OR REPLACE INTO speaker_tasks
-  (id, event_id, template_id, speaker_profile_id, title, description, type,
+  (id, event_id, template_id, speaker_profile_id, proposal_id, title, description, type,
    status, artifact_upload_id, due_at, completed_at, created_at, updated_at)
 VALUES
-  ('task-1', 'event-aie-2026', 'template-profile', 'speaker-marco',
+  ('task-1', 'event-aie-2026', 'template-profile', 'speaker-marco', NULL,
    'Confirm speaker profile', 'Review your title, company, bio, and public headshot.',
    'profile', 'complete', NULL, 1786838340000, 1786174200000, 1785585600000, 1786174200000),
-  ('task-2', 'event-aie-2026', 'template-slides', 'speaker-marco',
+  ('task-2', 'event-aie-2026', 'template-slides', 'speaker-marco', 'proposal-1',
    'Upload final slides', 'PDF or PPTX, maximum 50 MB.',
    'upload', 'in_progress', NULL, 1787615940000, NULL, 1785585600000, 1786174200000),
-  ('task-3', 'event-aie-2026', 'template-logistics', 'speaker-priya',
+  ('task-3', 'event-aie-2026', 'template-logistics', 'speaker-priya', 'proposal-3',
    'Workshop logistics', 'Tell production what attendees need to bring and install.',
    'form', 'not_started', NULL, 1787097540000, NULL, 1785585600000, 1786174200000),
-  ('task-4', 'event-aie-2026', 'template-profile', 'speaker-leah',
+  ('task-4', 'event-aie-2026', 'template-profile', 'speaker-leah', NULL,
    'Complete public profile', 'Add a bio and upload a headshot.',
    'profile', 'overdue', NULL, 1786597140000, NULL, 1785585600000, 1786174200000),
-  ('task-5', 'event-aie-2026', 'template-calendar', 'speaker-priya',
+  ('task-5', 'event-aie-2026', 'template-calendar', 'speaker-priya', NULL,
    'Accept calendar invitation', 'Confirm the scheduled workshop time.',
    'calendar', 'not_started', NULL, 1787270340000, NULL, 1785585600000, 1786174200000),
-  ('task-6', 'event-aie-2026', 'template-slides', 'speaker-jon',
+  ('task-6', 'event-aie-2026', 'template-slides', 'speaker-jon', 'proposal-4',
    'Upload final slides', 'This session will not use slides.',
    'upload', 'waived', NULL, 1787615940000, 1786174200000, 1785585600000, 1786174200000);
 

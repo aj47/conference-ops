@@ -30,9 +30,20 @@ export async function requestContext(c: Context<AppEnv>, next: Next) {
   c.header("x-content-type-options", "nosniff");
   c.header("referrer-policy", "strict-origin-when-cross-origin");
   c.header("permissions-policy", "camera=(), microphone=(), geolocation=()");
-  c.header("content-security-policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss:; frame-src https:; frame-ancestors 'self'");
+  c.header("strict-transport-security", "max-age=31536000");
+  c.header("content-security-policy", "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' wss:; frame-src https:; frame-ancestors 'self'; form-action 'self'; upgrade-insecure-requests");
   if (c.req.path.startsWith("/api/")) c.header("cache-control", "no-store");
   await next();
+}
+
+export function eventIdFromApiPath(pathname: string) {
+  const encoded = pathname.match(/^\/api\/v1\/events\/([^/]+)(?:\/|$)/)?.[1];
+  if (!encoded) return undefined;
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return undefined;
+  }
 }
 
 export async function requireActor(c: Context<AppEnv>, next: Next) {
@@ -50,7 +61,9 @@ export async function requireActor(c: Context<AppEnv>, next: Next) {
     return jsonError(c, 401, "AUTH_REQUIRED", "Sign in to continue.");
   }
 
-  const eventId = c.req.param("eventId");
+  // Hono wildcard middleware runs before the concrete route has populated its
+  // named params, so derive the event scope from the canonical API path.
+  const eventId = c.req.param("eventId") ?? eventIdFromApiPath(c.req.path);
   let role: AuthActor["role"] = "applicant";
   if (eventId) {
     const requestedRole = c.req.header("x-event-role");

@@ -21,7 +21,29 @@ export interface StoredOutboxRow {
 export const claimOutboxSql = `UPDATE outbox
   SET status = 'processing', attempts = attempts + 1, updated_at = ?
   WHERE id = ?
+    AND attempts < ${OUTBOX_MAX_DELIVERY_ATTEMPTS}
     AND (status IN ('queued', 'failed') OR (status = 'processing' AND updated_at <= ?))`;
+
+export const markExhaustedOutboxSql = `UPDATE outbox
+  SET status = 'dead',
+      last_error = COALESCE(last_error, 'Delivery attempts exhausted before the lease completed.'),
+      updated_at = ?
+  WHERE attempts >= ${OUTBOX_MAX_DELIVERY_ATTEMPTS}
+    AND (status IN ('queued', 'failed') OR (status = 'processing' AND updated_at <= ?))`;
+
+export const markExhaustedOutboxByIdSql = `UPDATE outbox
+  SET status = 'dead',
+      last_error = COALESCE(last_error, 'Delivery attempts exhausted before the lease completed.'),
+      updated_at = ?
+  WHERE id = ?
+    AND attempts >= ${OUTBOX_MAX_DELIVERY_ATTEMPTS}
+    AND (status IN ('queued', 'failed') OR (status = 'processing' AND updated_at <= ?))`;
+
+export const selectDueOutboxSql = `SELECT id, idempotency_key, kind, payload FROM outbox
+  WHERE available_at <= ?
+    AND attempts < ${OUTBOX_MAX_DELIVERY_ATTEMPTS}
+    AND (status IN ('queued', 'failed') OR (status = 'processing' AND updated_at <= ?))
+  ORDER BY available_at LIMIT 50`;
 
 export const markOutboxSentSql = `UPDATE outbox
   SET status = 'sent', sent_at = ?, updated_at = ?

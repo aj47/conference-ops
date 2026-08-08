@@ -22,6 +22,20 @@
       "when": 1786180900923,
       "tag": "0002_fancy_omega_red",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786192624812,
+      "tag": "0003_true_rattler",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786197313324,
+      "tag": "0004_regular_queen_noir",
+      "breakpoints": true
     }
   ]
 }

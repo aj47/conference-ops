@@ -42,6 +42,12 @@ export interface EventRecord {
   backgroundUrl?: string;
 }
 
+export type PublicEventLoadState =
+  | { status: "idle" }
+  | { status: "loading"; slug: string }
+  | { status: "ready"; slug: string; cfp: "published" | "unavailable" }
+  | { status: "error"; slug: string; message: string };
+
 export type FormFieldType =
   | "short_text"
   | "long_text"
@@ -51,6 +57,8 @@ export type FormFieldType =
   | "multi_select"
   | "checkbox"
   | "file";
+
+export type FormFieldSection = "proposal" | "participant";
 
 export interface FormCondition {
   sourceFieldId: string;
@@ -64,8 +72,21 @@ export interface FormField {
   description?: string;
   type: FormFieldType;
   required: boolean;
+  /** Optional only for backwards compatibility with form versions created before sections were persisted. */
+  section?: FormFieldSection;
   options?: string[];
   condition?: FormCondition;
+}
+
+export interface FormVersionSettings {
+  proposalSectionTitle: string;
+  proposalPageHeading: string;
+  proposalInstructions: string;
+  participantSectionTitle: string;
+  participantPageHeading: string;
+  participantInstructions: string;
+  participantMin: number;
+  combinedCharacterLimit: number;
 }
 
 export interface FormDefinition {
@@ -75,7 +96,10 @@ export interface FormDefinition {
   publicTitle?: string;
   pageHeading?: string;
   version: number;
+  publishedVersion?: number;
   status: "draft" | "published" | "closed";
+  kind?: "cfp" | "portal";
+  targetType?: "contact" | "group" | "submission";
   submissionType?: "abstract" | "session";
   collectsParticipants?: boolean;
   welcomeTitle: string;
@@ -87,6 +111,7 @@ export interface FormDefinition {
   redirectToPortal?: boolean;
   confirmationEmailEnabled?: boolean;
   allowMultipleDrafts: boolean;
+  settings?: FormVersionSettings;
   fields: FormField[];
   submissions: number;
   updatedAt: string;
@@ -108,6 +133,8 @@ export interface SpeakerProfile {
 export interface Proposal {
   id: string;
   eventId: string;
+  /** Optimistic concurrency token for applicant-owned draft updates. */
+  version?: number;
   title: string;
   summary: string;
   category: string;
@@ -119,8 +146,24 @@ export interface Proposal {
   submittedAt: string;
   score?: number;
   reviewCount: number;
-  reviewerGroup: string;
+  /** Internal routing label; omitted from applicant and speaker snapshots. */
+  reviewerGroup?: string;
   tags: string[];
+  /** Original versioned form answers, exposed only through the role-scoped workspace. */
+  responses?: Record<string, unknown>;
+  customResponses?: FormResponseItem[];
+  /** Immutable form contract used to create an applicant-owned draft. */
+  form?: FormDefinition;
+}
+
+export type FormResponseValue = string | number | boolean | Array<string | number | boolean> | null;
+
+export interface FormResponseItem {
+  fieldId: string;
+  label: string;
+  type: FormFieldType;
+  section: FormFieldSection;
+  value: FormResponseValue;
 }
 
 export interface ReviewAssignment {
@@ -128,10 +171,21 @@ export interface ReviewAssignment {
   proposalId: string;
   reviewerId: string;
   round: number;
+  roundName: string;
   status: ReviewStatus;
+  rubric: ReviewRubricCriterion[];
+  scores: Record<string, number>;
   score?: number;
   recommendation?: "strong_yes" | "yes" | "maybe" | "no";
   notes?: string;
+}
+
+export interface ReviewRubricCriterion {
+  id: string;
+  label: string;
+  weight: number;
+  maxScore: number;
+  description?: string;
 }
 
 export interface OnboardingTask {
@@ -144,9 +198,26 @@ export interface OnboardingTask {
   status: TaskStatus;
   type: "profile" | "upload" | "form" | "calendar";
   targetType?: "contact" | "group" | "submission";
+  proposalId?: string;
+  targetTitle?: string;
   completionMode?: "manual" | "form" | "file_request";
   formId?: string;
   fileRequestId?: string;
+  artifactUploadId?: string;
+  artifactFileName?: string;
+  artifactContentType?: string;
+  form?: TaskFormDefinition;
+}
+
+export interface TaskFormDefinition {
+  id: string;
+  formId: string;
+  version: number;
+  title: string;
+  description: string;
+  fields: FormField[];
+  response: Record<string, unknown>;
+  responseStatus?: "draft" | "submitted";
 }
 
 export interface EmbedDefinition {

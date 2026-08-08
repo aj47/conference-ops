@@ -10,3 +10,7 @@ export function safeReturnTo(value: string | null) {
     return "/";
   }
 }
+
+export function authPathFor(returnTo: string) {
+  return `/auth?returnTo=${encodeURIComponent(safeReturnTo(returnTo))}`;
+}

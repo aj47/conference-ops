@@ -5,22 +5,53 @@ import {
   Check,
   CheckCircle2,
   Clock3,
-  ExternalLink,
+  Cloud,
   FileCheck2,
   FileText,
   Info,
   LockKeyhole,
   Mail,
+  Plus,
   Save,
   ShieldCheck,
+  Trash2,
   UserRound,
+  Users,
+  X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import type { FormField } from "../../shared/domain";
-import { Field, InlineAlert, NoticeRegion, ProgressBar } from "../components";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router-dom";
+import type { FormField, Proposal } from "../../shared/domain";
+import { ApiClientError, conferenceApi } from "../api";
+import { authClient } from "../auth-client";
+import { Field, InlineAlert, NoticeRegion, ProgressBar, StatusPill } from "../components";
+import { useDialogA11y } from "../dialog-a11y";
+import { timeZoneAbbreviation } from "../event-time";
+import {
+  configuredCategoryOptions,
+  initialConfiguredCategory,
+  publishedSubmissionDeadline,
+} from "../public-cfp";
+import { privateEventPath } from "../private-routes";
+import { authPathFor, safeReturnTo } from "../return-to";
 import { PublicHeader } from "../Shell";
-import { type ApplicantSubmission, useWorkspace } from "../workspace";
+import { submissionAccountError, submissionAccountState } from "../submission-auth";
+import { proposalToApplicantSubmission, submissionForPersistence } from "../submission-proposal";
+import {
+  loadSubmissionBrowserDraft,
+  removeSubmissionBrowserDraft,
+  saveSubmissionBrowserDraft,
+  submissionDraftStorageKey,
+  type SubmissionDraftScope,
+} from "../submission-draft-storage";
+import {
+  blankApplicantSpeaker,
+  restoreApplicantSpeakers,
+  speakerErrorKey,
+  validateApplicantSpeakers,
+  withMinimumSpeakers,
+} from "../submission-speakers";
+import { builderConfigFromForm, type ApplicantSpeaker, type ApplicantSubmission, type BuilderConfig, useWorkspace } from "../workspace";
 
 const wizardSteps = [
   { id: "welcome", label: "Welcome", icon: BookOpen },
@@ -30,17 +61,19 @@ const wizardSteps = [
   { id: "review", label: "Review", icon: FileCheck2 },
 ] as const;
 
-const blankSubmission: ApplicantSubmission = {
-  title: "",
-  summary: "",
-  category: "Agents in production",
-  format: "talk",
-  level: "intermediate",
-  repoUrl: "",
-  workshopNeeds: "",
-  responses: {},
-  speaker: { firstName: "", lastName: "", email: "", title: "", company: "", bio: "" },
-};
+function blankSubmission(fields: FormField[], minimumSpeakers = 1): ApplicantSubmission {
+  return {
+    title: "",
+    summary: "",
+    category: initialConfiguredCategory(fields),
+    format: "talk",
+    level: "intermediate",
+    repoUrl: "",
+    workshopNeeds: "",
+    responses: {},
+    speakers: withMinimumSpeakers([], minimumSpeakers),
+  };
+}
 
 function formatDeadline(value: string, timezone: string) {
   return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: timezone, timeZoneName: "short" }).format(new Date(value));
@@ -120,12 +153,13 @@ function answerForField(field: FormField, section: FormSection, submission: Appl
     if (field.id === "field-repo" || ["project or repository", "relevant project or repository", "project url", "repository url"].includes(label)) return submission.repoUrl;
     return submission.workshopNeeds;
   }
-  if (field.id === "speaker-first" || label === "first name") return submission.speaker.firstName;
-  if (field.id === "speaker-last" || label === "last name") return submission.speaker.lastName;
-  if (field.id === "speaker-email" || ["email", "email address", "contact email", "speaker email"].includes(label)) return submission.speaker.email;
-  if (field.id === "speaker-bio" || ["biography", "bio", "speaker bio"].includes(label)) return submission.speaker.bio;
-  if (["company", "company / affiliation", "affiliation", "organization"].includes(label)) return submission.speaker.company;
-  return submission.speaker.title;
+  const primarySpeaker = submission.speakers[0] ?? blankApplicantSpeaker();
+  if (field.id === "speaker-first" || label === "first name") return primarySpeaker.firstName;
+  if (field.id === "speaker-last" || label === "last name") return primarySpeaker.lastName;
+  if (field.id === "speaker-email" || ["email", "email address", "contact email", "speaker email"].includes(label)) return primarySpeaker.email;
+  if (field.id === "speaker-bio" || ["biography", "bio", "speaker bio"].includes(label)) return primarySpeaker.bio;
+  if (["company", "company / affiliation", "affiliation", "organization"].includes(label)) return primarySpeaker.company;
+  return primarySpeaker.title;
 }
 
 function formResponses(proposalFields: FormField[], participantFields: FormField[], submission: ApplicantSubmission) {
@@ -210,37 +244,150 @@ function CustomField({ field, value, error, onChange }: { field: FormField; valu
   return <Field label={label} hint={hint} error={error}><input type={field.type === "email" ? "email" : field.type === "url" ? "url" : "text"} value={typeof value === "string" ? value : ""} onChange={(event) => onChange(event.target.value)} /></Field>;
 }
 
+function applicantMayWithdraw(status: Proposal["status"]) {
+  return ["submitted", "under_review", "accept_queue", "decline_queue", "waitlisted"].includes(status);
+}
+
+function proposalDate(value: string) {
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(new Date(value));
+}
+
+function WithdrawProposalDialog({
+  proposal,
+  busy,
+  error,
+  onClose,
+  onConfirm,
+  returnFocusRef,
+}: {
+  proposal: Proposal;
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: () => void;
+  returnFocusRef: RefObject<HTMLElement | null>;
+}) {
+  const dialogRef = useDialogA11y<HTMLDivElement>(onClose, true, returnFocusRef);
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={busy ? undefined : onClose}>
+      <div ref={dialogRef} className="withdraw-dialog" role="dialog" aria-modal="true" aria-labelledby="withdraw-title" aria-describedby="withdraw-detail" tabIndex={-1} onMouseDown={(event) => event.stopPropagation()}>
+        <button type="button" className="icon-button withdraw-dialog__close" aria-label="Close withdrawal confirmation" disabled={busy} onClick={onClose}><X size={18} /></button>
+        <p className="eyebrow">Final applicant action</p>
+        <h2 id="withdraw-title">Withdraw this proposal?</h2>
+        <p id="withdraw-detail"><strong>{proposal.title}</strong> will leave the review queue. The record stays in your account, but reviewers will stop working on it.</p>
+        {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+        <div className="withdraw-dialog__actions">
+          <button type="button" className="button button--quiet" data-dialog-initial-focus disabled={busy} onClick={onClose}>Keep proposal</button>
+          <button type="button" className="button button--danger" disabled={busy} onClick={onConfirm}>{busy ? "Withdrawing…" : "Yes, withdraw"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PublicCfpState({ kind, message }: { kind: "loading" | "unavailable" | "error"; message?: string }) {
+  if (kind === "loading") return <div className="route-loader" role="status">Opening the call for speakers…</div>;
+  return (
+    <div className="public-page">
+      <main className="public-unavailable" role={kind === "error" ? "alert" : undefined}>
+        <p className="eyebrow">Call for speakers · {kind === "error" ? "Load error" : "Not published"}</p>
+        <h1>{kind === "error" ? "We couldn’t open this call for speakers." : "Submissions aren’t open yet."}</h1>
+        <p>{message ?? "The organizer has not published a submission form for this event. Check back after the call for speakers opens."}</p>
+        {kind === "error" && <button type="button" className="button button--primary" onClick={() => window.location.reload()}>Try again</button>}
+      </main>
+    </div>
+  );
+}
+
 export function PublicSubmissionWizard() {
-  const { workspace, builder: draftBuilder, publicBuilder, submitProposal } = useWorkspace();
+  const { workspace, builder: draftBuilder, publicBuilder, publicEventState, privateWorkspaceEventId, loading, authRequired, noEvent } = useWorkspace();
   const [searchParams] = useSearchParams();
-  const previewingDraft = searchParams.get("preview") === "draft";
-  const builder = previewingDraft ? draftBuilder : publicBuilder;
+  const location = useLocation();
+  const { slug = "" } = useParams<{ slug: string }>();
+  const requestedDraftPreview = searchParams.get("preview") === "draft";
+  const requestedDraftEventId = searchParams.get("eventId");
+  const previewingDraft = requestedDraftPreview
+    && privateWorkspaceEventId === workspace.event.id
+    && workspace.event.slug === slug;
+
+  if (requestedDraftPreview && requestedDraftEventId) {
+    if (loading) return <PublicCfpState kind="loading" />;
+    if (authRequired) {
+      const returnTo = safeReturnTo(`${location.pathname}${location.search}${location.hash}`);
+      return <Navigate to={authPathFor(returnTo)} replace />;
+    }
+    if (noEvent || privateWorkspaceEventId !== requestedDraftEventId || workspace.event.slug !== slug) {
+      return <PublicCfpState kind="error" message="This private draft preview is unavailable for your account." />;
+    }
+  }
+  if (previewingDraft) {
+    return <PublicSubmissionExperience key={`draft:${draftBuilder.formId}:${draftBuilder.version}`} builder={draftBuilder} previewingDraft />;
+  }
+  if (publicEventState.status === "idle" || publicEventState.status === "loading" || publicEventState.slug !== slug) return <PublicCfpState kind="loading" />;
+  if (publicEventState.status === "error") return <PublicCfpState kind="error" message={publicEventState.message} />;
+  if (publicEventState.cfp === "unavailable" || !publicBuilder) return <PublicCfpState kind="unavailable" />;
+  return <PublicSubmissionExperience key={`public:${publicBuilder.formId}:${publicBuilder.version}`} builder={publicBuilder} previewingDraft={false} />;
+}
+
+function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft }: { builder: BuilderConfig; previewingDraft: boolean }) {
+  const { workspace, publicBuilder, source, saveProposalDraft, submitProposal, withdrawProposal } = useWorkspace();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const session = authClient.useSession();
+  const sessionUser = session.data?.user;
+  const verifiedDraftEmail = sessionUser?.emailVerified ? sessionUser.email : undefined;
+  const [accountProposals, setAccountProposals] = useState<Proposal[]>([]);
+  const [accountProposalsLoading, setAccountProposalsLoading] = useState(false);
+  const [accountProposalsError, setAccountProposalsError] = useState("");
+  const requestedEditId = searchParams.get("edit");
+  const editingProposal = requestedEditId
+    ? accountProposals.find((proposal) => proposal.id === requestedEditId)
+    : undefined;
+  const builder = useMemo(() => {
+    const pinnedForm = editingProposal?.status === "draft" && editingProposal.form?.eventId === workspace.event.id
+      ? editingProposal.form
+      : undefined;
+    return pinnedForm ? builderConfigFromForm(pinnedForm, workspace.event) : publishedBuilder;
+  }, [editingProposal, publishedBuilder, workspace.event]);
+  const draftScope = useMemo<SubmissionDraftScope>(() => ({
+    eventSlug: workspace.event.slug,
+    formId: builder.formId,
+    formVersion: builder.version,
+    ...(verifiedDraftEmail ? { accountEmail: verifiedDraftEmail } : {}),
+  }), [builder.formId, builder.version, verifiedDraftEmail, workspace.event.slug]);
+  const draftKey = submissionDraftStorageKey(draftScope);
   const [step, setStep] = useState(0);
   const [accountReady, setAccountReady] = useState(false);
-  const [submission, setSubmission] = useState<ApplicantSubmission>(() => {
-    try {
-      const stored = window.localStorage.getItem("conference-ops-cfp-draft");
-      if (stored) {
-        const parsed = JSON.parse(stored) as Partial<ApplicantSubmission>;
-        return {
-          ...blankSubmission,
-          ...parsed,
-          responses: parsed.responses ?? {},
-          speaker: { ...blankSubmission.speaker, ...parsed.speaker },
-        };
-      }
-      return { ...blankSubmission, responses: {}, speaker: { ...blankSubmission.speaker, firstName: workspace.actor.role === "applicant" ? "Leah" : "", lastName: workspace.actor.role === "applicant" ? "Okafor" : "", email: workspace.actor.role === "applicant" ? workspace.actor.email : "" } };
-    } catch { return blankSubmission; }
-  });
+  const [submission, setSubmission] = useState<ApplicantSubmission>(() => blankSubmission(builder.proposalFields, builder.participantMin));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [submittedId, setSubmittedId] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(10);
-  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [permissionConfirmed, setPermissionConfirmed] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const visibleSteps = builder.collectParticipants ? wizardSteps : wizardSteps.filter((item) => item.id !== "participant");
+  const [savingAccountDraft, setSavingAccountDraft] = useState(false);
+  const [draftSyncMessage, setDraftSyncMessage] = useState("");
+  const [withdrawTarget, setWithdrawTarget] = useState<Proposal | null>(null);
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawError, setWithdrawError] = useState("");
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const stepperRef = useRef<HTMLElement>(null);
+  const previousStep = useRef(step);
+  const hydratedProposalRef = useRef("");
+  const hydratedBrowserDraftRef = useRef("");
+  const withdrawReturnFocusRef = useRef<HTMLElement | null>(null);
+  const configuredSteps = wizardSteps.map((item) => ({
+    ...item,
+    label: item.id === "submission"
+      ? builder.proposalPageHeading
+      : item.id === "participant"
+        ? builder.participantPageHeading
+        : item.label,
+  }));
+  const visibleSteps = builder.collectParticipants ? configuredSteps : configuredSteps.filter((item) => item.id !== "participant");
   const currentStep = visibleSteps[step];
+  const primarySpeaker = submission.speakers[0] ?? blankApplicantSpeaker();
   const participantFields = builder.collectParticipants ? builder.participantFields : [];
   const responses = formResponses(builder.proposalFields, participantFields, submission);
   const proposalCustomFields = builder.proposalFields.filter((field) => !isCanonicalField(field, "proposal"));
@@ -253,7 +400,10 @@ export function PublicSubmissionWizard() {
       const value = responses[field.id];
       return total + (typeof value === "string" ? value.length : 0);
     }, 0);
-  const combinedCharacters = submission.summary.length + submission.workshopNeeds.length + submission.speaker.bio.length + customLongTextCharacters;
+  const combinedCharacters = submission.summary.length
+    + submission.workshopNeeds.length
+    + submission.speakers.reduce((total, speaker) => total + speaker.bio.length, 0)
+    + customLongTextCharacters;
   const customReviewFields = [
     ...proposalCustomFields.map((field) => ({ field, section: "proposal" as const })),
     ...participantCustomFields.map((field) => ({ field, section: "participant" as const })),
@@ -261,12 +411,14 @@ export function PublicSubmissionWizard() {
     && isFieldVisible(field, responses)
     && hasAnswer(responses[field.id])
     && fields.findIndex((candidate) => candidate.field.id === field.id) === index);
-  const categoryField = builder.proposalFields.find((field) => /category|program lane/i.test(field.label));
-  const categoryOptions = [...new Set([
-    submission.category,
-    ...(categoryField?.options ?? []),
-    ...workspace.proposals.map((proposal) => proposal.category),
-  ])].filter(Boolean);
+  const categoryOptions = configuredCategoryOptions(builder.proposalFields);
+  const accountState = submissionAccountState(source, session.isPending, sessionUser, primarySpeaker.email);
+  const returnTo = safeReturnTo(`${location.pathname}${location.search}${location.hash}`);
+  const authPath = authPathFor(returnTo);
+  const portalPath = privateEventPath("/portal/home", workspace.event.id, "applicant");
+  const formContract = editingProposal?.form ?? workspace.forms.find((form) => form.id === builder.formId);
+  const cfpDeadline = publishedSubmissionDeadline(formContract ?? {}, workspace.event);
+  const cfpClosed = Date.now() > new Date(cfpDeadline).getTime();
 
   useEffect(() => {
     if (!submittedId || !builder.autoRedirect) return;
@@ -275,32 +427,250 @@ export function PublicSubmissionWizard() {
   }, [builder.autoRedirect, submittedId]);
 
   useEffect(() => {
-    if (countdown <= 0 && submittedId) window.location.assign("/portal/home");
-  }, [countdown, submittedId]);
+    if (countdown <= 0 && submittedId) window.location.assign(portalPath);
+  }, [countdown, portalPath, submittedId]);
+
+  useEffect(() => {
+    if (previousStep.current === step) return;
+    previousStep.current = step;
+    stepHeadingRef.current?.focus();
+  }, [step]);
+
+  useEffect(() => {
+    const stepper = stepperRef.current;
+    const activeStep = stepper?.querySelector<HTMLButtonElement>('button[aria-current="step"]');
+    if (!stepper || !activeStep || stepper.scrollWidth <= stepper.clientWidth) return;
+
+    const visibleLeft = stepper.scrollLeft;
+    const visibleRight = visibleLeft + stepper.clientWidth;
+    const stepperRect = stepper.getBoundingClientRect();
+    const activeStepRect = activeStep.getBoundingClientRect();
+    const stepLeft = activeStepRect.left - stepperRect.left - stepper.clientLeft + visibleLeft;
+    const stepRight = stepLeft + activeStepRect.width;
+    if (stepLeft >= visibleLeft && stepRight <= visibleRight) return;
+
+    const nextLeft = stepLeft < visibleLeft ? stepLeft : stepRight - stepper.clientWidth;
+    stepper.scrollTo({ left: Math.max(0, Math.min(nextLeft, stepper.scrollWidth - stepper.clientWidth)) });
+  }, [step, visibleSteps.length]);
+
+  useEffect(() => {
+    if (submittedId) stepHeadingRef.current?.focus();
+  }, [submittedId]);
+
+  useEffect(() => {
+    if (hydratedBrowserDraftRef.current === draftKey) return;
+    hydratedBrowserDraftRef.current = draftKey;
+    const empty = blankSubmission(builder.proposalFields, builder.participantMin);
+    try {
+      const stored = loadSubmissionBrowserDraft(window.localStorage, draftScope) as (ApplicantSubmission & { speaker?: ApplicantSpeaker }) | null;
+      if (stored) {
+        const availableCategories = configuredCategoryOptions(builder.proposalFields);
+        setSubmission({
+          ...empty,
+          ...stored,
+          category: availableCategories.includes(stored.category) ? stored.category : initialConfiguredCategory(builder.proposalFields),
+          responses: stored.responses ?? {},
+          speakers: restoreApplicantSpeakers(stored.speakers, stored.speaker, builder.participantMin),
+        });
+        return;
+      }
+    } catch {
+      // A malformed or unavailable browser store must not block a fresh form.
+    }
+
+    const speakers = [...empty.speakers];
+    speakers[0] = {
+      ...speakers[0],
+      firstName: source === "demo" && workspace.actor.role === "applicant" ? "Leah" : "",
+      lastName: source === "demo" && workspace.actor.role === "applicant" ? "Okafor" : "",
+      email: verifiedDraftEmail ?? (source === "demo" && workspace.actor.role === "applicant" ? workspace.actor.email : ""),
+    };
+    setSubmission({ ...empty, speakers });
+  }, [builder.participantMin, builder.proposalFields, draftKey, draftScope, source, verifiedDraftEmail, workspace.actor.email, workspace.actor.role]);
+
+  useEffect(() => {
+    if (source !== "api" || accountState.kind !== "verified") return;
+    let active = true;
+    setAccountProposalsLoading(true);
+    setAccountProposalsError("");
+    conferenceApi.bootstrap("", workspace.event.id, "applicant")
+      .then((snapshot) => {
+        if (!active) return;
+        setAccountProposals(snapshot.event.id === workspace.event.id ? snapshot.proposals : []);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        if (error instanceof ApiClientError && error.code === "NO_EVENT") {
+          setAccountProposals([]);
+          return;
+        }
+        setAccountProposalsError(error instanceof Error ? error.message : "Your saved proposals could not be loaded.");
+      })
+      .finally(() => active && setAccountProposalsLoading(false));
+    return () => { active = false; };
+  }, [accountState.kind, source, workspace.event.id]);
+
+  useEffect(() => {
+    if (accountState.kind !== "mismatch" || accountState.draftEmail || primarySpeaker.email.trim()) return;
+    setSubmission((current) => ({
+      ...current,
+      speakers: current.speakers.map((speaker, index) => index === 0 ? { ...speaker, email: accountState.email } : speaker),
+    }));
+  }, [accountState, primarySpeaker.email]);
+
+  useEffect(() => {
+    if (!editingProposal || editingProposal.status !== "draft") return;
+    const hydrationKey = `${editingProposal.id}:${editingProposal.version ?? 1}`;
+    if (hydratedProposalRef.current === hydrationKey) return;
+    hydratedProposalRef.current = hydrationKey;
+    setSubmission(proposalToApplicantSubmission(editingProposal, builder));
+    setPermissionConfirmed(false);
+    setSubmitError("");
+    setErrors({});
+    setDraftSyncMessage(`Account draft restored · version ${editingProposal.version ?? 1}`);
+    setStep(Math.max(0, visibleSteps.findIndex((item) => item.id === "submission")));
+  }, [builder, editingProposal, visibleSteps]);
 
   const saveDraft = () => {
-    window.localStorage.setItem("conference-ops-cfp-draft", JSON.stringify(submission));
-    setSavedAt(new Date());
+    try {
+      saveSubmissionBrowserDraft(window.localStorage, draftScope, submission);
+      setSavedAt(new Date());
+      return true;
+    } catch {
+      setSubmitError("This browser could not save the draft. Keep this page open and copy your answers before leaving.");
+      return false;
+    }
+  };
+
+  const mergeAccountProposal = (proposal: Proposal) => {
+    setAccountProposals((current) => [proposal, ...current.filter((item) => item.id !== proposal.id)]);
+  };
+
+  const saveDraftToAccount = async () => {
+    saveDraft();
+    setSubmitError("");
+    setDraftSyncMessage("");
+    if (source !== "api" || accountState.kind !== "verified") {
+      setSubmitError("Sign in with a verified account to sync this browser draft across devices.");
+      return;
+    }
+    if (requestedEditId && !editingProposal) {
+      setSubmitError("This account draft is unavailable. Return to Your conference account and choose a saved draft before syncing.");
+      return;
+    }
+    if (cfpClosed && !editingProposal) {
+      setSubmitError("The call for speakers is closed, so a new account draft can no longer be created. Your browser copy remains available on this device.");
+      return;
+    }
+    if (editingProposal && editingProposal.status !== "draft") {
+      setSubmitError("This proposal is already in review and can no longer be edited.");
+      return;
+    }
+
+    const draftErrors: Record<string, string> = {};
+    if (submission.title.trim().length < 3) draftErrors.title = "Add a working title with at least 3 characters before syncing.";
+    if (submission.summary.trim().length < 20) draftErrors.summary = "Add at least 20 characters of an abstract before syncing.";
+    if (builder.collectParticipants) {
+      Object.assign(draftErrors, validateApplicantSpeakers(submission.speakers, builder.participantMin, builder.participantMax));
+    }
+    if (Object.keys(draftErrors).length) {
+      setErrors(draftErrors);
+      setSubmitError("Your browser copy is safe. Complete the highlighted title, abstract, and speaker identity fields before syncing it to your account.");
+      const hasProposalError = Boolean(draftErrors.title || draftErrors.summary);
+      setStep(hasProposalError ? Math.max(0, visibleSteps.findIndex((item) => item.id === "submission")) : stepIndex("participant"));
+      return;
+    }
+
+    setSavingAccountDraft(true);
+    try {
+      const persistenceSubmission = submissionForPersistence(
+        submission,
+        builder.collectParticipants,
+        verifiedDraftEmail ? { name: sessionUser?.name, email: verifiedDraftEmail } : undefined,
+      );
+      const saved = await saveProposalDraft(persistenceSubmission, builder, editingProposal);
+      mergeAccountProposal(saved);
+      const nextSearch = new URLSearchParams(searchParams);
+      nextSearch.set("edit", saved.id);
+      setSearchParams(nextSearch, { replace: true });
+      hydratedProposalRef.current = `${saved.id}:${saved.version ?? 1}`;
+      try { removeSubmissionBrowserDraft(window.localStorage, draftScope); } catch { /* The account copy is authoritative. */ }
+      const savedTime = new Date();
+      setSavedAt(savedTime);
+      setDraftSyncMessage(`Saved to your account at ${savedTime.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.status === 401) {
+        if (saveDraft()) window.location.assign(authPath);
+        return;
+      }
+      setSubmitError(error instanceof Error ? error.message : "The draft could not be synced. Your browser copy is still available.");
+    } finally {
+      setSavingAccountDraft(false);
+    }
+  };
+
+  const startNewProposal = () => {
+    const empty = blankSubmission(builder.proposalFields, builder.participantMin);
+    const verifiedEmail = accountState.kind === "verified" ? accountState.email : "";
+    setSubmission({
+      ...empty,
+      speakers: empty.speakers.map((speaker, index) => index === 0 ? { ...speaker, email: verifiedEmail } : speaker),
+    });
+    setStep(0);
+    setErrors({});
+    setSubmitError("");
+    setDraftSyncMessage("");
+    setPermissionConfirmed(false);
+    hydratedProposalRef.current = "";
+    const nextSearch = new URLSearchParams(searchParams);
+    nextSearch.delete("edit");
+    setSearchParams(nextSearch, { replace: true });
+    try { removeSubmissionBrowserDraft(window.localStorage, draftScope); } catch { /* A new in-memory draft can still be started. */ }
+  };
+
+  const confirmWithdrawal = async () => {
+    if (!withdrawTarget) return;
+    setWithdrawing(true);
+    setWithdrawError("");
+    try {
+      await withdrawProposal(withdrawTarget.id);
+      setAccountProposals((current) => current.map((proposal) => proposal.id === withdrawTarget.id
+        ? { ...proposal, status: "withdrawn", version: (proposal.version ?? 0) + 1 }
+        : proposal));
+      if (requestedEditId === withdrawTarget.id) startNewProposal();
+      setWithdrawTarget(null);
+    } catch (error) {
+      setWithdrawError(error instanceof Error ? error.message : "The proposal could not be withdrawn.");
+    } finally {
+      setWithdrawing(false);
+    }
   };
 
   const validateCurrent = () => {
     const next: Record<string, string> = {};
     if (currentStep.id === "account") {
-      if (!submission.speaker.email.includes("@")) next.email = "Enter an email address we can use for your confirmation.";
-      if (!accountReady) next.account = "Confirm that you can access this email address.";
+      if (source === "demo") {
+        if (!primarySpeaker.email.includes("@")) next.email = "Enter an email address we can use for your confirmation.";
+        if (!accountReady) next.account = "Confirm that you can access this email address.";
+      } else {
+        const accountError = submissionAccountError(accountState);
+        if (accountError) next.account = accountError;
+      }
     }
     if (currentStep.id === "submission") {
       if (submission.title.trim().length < 8) next.title = "Use at least 8 characters so the title is identifiable.";
       if (submission.summary.trim().length < 80) next.summary = "Give reviewers at least 80 characters of concrete context.";
+      if (!submission.category || !categoryOptions.includes(submission.category)) next.category = "Choose one of the published program categories.";
       if (submission.format === "workshop" && submission.workshopNeeds.trim().length < 20) next.workshopNeeds = "Tell us what attendees need to bring or install.";
       if (combinedCharacters > builder.combinedCharacterLimit) next.summary = "The combined long-text limit has been exceeded.";
       Object.assign(next, validateCustomFields(proposalCustomFields, responses));
     }
     if (currentStep.id === "participant") {
-      if (!submission.speaker.firstName.trim()) next.firstName = "First name is required.";
-      if (!submission.speaker.lastName.trim()) next.lastName = "Last name is required.";
-      if (!submission.speaker.title.trim()) next.speakerTitle = "Add a role or title for reviewer context.";
-      if (!submission.speaker.company.trim()) next.company = "Add an organization or write Independent.";
+      Object.assign(next, validateApplicantSpeakers(
+        submission.speakers,
+        builder.participantMin,
+        builder.participantMax,
+      ));
       Object.assign(next, validateCustomFields(participantCustomFields, responses));
     }
     setErrors(next);
@@ -308,13 +678,56 @@ export function PublicSubmissionWizard() {
   };
 
   const goNext = () => {
-    if (!validateCurrent()) return;
+    if (!validateCurrent()) {
+      if (currentStep.id === "account" && source === "api") saveDraft();
+      return;
+    }
     saveDraft();
     setStep((value) => Math.min(value + 1, visibleSteps.length - 1));
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const updateSpeaker = (patch: Partial<ApplicantSubmission["speaker"]>) => setSubmission((current) => ({ ...current, speaker: { ...current.speaker, ...patch } }));
+  const updateSpeaker = (index: number, patch: Partial<ApplicantSpeaker>) => {
+    setSubmission((current) => ({
+      ...current,
+      speakers: current.speakers.map((speaker, speakerIndex) => speakerIndex === index ? { ...speaker, ...patch } : speaker),
+    }));
+    setErrors((current) => {
+      const fields = Object.keys(patch);
+      if (fields.length === 0 && !current.participantCount) return current;
+      const next = { ...current };
+      delete next.participantCount;
+      for (const field of fields) delete next[speakerErrorKey(index, field as keyof ApplicantSpeaker)];
+      if (patch.email !== undefined) {
+        for (const key of Object.keys(next)) {
+          if (/^speakers\.\d+\.email$/.test(key)) delete next[key];
+        }
+        if (index === 0) {
+          delete next.email;
+          delete next.account;
+        }
+      }
+      return next;
+    });
+  };
+  const addSpeaker = () => {
+    if (submission.speakers.length >= builder.participantMax) return;
+    setSubmission((current) => ({ ...current, speakers: [...current.speakers, blankApplicantSpeaker()] }));
+    setErrors((current) => {
+      if (!current.participantCount) return current;
+      const next = { ...current };
+      delete next.participantCount;
+      return next;
+    });
+  };
+  const removeSpeaker = (index: number) => {
+    if (index === 0 || submission.speakers.length <= builder.participantMin) return;
+    setSubmission((current) => ({
+      ...current,
+      speakers: current.speakers.filter((_, speakerIndex) => speakerIndex !== index),
+    }));
+    setErrors({});
+  };
   const updateResponse = (fieldId: string, value: unknown) => {
     setSubmission((current) => ({ ...current, responses: { ...current.responses, [fieldId]: value } }));
     setErrors((current) => {
@@ -326,6 +739,71 @@ export function PublicSubmissionWizard() {
   };
   const stepIndex = (id: "submission" | "participant") => Math.max(0, visibleSteps.findIndex((item) => item.id === id));
 
+  const submitCurrentProposal = async () => {
+    if (requestedEditId && (!editingProposal || editingProposal.status !== "draft")) {
+      setSubmitError("This saved proposal is no longer editable. Start a new proposal or return to your account list.");
+      return;
+    }
+    if (cfpClosed) {
+      setSubmitError("The call for speakers has closed. Your account draft remains saved, but it can no longer enter review.");
+      return;
+    }
+    if (!permissionConfirmed) {
+      setSubmitError("Confirm that you have permission to submit all included material.");
+      return;
+    }
+    if (source === "api") {
+      const accountError = submissionAccountError(accountState);
+      if (accountError) {
+        saveDraft();
+        setErrors((current) => ({ ...current, account: accountError }));
+        setSubmitError("");
+        setStep(Math.max(0, visibleSteps.findIndex((item) => item.id === "account")));
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+    }
+    if (builder.collectParticipants) {
+      const participantErrors = validateApplicantSpeakers(
+        submission.speakers,
+        builder.participantMin,
+        builder.participantMax,
+      );
+      if (Object.keys(participantErrors).length > 0) {
+        setErrors(participantErrors);
+        setSubmitError("");
+        setStep(stepIndex("participant"));
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    try {
+      const persistenceSubmission = submissionForPersistence(
+        submission,
+        builder.collectParticipants,
+        verifiedDraftEmail ? { name: sessionUser?.name, email: verifiedDraftEmail } : undefined,
+      );
+      const proposal = await submitProposal(
+        persistenceSubmission,
+        builder,
+        editingProposal?.status === "draft" ? editingProposal : undefined,
+      );
+      mergeAccountProposal(proposal);
+      try { removeSubmissionBrowserDraft(window.localStorage, draftScope); } catch { /* The submitted server copy is authoritative. */ }
+      setSubmittedId(proposal.id);
+    } catch (error) {
+      if (source === "api" && error instanceof ApiClientError && error.status === 401) {
+        if (saveDraft()) window.location.assign(authPath);
+        return;
+      }
+      setSubmitError(error instanceof Error ? error.message : "The proposal could not be submitted.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   if (submittedId) {
     return (
       <div className="public-page">
@@ -333,10 +811,10 @@ export function PublicSubmissionWizard() {
         <main className="success-page">
           <span className="success-page__mark"><Check size={38} /></span>
           <p className="eyebrow">Submission {submittedId.slice(-8).toUpperCase()} received</p>
-          <h1>You’re in the review queue.</h1>
+          <h1 ref={stepHeadingRef} tabIndex={-1}>You’re in the review queue.</h1>
           <p>{builder.successMessage}</p>
-          <div className="success-receipt"><span><Mail size={18} /><span><strong>Confirmation queued</strong><small>{submission.speaker.email}</small></span></span><span><ShieldCheck size={18} /><span><strong>Draft locked to V{builder.version}</strong><small>Your answers remain editable until the deadline.</small></span></span></div>
-          <div className="success-actions"><button type="button" className="button button--primary button--large" onClick={() => window.location.assign("/portal/home")}>Continue to speaker portal <ArrowRight size={16} /></button><button type="button" className="button button--quiet" onClick={() => { setSubmittedId(null); setStep(0); setSubmission({ ...blankSubmission, speaker: { ...submission.speaker } }); }}>Submit another session</button></div>
+          <div className="success-receipt"><span><Mail size={18} /><span><strong>Confirmation queued</strong><small>{primarySpeaker.email}</small></span></span><span><ShieldCheck size={18} /><span><strong>Submission locked to V{builder.version}</strong><small>Your speaker profile stays editable. Contact the organizer to revise proposal answers.</small></span></span></div>
+          <div className="success-actions"><a className="button button--primary button--large" href={portalPath}>Continue to speaker portal <ArrowRight size={16} /></a><button type="button" className="button button--quiet" onClick={() => { const empty = blankSubmission(builder.proposalFields, builder.participantMin); setSubmittedId(null); setStep(0); setPermissionConfirmed(false); setSubmission({ ...empty, speakers: withMinimumSpeakers([{ ...primarySpeaker }], builder.participantMin) }); }}>Submit another session</button></div>
           {builder.autoRedirect && <p className="countdown">Continuing automatically in <strong>{Math.max(0, countdown)}</strong> seconds.</p>}
         </main>
         <NoticeRegion />
@@ -348,35 +826,103 @@ export function PublicSubmissionWizard() {
     <div className="public-page">
       <PublicHeader active="cfp" />
       <main className="submission-shell">
-        {previewingDraft && <InlineAlert tone="warning"><strong>Private draft preview.</strong> Applicants on the public link still see published version {publicBuilder.publishedVersion}.</InlineAlert>}
+        {previewingDraft && <InlineAlert tone="warning"><strong>Private draft preview.</strong> {publicBuilder ? `Applicants on the public link still see published version ${publicBuilder.publishedVersion}.` : "No public form is published yet."}</InlineAlert>}
+        {editingProposal?.status === "draft" && <InlineAlert tone="info"><Cloud size={15} /><span><strong>Editing account draft.</strong> Changes are not synced until you choose Save to account. Draft revision {editingProposal.version ?? 1} uses immutable form version {builder.version}{builder.version !== publishedBuilder.version ? `; new proposals use version ${publishedBuilder.version}` : ""}.</span></InlineAlert>}
+        {requestedEditId && !editingProposal && !accountProposalsLoading && accountState.kind === "verified" && <InlineAlert tone="danger">That proposal draft was not found in this verified account. Choose one of your saved proposals below or start a new draft.</InlineAlert>}
         <header className="submission-head">
           <div><p className="eyebrow">{workspace.event.name} · Call for speakers</p><h1>{builder.externalTitle}</h1></div>
-          <div className="submission-window"><Clock3 size={17} /><span><strong>Open until {formatDeadline(workspace.event.cfpClosesAt, workspace.event.timezone)}</strong><small>Limit: {builder.submissionLimit} submissions per person · drafts count</small></span></div>
+          <div className="submission-window"><Clock3 size={17} /><span><strong>Open until {formatDeadline(cfpDeadline, workspace.event.timezone)}</strong><small>Limit: {builder.submissionLimit} submissions per person · drafts count</small></span></div>
         </header>
 
-        <nav className="submission-stepper" aria-label="Submission progress">
+        <nav ref={stepperRef} className="submission-stepper" aria-label="Submission progress">
           {visibleSteps.map((item, index) => {
             const Icon = item.icon;
             return <button type="button" key={item.id} disabled={index > step} onClick={() => index <= step && setStep(index)} className={index === step ? "active" : index < step ? "complete" : ""} aria-current={index === step ? "step" : undefined}><span>{index < step ? <Check size={14} /> : <Icon size={14} />}</span><strong>{item.label}</strong></button>;
           })}
         </nav>
 
+        {submitError && currentStep.id !== "review" && <InlineAlert tone="danger">{submitError}</InlineAlert>}
+
         <div className="submission-body">
           <div className="submission-body__main">
-            {currentStep.id === "welcome" && <section className="public-copy"><p className="eyebrow">01 / Welcome</p><h2>{builder.externalTitle}</h2><p className="public-copy__lead">{builder.welcomeMessage}</p><h3>What makes a useful session</h3><ul><li>A real system, decision, or failure your peers can learn from.</li><li>Evidence: traces, measurements, artifacts, or a working demonstration.</li><li>A promise specific enough that attendees know what they will take home.</li></ul><h3>Program lanes</h3><div className="topic-list">{categoryOptions.map((topic, index) => <span key={topic}><b>{String(index + 1).padStart(2, "0")}</b>{topic}</span>)}</div><h3>Helpful field notes</h3><div className="resource-links"><a href="#terms">Speaker agreement & recording terms <ExternalLink size={13} /></a><a href="#faq">Application process FAQ <ExternalLink size={13} /></a><a href="#guide">Speaker tips and resources <ExternalLink size={13} /></a></div></section>}
+            {currentStep.id === "welcome" && source === "api" && accountState.kind === "verified" && (
+              <section className="account-submissions" aria-labelledby="account-submissions-title" aria-busy={accountProposalsLoading}>
+                <div className="account-submissions__head">
+                  <div><p className="eyebrow">Your conference account</p><h2 id="account-submissions-title">Pick up where you left off.</h2><p>Account drafts travel across devices. Submitted proposals stay visible here until the program reaches a final decision.</p></div>
+                  <button type="button" className="button button--quiet" onClick={startNewProposal} disabled={accountProposalsLoading || cfpClosed}><Plus size={15} /> New proposal</button>
+                </div>
+                {accountProposalsError && <InlineAlert tone="danger">{accountProposalsError}</InlineAlert>}
+                {accountProposalsLoading ? (
+                  <p className="account-submissions__loading" role="status">Loading your saved proposals…</p>
+                ) : accountProposals.length ? (
+                  <div className="account-submissions__list">
+                    {accountProposals.map((proposal) => (
+                      <article key={proposal.id} className={proposal.id === editingProposal?.id ? "active" : ""}>
+                        <div className="account-submissions__identity"><span>{proposal.id.slice(-7).toUpperCase()}</span><div><strong>{proposal.title || "Untitled proposal"}</strong><small>{proposal.status === "draft" ? `Saved ${proposalDate(proposal.submittedAt)} · version ${proposal.version ?? 1}` : `${proposal.format} · ${proposal.category}`}</small></div></div>
+                        <StatusPill status={proposal.status} />
+                        <div className="account-submissions__actions">
+                          {proposal.status === "draft" && <Link className="button button--quiet" to={`${location.pathname}?edit=${encodeURIComponent(proposal.id)}`}>Resume draft <ArrowRight size={14} /></Link>}
+                          {applicantMayWithdraw(proposal.status) && <button type="button" className="text-link text-link--danger" onClick={(event) => { withdrawReturnFocusRef.current = event.currentTarget; setWithdrawError(""); setWithdrawTarget(proposal); }}>Withdraw</button>}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="account-submissions__empty">No account drafts yet. Start below, then save once you have a working title, abstract, and speaker identity.</p>
+                )}
+              </section>
+            )}
+            {currentStep.id === "welcome" && <section className="public-copy"><p className="eyebrow">01 / Welcome</p><h2 ref={stepHeadingRef} tabIndex={-1}>{builder.externalTitle}</h2><p className="public-copy__lead">{builder.welcomeMessage}</p><h3>What makes a useful session</h3><ul><li>A real system, decision, or failure your peers can learn from.</li><li>Evidence: traces, measurements, artifacts, or a working demonstration.</li><li>A promise specific enough that attendees know what they will take home.</li></ul><h3>Program lanes</h3>{categoryOptions.length ? <div className="topic-list">{categoryOptions.map((topic, index) => <span key={topic}><b>{String(index + 1).padStart(2, "0")}</b>{topic}</span>)}</div> : <InlineAlert tone="danger">This published form has no program categories. Contact the organizer before drafting a proposal.</InlineAlert>}<h3>What happens next</h3><ul><li>A browser draft keeps your work while you verify the account that will own it.</li><li>Reviewers assess the proposal against the published program lanes.</li><li>If accepted, the organizer will provide final speaker, recording, and day-of requirements before publication.</li></ul></section>}
 
-            {currentStep.id === "account" && <section className="form-page"><p className="eyebrow">02 / Account</p><h2>Give the draft a reliable owner.</h2><p>We use one verified address for saved drafts, decisions, and speaker portal access.</p><div className="form-stack"><Field label="Email address" error={errors.email}><input type="email" value={submission.speaker.email} onChange={(event) => updateSpeaker({ email: event.target.value })} placeholder="you@example.com" /></Field><label className={`check-row${errors.account ? " check-row--error" : ""}`}><input type="checkbox" checked={accountReady} onChange={(event) => setAccountReady(event.target.checked)} /><span><strong>I can access this inbox.</strong><small>Production accounts verify this address before a draft is stored.</small>{errors.account && <b>{errors.account}</b>}</span></label><InlineAlert tone="info"><LockKeyhole size={15} /> Already have a production account? <Link to={`/auth?returnTo=${encodeURIComponent(`${window.location.pathname}${window.location.search}`)}`} className="text-link">Sign in or create one</Link>. Demo personas can continue locally.</InlineAlert></div></section>}
+            {currentStep.id === "account" && (
+              <section className="form-page">
+                <p className="eyebrow">02 / Account</p>
+                <h2 ref={stepHeadingRef} tabIndex={-1}>Give the draft a reliable owner.</h2>
+                <p>One verified address owns the proposal, receives decisions, and opens the speaker portal.</p>
+                <div className="form-stack">
+                  {source === "demo" ? (
+                    <>
+                      <Field label="Email address" error={errors.email}><input type="email" value={primarySpeaker.email} onChange={(event) => updateSpeaker(0, { email: event.target.value })} placeholder="you@example.com" /></Field>
+                      <label className={`check-row${errors.account ? " check-row--error" : ""}`}><input type="checkbox" checked={accountReady} onChange={(event) => setAccountReady(event.target.checked)} /><span><strong>I can access this inbox.</strong><small>The demo keeps this draft in your browser.</small>{errors.account && <b>{errors.account}</b>}</span></label>
+                      <InlineAlert tone="info"><LockKeyhole size={15} /> Demo personas can continue locally. <Link to={authPath} className="text-link" onClick={saveDraft}>Open production sign-in</Link>.</InlineAlert>
+                    </>
+                  ) : accountState.kind === "checking" ? (
+                    <InlineAlert tone="info"><LockKeyhole size={15} /> Checking your conference account…</InlineAlert>
+                  ) : accountState.kind === "anonymous" ? (
+                    <>
+                      <Field label="Email to use for your account" error={errors.email}><input type="email" autoComplete="email" value={primarySpeaker.email} onChange={(event) => updateSpeaker(0, { email: event.target.value })} placeholder="you@example.com" /></Field>
+                      <InlineAlert tone={errors.account ? "danger" : "info"}><LockKeyhole size={15} /><span>Save this draft in your browser, then <Link to={authPath} className="text-link" onClick={saveDraft}>sign in or create a verified account</Link> to continue.{errors.account && <><br /><strong>{errors.account}</strong></>}</span></InlineAlert>
+                    </>
+                  ) : accountState.kind === "unverified" ? (
+                    <>
+                      <Field label="Signed-in account" error={errors.account}><input type="email" value={accountState.email} readOnly aria-readonly="true" /></Field>
+                      <InlineAlert tone="warning"><Mail size={15} /><span>Verify <strong>{accountState.email}</strong> from the email we sent, then return here. <Link to={authPath} className="text-link" onClick={saveDraft}>Account options</Link></span></InlineAlert>
+                    </>
+                  ) : accountState.kind === "mismatch" ? (
+                    <>
+                      <Field label="Verified account email" error={errors.account}><input type="email" value={accountState.email} readOnly aria-readonly="true" /></Field>
+                      <InlineAlert tone="danger"><ShieldCheck size={15} /><span>{submissionAccountError(accountState)} <button type="button" className="text-link" onClick={() => { updateSpeaker(0, { email: accountState.email }); setErrors((current) => ({ ...current, account: "" })); }}>Use {accountState.email}</button></span></InlineAlert>
+                    </>
+                  ) : accountState.kind === "verified" ? (
+                    <>
+                      <Field label="Verified account email"><input type="email" value={accountState.email} readOnly aria-readonly="true" /></Field>
+                      <InlineAlert tone="info"><ShieldCheck size={15} /><span>Verified as <strong>{accountState.email}</strong>. This account will own the proposal.</span></InlineAlert>
+                    </>
+                  ) : null}
+                </div>
+              </section>
+            )}
 
             {currentStep.id === "submission" && (
               <section className="form-page">
-                <p className="eyebrow">03 / Submission</p>
-                <h2>{builder.proposalSectionTitle}</h2>
+                <p className="eyebrow">03 / {builder.proposalPageHeading}</p>
+                <h2 ref={stepHeadingRef} tabIndex={-1}>{builder.proposalSectionTitle}</h2>
                 <p>{builder.proposalInstructions}</p>
                 <div className="form-stack">
                   <Field label="Session title" error={errors.title} hint={`${submission.title.length} / 100`}><input maxLength={100} value={submission.title} onChange={(event) => setSubmission({ ...submission, title: event.target.value })} placeholder="The eval flywheel that caught our agent regressions" /></Field>
                   <Field label="Abstract" error={errors.summary} hint={`${submission.summary.length} characters`}><textarea rows={7} value={submission.summary} onChange={(event) => setSubmission({ ...submission, summary: event.target.value })} placeholder="What did you build, what went wrong, and what can another team reuse?" /></Field>
                   <div className="field-grid field-grid--2">
-                    <Field label="Program category"><select value={submission.category} onChange={(event) => setSubmission({ ...submission, category: event.target.value })}>{categoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}</select></Field>
+                    <Field label="Program category" error={errors.category}><select value={submission.category} onChange={(event) => setSubmission({ ...submission, category: event.target.value })}><option value="">Select a category</option>{categoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}</select></Field>
                     <Field label="Preferred format"><select value={submission.format} onChange={(event) => setSubmission({ ...submission, format: event.target.value as ApplicantSubmission["format"] })}><option value="talk">Talk · 30 min</option><option value="workshop">Workshop · 60 min</option><option value="panel">Panel · 45 min</option><option value="lightning">Lightning · 10 min</option></select></Field>
                     <Field label="Audience level"><select value={submission.level} onChange={(event) => setSubmission({ ...submission, level: event.target.value as ApplicantSubmission["level"] })}><option value="introductory">Introductory</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></Field>
                     <Field label="Project or repository" hint="Optional"><input type="url" value={submission.repoUrl} onChange={(event) => setSubmission({ ...submission, repoUrl: event.target.value })} placeholder="https://…" /></Field>
@@ -390,18 +936,38 @@ export function PublicSubmissionWizard() {
 
             {currentStep.id === "participant" && (
               <section className="form-page">
-                <p className="eyebrow">04 / Participant</p>
-                <h2>{builder.participantSectionTitle}</h2>
+                <p className="eyebrow">04 / {builder.participantPageHeading}</p>
+                <h2 ref={stepHeadingRef} tabIndex={-1}>{builder.participantSectionTitle}</h2>
                 <p>{builder.participantInstructions}</p>
                 <div className="form-stack">
-                  <div className="field-grid field-grid--2">
-                    <Field label="First name" error={errors.firstName}><input value={submission.speaker.firstName} onChange={(event) => updateSpeaker({ firstName: event.target.value })} /></Field>
-                    <Field label="Last name" error={errors.lastName}><input value={submission.speaker.lastName} onChange={(event) => updateSpeaker({ lastName: event.target.value })} /></Field>
-                    <Field label="Role or title" error={errors.speakerTitle}><input value={submission.speaker.title} onChange={(event) => updateSpeaker({ title: event.target.value })} placeholder="Staff AI Engineer" /></Field>
-                    <Field label="Company / affiliation" error={errors.company}><input value={submission.speaker.company} onChange={(event) => updateSpeaker({ company: event.target.value })} placeholder="Independent is okay" /></Field>
+                  <div className="participant-roster__toolbar">
+                    <div><Users size={18} /><span><strong>{submission.speakers.length} of {builder.participantMax} speakers</strong><small>At least {builder.participantMin} {builder.participantMin === 1 ? "speaker is" : "speakers are"} required.</small></span></div>
+                    <button type="button" className="button button--quiet" onClick={addSpeaker} disabled={submission.speakers.length >= builder.participantMax}><Plus size={15} /> Add co-speaker</button>
                   </div>
-                  <Field label="Biography" hint={`${submission.speaker.bio.length} / 5,000 · editable later in the portal`}><textarea rows={7} maxLength={5000} value={submission.speaker.bio} onChange={(event) => updateSpeaker({ bio: event.target.value })} placeholder="What perspective and experience do you bring to this subject?" /></Field>
-                  {visibleParticipantCustomFields.map((field) => <CustomField key={field.id} field={field} value={responses[field.id]} error={errors[field.id]} onChange={(value) => updateResponse(field.id, value)} />)}
+                  {errors.participantCount && <InlineAlert tone="danger">{errors.participantCount}</InlineAlert>}
+                  <div className="participant-roster">
+                    {submission.speakers.map((speaker, index) => {
+                      const speakerLabel = index === 0 ? "Primary speaker" : `Co-speaker ${index + 1}`;
+                      return (
+                        <fieldset className="participant-card" key={index}>
+                          <legend className="sr-only">{speakerLabel}</legend>
+                          <header className="participant-card__head">
+                            <div><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{speakerLabel}</strong><small>{index === 0 ? "Verified proposal owner" : "Included on this proposal"}</small></div></div>
+                            {index === 0 ? <span className="participant-owner"><ShieldCheck size={13} /> Owner</span> : <button type="button" className="participant-remove" onClick={() => removeSpeaker(index)} disabled={submission.speakers.length <= builder.participantMin} aria-label={`Remove ${speakerLabel.toLowerCase()}`}><Trash2 size={14} /> Remove</button>}
+                          </header>
+                          <div className="field-grid field-grid--2">
+                            <Field label="First name" error={errors[speakerErrorKey(index, "firstName")]}><input value={speaker.firstName} onChange={(event) => updateSpeaker(index, { firstName: event.target.value })} /></Field>
+                            <Field label="Last name" error={errors[speakerErrorKey(index, "lastName")]}><input value={speaker.lastName} onChange={(event) => updateSpeaker(index, { lastName: event.target.value })} /></Field>
+                            <Field label="Email address" error={errors[speakerErrorKey(index, "email")]} hint={index === 0 && source === "api" ? "Locked to the verified account that owns this proposal." : undefined}><input type="email" autoComplete={index === 0 ? "email" : "off"} value={speaker.email} readOnly={index === 0 && source === "api"} aria-readonly={index === 0 && source === "api" ? "true" : undefined} onChange={(event) => updateSpeaker(index, { email: event.target.value })} /></Field>
+                            <Field label="Role or title" error={errors[speakerErrorKey(index, "title")]}><input value={speaker.title} onChange={(event) => updateSpeaker(index, { title: event.target.value })} placeholder="Staff AI Engineer" /></Field>
+                            <Field label="Company / affiliation" error={errors[speakerErrorKey(index, "company")]}><input value={speaker.company} onChange={(event) => updateSpeaker(index, { company: event.target.value })} placeholder="Independent is okay" /></Field>
+                          </div>
+                          <Field label="Biography" hint={`${speaker.bio.length} / 5,000${index === 0 ? " · editable later in the portal" : ""}`}><textarea rows={5} maxLength={5000} value={speaker.bio} onChange={(event) => updateSpeaker(index, { bio: event.target.value })} placeholder="What perspective and experience do you bring to this subject?" /></Field>
+                        </fieldset>
+                      );
+                    })}
+                  </div>
+                  {visibleParticipantCustomFields.length > 0 && <div className="participant-custom-fields"><div><strong>Primary speaker questions</strong><small>These published form questions apply to the verified proposal owner.</small></div>{visibleParticipantCustomFields.map((field) => <CustomField key={field.id} field={field} value={responses[field.id]} error={errors[field.id]} onChange={(value) => updateResponse(field.id, value)} />)}</div>}
                 </div>
               </section>
             )}
@@ -409,24 +975,31 @@ export function PublicSubmissionWizard() {
             {currentStep.id === "review" && (
               <section className="form-page review-submit">
                 <p className="eyebrow">05 / Review</p>
-                <h2>One final read before it leaves your desk.</h2>
-                <p>Submitting creates an immutable review snapshot. You can still revise the proposal until the call closes.</p>
+                <h2 ref={stepHeadingRef} tabIndex={-1}>One final read before it leaves your desk.</h2>
+                <p>Submitting locks this proposal for review. Your speaker profile remains editable; contact the organizer if the proposal itself needs a revision.</p>
                 <div className="review-sheet">
                   <div><span>TITLE</span><strong>{submission.title || "Not supplied"}</strong><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
                   <div><span>FORMAT</span><strong>{submission.format} · {submission.level}</strong><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
                   <div><span>PROGRAM LANE</span><strong>{submission.category}</strong><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
-                  <div><span>SPEAKER</span><strong>{submission.speaker.firstName} {submission.speaker.lastName} · {submission.speaker.company}</strong><button type="button" onClick={() => setStep(stepIndex(builder.collectParticipants ? "participant" : "submission"))}>Edit</button></div>
+                  {submission.speakers.map((speaker, index) => <div className="review-sheet__speaker" key={`${speaker.email}-${index}`}><span>{index === 0 ? "PRIMARY SPEAKER" : `CO-SPEAKER ${index + 1}`}</span><strong>{speaker.firstName} {speaker.lastName}<small>{speaker.email} · {speaker.title} · {speaker.company}</small></strong><button type="button" onClick={() => setStep(stepIndex(builder.collectParticipants ? "participant" : "submission"))}>Edit</button></div>)}
                   <div className="review-sheet__long"><span>ABSTRACT</span><p>{submission.summary}</p><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
                   {customReviewFields.map(({ field, section }) => <div key={field.id}><span>{field.label.toUpperCase()}</span><strong>{answerLabel(responses[field.id])}</strong><button type="button" onClick={() => setStep(stepIndex(section === "proposal" ? "submission" : "participant"))}>Edit</button></div>)}
                 </div>
-                <label className={`check-row${submitError ? " check-row--error" : ""}`}><input type="checkbox" checked={termsAccepted} onChange={(event) => { setTermsAccepted(event.target.checked); setSubmitError(""); }} /><span><strong>I have permission to submit this material.</strong><small>I accept the speaker agreement and recording terms.</small>{submitError && <b>{submitError}</b>}</span></label>
+                <label className={`check-row${submitError ? " check-row--error" : ""}`}><input type="checkbox" checked={permissionConfirmed} onChange={(event) => { setPermissionConfirmed(event.target.checked); setSubmitError(""); }} /><span><strong>I have permission to submit this material.</strong><small>I own or have permission to share everything included here. Recording consent and final speaker terms are handled separately before publication.</small>{submitError && <b>{submitError}</b>}</span></label>
               </section>
             )}
           </div>
 
           <aside className="submission-aside">
-            <div className="draft-card"><div><Save size={17} /><span><strong>{savedAt ? "Draft saved" : "Draft autosave ready"}</strong><small>{savedAt ? savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "After account verification"}</small></span></div><button type="button" onClick={saveDraft}>Save now</button></div>
-            <div className="deadline-card"><Info size={17} /><div><strong>Deadline is enforced in {workspace.event.timezone.replace("America/", "")}.</strong><p>Existing drafts and updates close at the same instant.</p></div></div>
+            <div className="draft-card">
+              <div><Save size={17} /><span><strong>{draftSyncMessage ? "Account draft saved" : savedAt ? "Browser draft saved" : "Draft protection"}</strong><small aria-live="polite">{draftSyncMessage || (savedAt ? `Browser copy · ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Keep a browser copy or sync to your account")}</small></span></div>
+              <div className="draft-card__actions">
+                <button type="button" onClick={saveDraft}>Save browser copy</button>
+                {source === "api" && accountState.kind === "verified" && <button type="button" className="draft-card__account" disabled={savingAccountDraft || accountProposalsLoading || (cfpClosed && !editingProposal) || Boolean(editingProposal && editingProposal.status !== "draft")} onClick={() => void saveDraftToAccount()}><Cloud size={13} /> {savingAccountDraft ? "Saving…" : editingProposal ? "Update account draft" : "Save to account"}</button>}
+                {source === "api" && accountState.kind !== "verified" && <Link className="draft-card__sign-in" to={authPath} onClick={saveDraft}><LockKeyhole size={13} /> Sign in to sync</Link>}
+              </div>
+            </div>
+            <div className="deadline-card"><Info size={17} /><div><strong>Deadline is enforced in {timeZoneAbbreviation(cfpDeadline, workspace.event.timezone)}.</strong><p>{cfpClosed ? "The CFP is closed. Saved account drafts remain available, but they cannot be submitted." : "You can keep syncing an account draft; final submission must happen before the deadline."}</p></div></div>
             <ProgressBar label="Application progress" value={step + 1} max={visibleSteps.length} />
           </aside>
         </div>
@@ -434,10 +1007,11 @@ export function PublicSubmissionWizard() {
         <footer className="submission-footer">
           <button type="button" className="button button--quiet" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}><ArrowLeft size={15} /> Back</button>
           <span>Step {step + 1} of {visibleSteps.length}</span>
-          {currentStep.id === "review" ? <button type="button" className="button button--primary button--large" disabled={!termsAccepted || submitting} onClick={async () => { if (!termsAccepted) { setSubmitError("Accept the speaker agreement and recording terms before submitting."); return; } setSubmitting(true); try { const proposal = await submitProposal(submission); window.localStorage.removeItem("conference-ops-cfp-draft"); setSubmittedId(proposal.id); } catch (error) { setSubmitError(error instanceof Error ? error.message : "The proposal could not be submitted."); } finally { setSubmitting(false); } }}><CheckCircle2 size={16} /> {submitting ? "Submitting…" : "Submit proposal"}</button> : <button type="button" className="button button--primary" onClick={goNext}>Continue <ArrowRight size={15} /></button>}
+          {currentStep.id === "review" ? <button type="button" className="button button--primary button--large" disabled={!permissionConfirmed || submitting || cfpClosed} onClick={() => void submitCurrentProposal()}><CheckCircle2 size={16} /> {submitting ? "Submitting…" : cfpClosed ? "CFP closed" : editingProposal ? "Submit saved draft" : "Submit proposal"}</button> : <button type="button" className="button button--primary" onClick={goNext}>Continue <ArrowRight size={15} /></button>}
         </footer>
       </main>
       <NoticeRegion />
+      {withdrawTarget && <WithdrawProposalDialog proposal={withdrawTarget} busy={withdrawing} error={withdrawError} returnFocusRef={withdrawReturnFocusRef} onClose={() => { if (!withdrawing) setWithdrawTarget(null); }} onConfirm={() => void confirmWithdrawal()} />}
     </div>
   );
 }

@@ -1,6 +1,25 @@
 import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
-import { auditProposalDecisionSql, updateProposalDecisionSql } from "../../src/server/mutations";
+import type { ProposalStatus } from "../../src/shared/domain";
+import {
+  auditProposalDecisionBindings,
+  auditProposalDecisionSql,
+  proposalDecisionTransitionAllowed,
+  type ProposalDecisionStatus,
+  updateProposalDecisionBindings,
+  updateProposalDecisionSql,
+} from "../../src/server/mutations";
+
+const targets: ProposalDecisionStatus[] = ["accept_queue", "accepted", "decline_queue", "rejected", "waitlisted"];
+const sources: ProposalStatus[] = ["draft", "submitted", "under_review", "accept_queue", "waitlisted", "accepted", "decline_queue", "rejected", "withdrawn", "session"];
+
+const allowed: Record<ProposalDecisionStatus, ProposalStatus[]> = {
+  accept_queue: ["submitted", "under_review", "waitlisted", "decline_queue"],
+  accepted: ["accept_queue"],
+  decline_queue: ["submitted", "under_review", "accept_queue", "waitlisted"],
+  rejected: ["decline_queue"],
+  waitlisted: ["submitted", "under_review", "accept_queue", "decline_queue"],
+};
 
 describe("proposal decision audit transaction", () => {
   let db: DatabaseSync;
@@ -37,37 +56,82 @@ describe("proposal decision audit transaction", () => {
     `);
   });
 
-  function decide(auditId: string, proposalId = "proposal-a", eventId = "event-a") {
-    const update = db.prepare(updateProposalDecisionSql).run("accepted", 20, 20, proposalId, eventId);
-    const audit = db.prepare(auditProposalDecisionSql).run(auditId, "actor-a", proposalId, "Proposal moved to accepted.", '{"status":"accepted"}', "request-a", 20, eventId, proposalId, "accepted");
-    return { update, audit };
+  function decide(target: ProposalDecisionStatus, auditId: string, proposalId = "proposal-a", eventId = "event-a", now = 20) {
+    const audit = db.prepare(auditProposalDecisionSql).run(...auditProposalDecisionBindings({
+      auditId,
+      actorUserId: "actor-a",
+      proposalId,
+      eventId,
+      target,
+      summary: `Proposal moved to ${target}.`,
+      metadata: JSON.stringify({ status: target }),
+      requestId: `request-${auditId}`,
+      now,
+    }));
+    const update = db.prepare(updateProposalDecisionSql).run(...updateProposalDecisionBindings({
+      target,
+      decidedAt: target === "accepted" || target === "rejected" ? now : null,
+      now,
+      proposalId,
+      eventId,
+    }));
+    return { audit, update };
   }
 
-  it("writes exactly one scoped audit row for a successful decision", () => {
-    db.exec("BEGIN");
-    const result = decide("audit-a");
-    db.exec("COMMIT");
+  it("enforces the complete staged transition matrix in both TypeScript and SQLite", () => {
+    for (const source of sources) {
+      for (const target of targets) {
+        db.prepare("UPDATE proposals SET status = ?, decided_at = NULL, updated_at = 1, version = 1 WHERE id = 'proposal-a'").run(source);
+        const result = db.prepare(updateProposalDecisionSql).run(...updateProposalDecisionBindings({
+          target,
+          decidedAt: target === "accepted" || target === "rejected" ? 20 : null,
+          now: 20,
+          proposalId: "proposal-a",
+          eventId: "event-a",
+        }));
+        const expected = allowed[target].includes(source);
 
-    expect(result.update.changes).toBe(1);
-    expect(result.audit.changes).toBe(1);
-    expect(db.prepare("SELECT status, decided_at, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status: "accepted", decided_at: 20, version: 2 });
-    expect(db.prepare("SELECT organization_id, event_id, entity_id, action FROM audit_logs WHERE id = 'audit-a'").get()).toEqual({ organization_id: "org-a", event_id: "event-a", entity_id: "proposal-a", action: "proposal.decision_changed" });
+        expect(proposalDecisionTransitionAllowed(source, target), `${source} -> ${target} helper`).toBe(expected);
+        expect(result.changes, `${source} -> ${target} SQL`).toBe(expected ? 1 : 0);
+      }
+    }
   });
 
-  it("does not mutate or audit a proposal from another event or a locked proposal", () => {
-    expect(decide("audit-wrong-event", "proposal-a", "event-b").update.changes).toBe(0);
-    expect(decide("audit-withdrawn", "proposal-withdrawn").update.changes).toBe(0);
+  it("records the staged move and final acceptance as separate audited transitions", () => {
+    db.exec("BEGIN");
+    const staged = decide("accept_queue", "audit-stage", "proposal-a", "event-a", 20);
+    db.exec("COMMIT");
+    db.exec("BEGIN");
+    const accepted = decide("accepted", "audit-final", "proposal-a", "event-a", 30);
+    db.exec("COMMIT");
+
+    expect(staged.audit.changes).toBe(1);
+    expect(staged.update.changes).toBe(1);
+    expect(accepted.audit.changes).toBe(1);
+    expect(accepted.update.changes).toBe(1);
+    expect(db.prepare("SELECT status, decided_at, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status: "accepted", decided_at: 30, version: 3 });
+    expect(db.prepare("SELECT action, COUNT(*) AS count FROM audit_logs GROUP BY action").get()).toEqual({ action: "proposal.decision_changed", count: 2 });
+  });
+
+  it("does not mutate or audit cross-event, draft, or final proposals", () => {
+    expect(decide("accept_queue", "audit-wrong-event", "proposal-a", "event-b").update.changes).toBe(0);
+    expect(decide("accept_queue", "audit-withdrawn", "proposal-withdrawn").update.changes).toBe(0);
+    db.prepare("UPDATE proposals SET status = 'draft' WHERE id = 'proposal-a'").run();
+    expect(decide("accept_queue", "audit-draft").update.changes).toBe(0);
+    db.prepare("UPDATE proposals SET status = 'accepted' WHERE id = 'proposal-a'").run();
+    expect(decide("rejected", "audit-redecision").update.changes).toBe(0);
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 0 });
   });
 
-  it("rolls the decision back when the audit insert fails inside the batch transaction", () => {
+  it("rolls the final decision back when its audit insert fails", () => {
+    db.prepare("UPDATE proposals SET status = 'accept_queue' WHERE id = 'proposal-a'").run();
     db.prepare("INSERT INTO audit_logs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run("audit-collision", "org-a", "event-a", "actor-a", "existing", "proposal", "proposal-a", "Existing", "{}", "request-old", 1);
 
     db.exec("BEGIN");
-    expect(() => decide("audit-collision")).toThrow();
+    expect(() => decide("accepted", "audit-collision")).toThrow();
     db.exec("ROLLBACK");
 
-    expect(db.prepare("SELECT status, decided_at, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status: "under_review", decided_at: null, version: 1 });
+    expect(db.prepare("SELECT status, decided_at, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status: "accept_queue", decided_at: null, version: 1 });
   });
 });

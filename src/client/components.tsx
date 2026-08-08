@@ -8,7 +8,8 @@ import {
 } from "lucide-react";
 import { useEffect, useId } from "react";
 import { useNavigate } from "react-router-dom";
-import type { Actor, ProposalStatus, TaskStatus } from "../shared/domain";
+import type { ProposalStatus, TaskStatus } from "../shared/domain";
+import { eventRoleLandingPath } from "./private-routes";
 import { useWorkspace } from "./workspace";
 
 export function LogoMark({ compact = false }: { compact?: boolean }) {
@@ -38,17 +39,11 @@ export function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md"
   );
 }
 
-const roleLanding: Record<Actor["role"], string> = {
-  organizer: "/workspace",
-  reviewer: "/reviews",
-  applicant: "/submit/ai-engineer-summit-2026",
-  speaker: "/portal/home",
-};
-
 export function PersonaSwitcher({ compact = false }: { compact?: boolean }) {
-  const { workspace, switchActor } = useWorkspace();
+  const { workspace, switchActor, privateWorkspaceEventId } = useWorkspace();
   const navigate = useNavigate();
   const labelId = useId();
+  const eventId = privateWorkspaceEventId ?? workspace.event.id;
 
   return (
     <label className={`persona-switcher${compact ? " persona-switcher--compact" : ""}`}>
@@ -62,7 +57,7 @@ export function PersonaSwitcher({ compact = false }: { compact?: boolean }) {
           const actor = workspace.actors.find((candidate) => candidate.id === event.target.value);
           if (!actor) return;
           switchActor(actor.id);
-          navigate(roleLanding[actor.role]);
+          navigate(eventRoleLandingPath(actor.role, eventId, workspace.event.slug));
         }}
       >
         {workspace.actors.map((actor) => (

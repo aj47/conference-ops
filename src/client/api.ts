@@ -2,12 +2,21 @@ import type {
   EventRecord,
   FormDefinition,
   FormField,
+  FormVersionSettings,
   ProgramSession,
+  ResourcePage,
+  Room,
   SpeakerProfile,
+  Track,
   WorkspaceSnapshot,
 } from "../shared/domain";
 
+export function publicEventApiPath(slug: string) {
+  return `/api/v1/public/events/${encodeURIComponent(slug)}`;
+}
+
 export interface PublicEventData {
+  demoMode?: boolean;
   event: EventRecord;
   form: FormDefinition | null;
   sessions: Array<Partial<ProgramSession> & {
@@ -20,12 +29,74 @@ export interface PublicEventData {
     roomName?: string;
   }>;
   speakers: Array<Omit<SpeakerProfile, "email"> & { email?: string }>;
+  resources: ResourcePage[];
 }
 
 type ApiEnvelope<T> = { data: T };
+type EventRole = WorkspaceSnapshot["actor"]["role"];
+
+const activeEventRoles = new Map<string, EventRole>();
+let bootstrapActivationSequence = 0;
+const latestBootstrapRequests = new Map<string, number>();
+const latestBootstrapActivations = new Map<string, number>();
+
+function eventRoleKey(actorId: string, eventId: string | undefined) {
+  return JSON.stringify([actorId, eventId ?? null]);
+}
+
+function eventIdFromClientApiPath(path: string) {
+  const encoded = path.match(/^\/api\/v1\/events\/([^/?]+)(?:[/?]|$)/)?.[1];
+  if (!encoded) return undefined;
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return undefined;
+  }
+}
+
+function activeEventRoleHeader(path: string, actorId: string): Record<string, string> {
+  const eventId = eventIdFromClientApiPath(path);
+  const role = eventId ? activeEventRoles.get(eventRoleKey(actorId, eventId)) : undefined;
+  return role ? { "x-event-role": role } : {};
+}
 
 export type CommunicationKind = "reminder" | "acceptance" | "calendar";
 export type ConferenceExportKind = "speakers.csv" | "sessions.csv" | "program.json";
+
+export interface CreateEventPayload {
+  organizationName: string;
+  name: string;
+  shortName: string;
+  slug: string;
+  description: string;
+  timezone: string;
+  startsAt: string;
+  endsAt: string;
+  cfpClosesAt: string;
+  venue: string;
+  websiteUrl: string;
+  accent: string;
+}
+
+export interface SubmissionMutationPayload {
+  title: string;
+  summary: string;
+  category: string;
+  format: "talk" | "workshop" | "panel" | "lightning";
+  durationMinutes: number;
+  level: "introductory" | "intermediate" | "advanced";
+  responses: Record<string, unknown>;
+  speakers: Array<{ name: string; email: string; title: string; company: string; bio: string }>;
+  submit: boolean;
+}
+
+export interface SubmissionMutationResult {
+  id: string;
+  status: string;
+  version?: number;
+  submittedAt?: string | null;
+  updatedAt?: string;
+}
 
 export class ApiClientError extends Error {
   code: string;
@@ -47,6 +118,7 @@ async function request<T>(path: string, actorId: string, init?: RequestInit): Pr
     headers: {
       "content-type": "application/json",
       "x-demo-actor": actorId,
+      ...activeEventRoleHeader(path, actorId),
       ...init?.headers,
     },
   });
@@ -74,6 +146,7 @@ async function uploadRequest<T>(
     headers: {
       "content-type": file.type || "application/octet-stream",
       "x-demo-actor": actorId,
+      ...activeEventRoleHeader(path, actorId),
     },
     body: file,
   });
@@ -91,9 +164,39 @@ async function uploadRequest<T>(
   return payload.data;
 }
 
-async function downloadRequest(path: string, actorId: string): Promise<{ blob: Blob; fileName: string }> {
+export function safeDownloadFileName(value: string | undefined, fallback: string) {
+  const leaf = (value ?? "").replaceAll("\\", "/").split("/").at(-1) ?? "";
+  const safe = [...leaf]
+    .filter((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code > 31 && code !== 127 && !(code >= 0x202a && code <= 0x202e) && !(code >= 0x2066 && code <= 0x2069);
+    })
+    .join("")
+    .trim()
+    .slice(0, 255);
+  return safe && safe !== "." && safe !== ".." ? safe : fallback;
+}
+
+function contentDispositionFileName(disposition: string) {
+  const encoded = disposition.match(/filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i)?.[1]?.trim().replace(/^"|"$/g, "");
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded);
+    } catch {
+      // Fall back to a plain filename or caller-provided metadata.
+    }
+  }
+  return disposition.match(/filename\s*=\s*"([^"]+)"/i)?.[1]
+    ?? disposition.match(/filename\s*=\s*([^;]+)/i)?.[1]?.trim();
+}
+
+async function downloadRequest(
+  path: string,
+  actorId: string,
+  fallbackFileName = "conference-export",
+): Promise<{ blob: Blob; fileName: string }> {
   const response = await fetch(path, {
-    headers: { "x-demo-actor": actorId },
+    headers: { "x-demo-actor": actorId, ...activeEventRoleHeader(path, actorId) },
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as {
@@ -107,17 +210,47 @@ async function downloadRequest(path: string, actorId: string): Promise<{ blob: B
     );
   }
   const disposition = response.headers.get("content-disposition") ?? "";
-  const fileName = disposition.match(/filename="([^"]+)"/)?.[1] ?? "conference-export";
+  const fileName = safeDownloadFileName(contentDispositionFileName(disposition), fallbackFileName);
   return { blob: await response.blob(), fileName };
 }
 
 export const conferenceApi = {
   publicEvent(slug: string) {
-    return request<PublicEventData>(`/api/v1/public/events/${encodeURIComponent(slug)}`, "", { cache: "no-store" });
+    return request<PublicEventData>(publicEventApiPath(slug), "", { cache: "no-store" });
   },
 
-  bootstrap(actorId: string) {
-    return request<WorkspaceSnapshot>("/api/v1/bootstrap", actorId);
+  async bootstrap(actorId: string, eventId?: string, role?: EventRole) {
+    const requestKey = eventRoleKey(actorId, eventId);
+    const activationSequence = ++bootstrapActivationSequence;
+    latestBootstrapRequests.set(requestKey, activationSequence);
+    const query = new URLSearchParams();
+    if (eventId) query.set("eventId", eventId);
+    if (role) query.set("role", role);
+    const workspace = await request<WorkspaceSnapshot>(`/api/v1/bootstrap${query.size ? `?${query}` : ""}`, actorId);
+    const resolvedKeys = [
+      eventRoleKey(actorId, workspace.event.id),
+      eventRoleKey(workspace.actor.id, workspace.event.id),
+    ];
+    const requestIsCurrent = latestBootstrapRequests.get(requestKey) === activationSequence;
+    const newerExplicitRequestExists = eventId === undefined
+      && (latestBootstrapRequests.get(resolvedKeys[0]) ?? 0) > activationSequence;
+    const newerActivationExists = resolvedKeys.some(
+      (key) => (latestBootstrapActivations.get(key) ?? 0) > activationSequence,
+    );
+    if (requestIsCurrent && !newerExplicitRequestExists && !newerActivationExists) {
+      for (const key of resolvedKeys) latestBootstrapActivations.set(key, activationSequence);
+      activeEventRoles.set(eventRoleKey(workspace.actor.id, workspace.event.id), workspace.actor.role);
+      if (actorId) activeEventRoles.set(eventRoleKey(actorId, workspace.event.id), workspace.actor.role);
+    }
+    return workspace;
+  },
+
+  createEvent(actorId: string, payload: CreateEventPayload) {
+    return request<{ id: string; slug: string; organizationId: string; formId: string }>(
+      "/api/v1/events",
+      actorId,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
   },
 
   enroll(actorId: string, eventId: string) {
@@ -125,6 +258,39 @@ export const conferenceApi = {
       "/api/v1/enroll",
       actorId,
       { method: "POST", body: JSON.stringify({ eventId }) },
+    );
+  },
+
+  claimSpeaker(eventId: string) {
+    return request<{
+      eventId: string;
+      role: "speaker";
+      speakerProfileId?: string;
+      claimed: true;
+    }>(
+      "/api/v1/claim-speaker",
+      "",
+      { method: "POST", body: JSON.stringify({ eventId }) },
+    );
+  },
+
+  acceptInvitation(token: string) {
+    return request<{ accepted: true; eventId?: string; role: "organizer" | "reviewer" }>(
+      "/api/v1/invitations/accept",
+      "",
+      { method: "POST", body: JSON.stringify({ token }) },
+    );
+  },
+
+  inviteStaff(
+    actorId: string,
+    eventId: string,
+    payload: { email: string; role: "organizer" | "reviewer" },
+  ) {
+    return request<{ id: string; email: string; role: "organizer" | "reviewer"; expiresAt: string; status: "queued" }>(
+      `/api/v1/events/${eventId}/invitations`,
+      actorId,
+      { method: "POST", body: JSON.stringify(payload) },
     );
   },
 
@@ -147,13 +313,13 @@ export const conferenceApi = {
     eventId: string,
     proposalId: string,
     payload: {
-      score: number;
+      scores: Record<string, number>;
       recommendation: "strong_yes" | "yes" | "maybe" | "no";
       notes: string;
       submit: boolean;
     },
   ) {
-    return request<{ proposalId: string; status: string }>(
+    return request<{ proposalId: string; status: string; scores: Record<string, number>; score?: number }>(
       `/api/v1/events/${eventId}/proposals/${proposalId}/review`,
       actorId,
       { method: "POST", body: JSON.stringify(payload) },
@@ -180,7 +346,7 @@ export const conferenceApi = {
       overrideReason?: string;
     },
   ) {
-    return request<{ sessionId: string; status: string; conflictsOverridden?: number }>(
+    return request<{ sessionId: string; status: ProgramSession["status"]; conflictsOverridden?: number }>(
       `/api/v1/events/${eventId}/sessions/${sessionId}/schedule`,
       actorId,
       { method: "POST", body: JSON.stringify(payload) },
@@ -205,6 +371,8 @@ export const conferenceApi = {
       timezone: string;
       startsAt: string;
       endsAt: string;
+      slug?: string;
+      cfpClosesAt?: string;
       venue: string;
       websiteUrl: string;
       accent: string;
@@ -216,12 +384,58 @@ export const conferenceApi = {
     });
   },
 
+  createRoom(actorId: string, eventId: string, payload: Pick<Room, "name" | "capacity">) {
+    return request<Room>(`/api/v1/events/${encodeURIComponent(eventId)}/rooms`, actorId, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateRoom(actorId: string, eventId: string, roomId: string, payload: Pick<Room, "name" | "capacity">) {
+    return request<Room>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/rooms/${encodeURIComponent(roomId)}`,
+      actorId,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+  },
+
+  deleteRoom(actorId: string, eventId: string, roomId: string) {
+    return request<{ id: string; deleted: true }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/rooms/${encodeURIComponent(roomId)}`,
+      actorId,
+      { method: "DELETE" },
+    );
+  },
+
+  createTrack(actorId: string, eventId: string, payload: Pick<Track, "name" | "color">) {
+    return request<Track>(`/api/v1/events/${encodeURIComponent(eventId)}/tracks`, actorId, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateTrack(actorId: string, eventId: string, trackId: string, payload: Pick<Track, "name" | "color">) {
+    return request<Track>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/tracks/${encodeURIComponent(trackId)}`,
+      actorId,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+  },
+
+  deleteTrack(actorId: string, eventId: string, trackId: string) {
+    return request<{ id: string; deleted: true }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/tracks/${encodeURIComponent(trackId)}`,
+      actorId,
+      { method: "DELETE" },
+    );
+  },
+
   saveForm(
     actorId: string,
     eventId: string,
     formId: string,
     payload: {
-      expectedVersion?: number;
+      expectedVersion: number;
       name: string;
       publicTitle: string;
       pageHeading: string;
@@ -236,6 +450,7 @@ export const conferenceApi = {
       allowMultipleDrafts: boolean;
       redirectToPortal: boolean;
       confirmationEmailEnabled: boolean;
+      settings: FormVersionSettings;
       fields: FormField[];
     },
   ) {
@@ -249,23 +464,33 @@ export const conferenceApi = {
   submitProposal(
     actorId: string,
     eventId: string,
-    payload: {
-      formId: string;
-      title: string;
-      summary: string;
-      category: string;
-      format: "talk" | "workshop" | "panel" | "lightning";
-      durationMinutes: number;
-      level: "introductory" | "intermediate" | "advanced";
-      responses: Record<string, unknown>;
-      speakers: Array<{ name: string; email: string; title: string; company: string; bio: string }>;
-      submit: boolean;
-    },
+    payload: SubmissionMutationPayload & { formId: string },
   ) {
-    return request<{ id: string; status: string; submittedAt?: string }>(
+    return request<SubmissionMutationResult>(
       `/api/v1/events/${eventId}/submissions`,
       actorId,
       { method: "POST", body: JSON.stringify(payload) },
+    );
+  },
+
+  updateSubmission(
+    actorId: string,
+    eventId: string,
+    proposalId: string,
+    payload: SubmissionMutationPayload & { expectedVersion: number },
+  ) {
+    return request<SubmissionMutationResult>(
+      `/api/v1/events/${eventId}/submissions/${encodeURIComponent(proposalId)}`,
+      actorId,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+  },
+
+  withdrawSubmission(actorId: string, eventId: string, proposalId: string) {
+    return request<{ id: string; status: "withdrawn"; withdrawnAt: string }>(
+      `/api/v1/events/${eventId}/submissions/${encodeURIComponent(proposalId)}/withdraw`,
+      actorId,
+      { method: "POST" },
     );
   },
 
@@ -329,6 +554,19 @@ export const conferenceApi = {
     return downloadRequest(
       `/api/v1/events/${eventId}/exports/${encodeURIComponent(kind)}`,
       actorId,
+    );
+  },
+
+  downloadUpload(
+    actorId: string,
+    eventId: string,
+    uploadId: string,
+    fallbackFileName = "submitted-file",
+  ) {
+    return downloadRequest(
+      `/api/v1/events/${eventId}/uploads/${encodeURIComponent(uploadId)}`,
+      actorId,
+      safeDownloadFileName(fallbackFileName, "submitted-file"),
     );
   },
 

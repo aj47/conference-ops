@@ -22,9 +22,11 @@ The application Worker serves the built SPA and the Hono API. D1 is the source o
 
 ### App Worker
 
-The App Worker terminates HTTP requests, runs Better Auth, enforces event roles, validates writes, and owns all transactional workflow changes. `/api/*` runs Worker-first; the public agenda, gallery, and `/embed/agenda` are static SPA routes that load their read-only data from the public API.
+The App Worker terminates HTTP requests, runs Better Auth, enforces event roles, validates writes, and owns all transactional workflow changes. `/api/*` runs Worker-first; the public agenda, gallery, and `/embed/agenda` are static SPA routes that load their read-only data from the public API. Static response policy blocks cross-origin framing except for `/embed/*`, and hashed `/assets/*` files are cached immutably.
 
 Every state-changing operation should remain event-scoped and auditable. Optimistic versions protect editable forms, proposals, and sessions from stale writes. A published form points to `published_version`; organizers can continue an unpublished `current_version` without changing the public CFP.
+
+Fresh-event creation is a transactional workflow rather than an empty database shell. It grants the creator organizer membership and initializes a private CFP draft/version with standard proposal and participant fields, a General reviewer group and active weighted review round, a Main room and General track, a slide file request, profile/slides/calendar task templates, and agenda/gallery embeds. Organizers can create, edit, and delete event-scoped rooms and tracks afterward; duplicate resources and deletion of resources already used by sessions are rejected.
 
 ### D1
 
@@ -44,7 +46,9 @@ This creates two recovery views: Cloudflare Queue/DLQ for transport failures and
 
 ### Realtime Worker
 
-One SQLite-backed Durable Object class (`EventRealtime`) provides event-scoped WebSocket fanout behind an App Worker service binding. Direct access requires a separate high-entropy `REALTIME_TOKEN`; it is not the user session secret. The MVP currently uses read-after-write refreshes rather than claiming live collaboration: mutation broadcasts and a client subscription are explicit follow-up work.
+Authenticated workspace routes refetch their event bootstrap on a bounded interval of about 25 seconds and when a visible tab regains focus. Polling pauses while the page is hidden, requests do not overlap, foreground mutations still update immediately, and unsaved form-builder edits are preserved during background hydration.
+
+One SQLite-backed Durable Object class (`EventRealtime`) is deployed behind an App Worker service binding and supports event-scoped WebSocket fanout. Direct access requires a separate high-entropy `REALTIME_TOKEN`; it is not the user session secret. Application mutations do not yet publish events to it and clients do not yet subscribe, so Durable Object event broadcasting remains follow-up work rather than a realtime-collaboration claim.
 
 Durable Object class migrations are Wrangler-owned because they ship with Worker code. Terraform does not manage Worker scripts or Durable Object migrations.
 
@@ -96,7 +100,7 @@ Staging intentionally uses synthetic in-process demo data and persona switching 
 5. Apply D1 migrations; Wrangler captures a backup before each remote migration.
 6. Optionally seed staging only when explicitly requested.
 7. Deploy Realtime, Jobs, then App so service dependencies exist before traffic reaches new code.
-8. Call `/api/health` through the public hostname, with Access service headers when configured.
+8. Call authenticated `/api/ready` through the public hostname, with Access service headers when configured. It validates runtime configuration, executes a D1 sentinel query, and traverses the Realtime service binding into its Durable Object. `/api/health` remains the dependency-free liveness check.
 
 Production promotion is manual and protected. Migration compatibility should span one deployment: additive schema first, code adoption second, cleanup in a later release.
 

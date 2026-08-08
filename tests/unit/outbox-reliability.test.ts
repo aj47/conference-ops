@@ -8,9 +8,11 @@ import {
   OUTBOX_MAX_DELIVERY_ATTEMPTS,
   OUTBOX_STALE_AFTER_MS,
   claimOutboxSql,
+  markExhaustedOutboxSql,
   markOutboxFailedSql,
   markOutboxSentSql,
   outboxFailureState,
+  selectDueOutboxSql,
   settleQueueFailure,
 } from "../../src/jobs/outbox";
 
@@ -22,6 +24,9 @@ describe("outbox delivery leases", () => {
     db.exec(`
       CREATE TABLE outbox (
         id TEXT PRIMARY KEY,
+        idempotency_key TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL,
         status TEXT NOT NULL,
         attempts INTEGER NOT NULL,
         available_at INTEGER NOT NULL,
@@ -29,8 +34,8 @@ describe("outbox delivery leases", () => {
         sent_at INTEGER,
         updated_at INTEGER NOT NULL
       );
-      INSERT INTO outbox (id, status, attempts, available_at, updated_at)
-      VALUES ('job-1', 'queued', 0, 1000, 1000);
+      INSERT INTO outbox (id, idempotency_key, kind, payload, status, attempts, available_at, updated_at)
+      VALUES ('job-1', 'key-1', 'email', '{}', 'queued', 0, 1000, 1000);
     `);
   });
 
@@ -39,6 +44,22 @@ describe("outbox delivery leases", () => {
     expect(db.prepare(claimOutboxSql).run(2001, "job-1", 2001 - OUTBOX_STALE_AFTER_MS).changes).toBe(0);
     expect(db.prepare(claimOutboxSql).run(2000 + OUTBOX_STALE_AFTER_MS, "job-1", 2000).changes).toBe(1);
     expect(db.prepare("SELECT status, attempts FROM outbox WHERE id = 'job-1'").get()).toEqual({ status: "processing", attempts: 2 });
+  });
+
+  it("dead-letters an exhausted stale lease instead of claiming attempt six or re-enqueuing it", () => {
+    db.prepare("UPDATE outbox SET status = 'processing', attempts = 5, updated_at = ? WHERE id = 'job-1'").run(2000);
+    const staleAt = 2000 + OUTBOX_STALE_AFTER_MS;
+
+    expect(db.prepare(claimOutboxSql).run(staleAt, "job-1", 2000).changes).toBe(0);
+    expect(db.prepare("SELECT attempts FROM outbox WHERE id = 'job-1'").get()).toEqual({ attempts: 5 });
+
+    expect(db.prepare(markExhaustedOutboxSql).run(staleAt, 2000).changes).toBe(1);
+    expect(db.prepare("SELECT status, attempts, last_error FROM outbox WHERE id = 'job-1'").get()).toEqual({
+      status: "dead",
+      attempts: 5,
+      last_error: "Delivery attempts exhausted before the lease completed.",
+    });
+    expect(db.prepare(selectDueOutboxSql).all(staleAt, 2000)).toEqual([]);
   });
 
   it("prevents an expired lease from recording another worker's completion", () => {

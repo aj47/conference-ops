@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { FormField } from "../../shared/domain";
 
@@ -108,7 +109,7 @@ export const events = sqliteTable(
     deletedAt: integer("deleted_at", { mode: "timestamp" }),
     ...timestamps,
   },
-  (table) => [uniqueIndex("event_org_slug_unique").on(table.organizationId, table.slug), index("event_org_idx").on(table.organizationId)],
+  (table) => [uniqueIndex("event_slug_unique").on(table.slug), index("event_org_idx").on(table.organizationId)],
 );
 
 export const eventMemberships = sqliteTable(
@@ -407,6 +408,7 @@ export const speakerTasks = sqliteTable(
     eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
     templateId: text("template_id").references(() => taskTemplates.id),
     speakerProfileId: text("speaker_profile_id").notNull().references(() => speakerProfiles.id, { onDelete: "cascade" }),
+    proposalId: text("proposal_id").references(() => proposals.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description").notNull(),
     type: text("type", { enum: ["profile", "upload", "form", "calendar"] }).notNull(),
@@ -416,7 +418,18 @@ export const speakerTasks = sqliteTable(
     completedAt: integer("completed_at", { mode: "timestamp" }),
     ...timestamps,
   },
-  (table) => [index("task_event_status_due_idx").on(table.eventId, table.status, table.dueAt), index("task_speaker_idx").on(table.speakerProfileId)],
+  (table) => [
+    index("task_event_status_due_idx").on(table.eventId, table.status, table.dueAt),
+    index("task_speaker_idx").on(table.speakerProfileId),
+    // Legacy databases may already contain duplicate NULL-target rows, so the
+    // contact lookup stays non-unique and SQL idempotency preserves the data.
+    index("task_contact_template_speaker_idx")
+      .on(table.templateId, table.speakerProfileId)
+      .where(sql`${table.proposalId} IS NULL`),
+    uniqueIndex("task_submission_template_speaker_proposal_unique")
+      .on(table.templateId, table.speakerProfileId, table.proposalId)
+      .where(sql`${table.proposalId} IS NOT NULL`),
+  ],
 );
 
 export const taskResponses = sqliteTable(

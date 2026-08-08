@@ -137,7 +137,9 @@ jobs:
           node scripts/render-demo-seed.mjs
           pnpm exec wrangler d1 execute DB --remote --env staging --config wrangler.jsonc --file artifacts/demo-seed.sql
       - name: Build application
-        run: CLOUDFLARE_ENV="$DEPLOY_ENVIRONMENT" pnpm build
+        run: |
+          CLOUDFLARE_ENV="$DEPLOY_ENVIRONMENT" pnpm build
+          node scripts/check-vite-deploy-config.mjs "$DEPLOY_ENVIRONMENT"
       - name: Deploy realtime Worker first
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -160,26 +162,30 @@ jobs:
           if [[ "$(node -p "Object.keys(require('./artifacts/secrets/jobs-cleanup.json')).length")" -gt 0 ]]; then
             pnpm exec wrangler secret bulk artifacts/secrets/jobs-cleanup.json --name "conference-ops-${DEPLOY_ENVIRONMENT}-jobs"
           fi
-      - name: Health check
+      - name: Authenticated readiness check
         env:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          REALTIME_TOKEN: ${{ secrets.REALTIME_TOKEN }}
         run: |
           response_file="$(mktemp)"
           trap 'rm -f -- "$response_file"' EXIT
-          args=(--silent --show-error --retry 5 --retry-all-errors --max-time 20 --output "$response_file" --write-out '%{http_code}')
+          args=(--silent --show-error --retry 5 --retry-all-errors --max-time 20 --output "$response_file" --write-out '%{http_code}' --header "Authorization: Bearer $REALTIME_TOKEN")
           if [[ -n "$CF_ACCESS_CLIENT_ID" && -n "$CF_ACCESS_CLIENT_SECRET" ]]; then
             args+=(--header "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID")
             args+=(--header "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET")
           fi
-          status="$(curl "${args[@]}" "${PUBLIC_APP_URL%/}/api/health")"
+          status="$(curl "${args[@]}" "${PUBLIC_APP_URL%/}/api/ready")"
           if [[ "$status" != "200" ]]; then
-            echo "Health check returned HTTP $status" >&2
+            echo "Readiness check returned HTTP $status" >&2
             exit 1
           fi
           node -e '
             const fs = require("node:fs");
             const body = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            if (body.status !== "ok") throw new Error(`Unexpected health status: ${body.status}`);
+            if (body.status !== "ready") throw new Error(`Unexpected readiness status: ${body.status}`);
             if (body.environment !== process.env.DEPLOY_ENVIRONMENT) throw new Error(`Expected ${process.env.DEPLOY_ENVIRONMENT}; received ${body.environment}`);
+            for (const check of ["configuration", "database", "realtime"]) {
+              if (body.checks?.[check] !== "ok") throw new Error(`Readiness check ${check} did not pass`);
+            }
           ' "$response_file"

@@ -9,7 +9,7 @@
 - verified Email Routing sender address
 - separate staging and production hostnames, variables, secrets, and GitHub Environments
 
-Email Routing is optional for a demo staging deployment. Set `ENABLE_CLOUDFLARE_EMAIL=false` to remove the native binding from rendered Jobs configuration. Do not exercise delivery in that mode: attempted email jobs fail into the D1 outbox, retry through the queue, and eventually surface in the DLQ. Production email remains explicit opt-in after sender/domain verification.
+Email Routing is optional for a demo staging deployment. Set `ENABLE_CLOUDFLARE_EMAIL=false` to remove the native binding from rendered Jobs configuration. Do not exercise delivery in that mode: attempted email jobs fail into the D1 outbox, retry through the queue, and eventually surface in the DLQ. Production requires `ENABLE_CLOUDFLARE_EMAIL=true` because account verification depends on delivery; deployment preflight fails until the sender/domain and token scope are ready.
 
 Run all examples from the repository root unless a command changes directories.
 
@@ -68,7 +68,7 @@ Pushes to `main` invoke the deploy workflow for staging. Production requires `wo
 5. Realtime Worker
 6. Jobs Worker
 7. App Worker and static assets
-8. `/api/health` check
+8. authenticated `/api/ready` check of configuration, D1, and the Realtime service/Durable Object path
 
 The production GitHub Environment approval happens before credentials are released.
 
@@ -106,17 +106,18 @@ Then follow the CI deployment order:
 ```bash
 pnpm exec wrangler d1 migrations apply DB --remote --env staging --config wrangler.jsonc
 CLOUDFLARE_ENV=staging pnpm build
+node scripts/check-vite-deploy-config.mjs staging
 pnpm exec wrangler deploy --env staging --config wrangler.realtime.jsonc --secrets-file artifacts/secrets/realtime.json
 pnpm exec wrangler deploy --env staging --config wrangler.jobs.jsonc --secrets-file artifacts/secrets/jobs.json
 CLOUDFLARE_ENV=staging pnpm exec wrangler deploy --secrets-file artifacts/secrets/app.json
 pnpm exec wrangler secret bulk artifacts/secrets/app-cleanup.json --name conference-ops-staging-app
 pnpm exec wrangler secret bulk artifacts/secrets/jobs-cleanup.json --name conference-ops-staging-jobs
-curl --fail --retry 5 "$PUBLIC_APP_URL/api/health"
+curl --fail --retry 5 --header "Authorization: Bearer $REALTIME_TOKEN" "$PUBLIC_APP_URL/api/ready"
 ```
 
 Vite writes the App Worker deployment redirect with its built static-assets directory; deploying the rendered source config directly omits those generated assets. Run manual deployments only from a clean checkout. Delete rendered secret files and restore the three checked-in Wrangler templates afterward if the checkout is not ephemeral.
 
-The example above is the integrations-off/no-Access path. When Access is enabled, export matching `APP_CUSTOM_DOMAIN` and `PREVIEW_ACCESS_HOSTNAME`, configure the service-token ID in Terraform, and pass its client ID/secret headers to the health request. When Email is enabled, export the verified sender/reply-to and confirm the deployment token has Email Routing scope.
+The example above is the integrations-off/no-Access path. When Access is enabled, export matching `APP_CUSTOM_DOMAIN` and `PREVIEW_ACCESS_HOSTNAME`, configure the service-token ID in Terraform, and pass its client ID/secret headers to the readiness request. When Email is enabled, export the verified sender/reply-to and confirm the deployment token has Email Routing scope.
 
 ## Demo seed
 
@@ -132,9 +133,22 @@ pnpm exec wrangler d1 execute DB --remote --env staging --config artifacts/wrang
 
 Do not run this command against production. The deployment workflow enforces the same environment restriction.
 
+## Local production-path smoke
+
+Run the authenticated stateful gate before a release or after changing auth, migrations, membership policy, submissions, tasks, or outbox behavior:
+
+```bash
+pnpm smoke:production-local
+```
+
+The command creates an OS-temporary Wrangler configuration, random Better Auth credentials, and isolated local D1/R2/Queue persistence. With `DEMO_MODE=false`, it verifies unauthenticated denial, Better Auth email/password sign-in, applicant bootstrap, proposal submission and review routing, confirmation outbox intent, task completion, persisted session/workflow rows, and zero foreign-key violations. Cleanup stops the local Worker and removes the credentials and state even on failure; the script contains no remote Wrangler operation.
+
+This is a production-code-path check, not an edge-environment substitute. It uses `ENVIRONMENT=local` and loopback HTTP for a non-Secure test cookie, and does not exercise production TLS/cookie delivery, Access policy, Email Routing delivery, Realtime service bindings, or remote Cloudflare permissions. Keep the authenticated `/api/ready` deployment check and post-release email/realtime smoke tests.
+
 ## Routine checks
 
-- App: `/api/health` returns `status: ok` and the expected environment.
+- Liveness: `/api/health` returns `status: ok` and the expected environment without calling stateful dependencies.
+- Readiness: an authorized `/api/ready` request returns `status: ready` with `configuration`, `database`, and `realtime` all `ok`.
 - D1: migration list is fully applied and `PRAGMA foreign_key_check` returns no rows.
 - Queue: backlog age is stable; DLQ has no unexplained messages.
 - Jobs: outbox does not accumulate `failed` or `dead` rows.
