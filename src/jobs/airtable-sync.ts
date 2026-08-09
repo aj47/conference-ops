@@ -320,9 +320,11 @@ export async function drainAirtableChanges(env: Bindings, options: { connectionI
         for (const record of prepared) {
           if (record.existingMap?.airtable_record_id && record.existingMap.last_remote_hash === record.hash) {
             await env.DB.batch([
-              env.DB.prepare(`UPDATE airtable_record_maps SET last_local_hash = ?, last_synced_at = ?, updated_at = ?
+              // No Airtable write occurred, so preserve the timestamp of the
+              // push that produced the protected Last Synced At field.
+              env.DB.prepare(`UPDATE airtable_record_maps SET last_local_hash = ?, updated_at = ?
                 WHERE connection_id = ? AND entity_type = ? AND local_key = ?`)
-                .bind(record.hash, now, now, record.change.connection_id, record.change.entity_type, record.change.local_key),
+                .bind(record.hash, now, record.change.connection_id, record.change.entity_type, record.change.local_key),
               env.DB.prepare("DELETE FROM airtable_change_queue WHERE id = ? AND generation = ? AND status = 'processing'")
                 .bind(record.change.id, record.change.generation),
             ]);

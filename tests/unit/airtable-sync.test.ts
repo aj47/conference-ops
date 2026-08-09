@@ -276,6 +276,8 @@ describe("Airtable synchronization", () => {
       expect(second).toMatchObject({ echoed: 1, synced: 0, failed: 0 });
       expect(fetcher).toHaveBeenCalledTimes(1);
       expect(d1.sqlite.prepare("SELECT COUNT(*) AS count FROM airtable_change_queue").get()).toEqual({ count: 0 });
+      expect(d1.sqlite.prepare("SELECT last_synced_at FROM airtable_record_maps WHERE connection_id = 'connection-a'").get())
+        .toEqual({ last_synced_at: 10 });
     } finally {
       globalThis.fetch = originalFetch;
     }
