@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "subject": {
+    "name": "Conference Ops v0.2.0",
+    "commit": "92c404a182c4b20b38469f119d1ff367f0528d48"
+  },
+  "evaluator": {
+    "name": "KillMySaaS SessionBoard Eval Kit",
+    "url": "https://forge.smol.ai/swyx/killmysaas-evals/blob/main/README.md",
+    "commit": "d99935c3e3c6c50c6b9292220260ccfe2df6d6d4"
+  },
+  "assessment": {
+    "date": "2026-08-09",
+    "projected": true,
+    "officialJudgeRun": false,
+    "method": "Read-only source, documentation, and focused-test evidence map",
+    "focusedTestFilesPassed": 14,
+    "focusedTestsPassed": 106,
+    "requiredScorePct": 64.0,
+    "requiredCoveragePct": 99.0,
+    "scoreWithheld": false,
+    "optionalCrmScorePct": 2.6
+  },
+  "scoring": {
+    "pass": 1,
+    "partial": 0.5,
+    "fail": 0,
+    "cannotJudge": "excluded from denominator",
+    "overall": "area-weighted mean of required area scores"
+  },
+  "areas": [
+    { "id": "cfp", "required": true, "areaWeight": 20, "earned": 31, "judgeable": 33, "total": 34, "scorePct": 93.9, "coveragePct": 97.1, "contribution": 18.78 },
+    { "id": "abstracts", "required": true, "areaWeight": 20, "earned": 10, "judgeable": 28, "total": 28, "scorePct": 35.7, "coveragePct": 100, "contribution": 7.14 },
+    { "id": "speakers", "required": true, "areaWeight": 15, "earned": 19.5, "judgeable": 32, "total": 33, "scorePct": 60.9, "coveragePct": 97.0, "contribution": 9.14 },
+    { "id": "content", "required": true, "areaWeight": 15, "earned": 18.5, "judgeable": 31, "total": 31, "scorePct": 59.7, "coveragePct": 100, "contribution": 8.96 },
+    { "id": "agenda", "required": true, "areaWeight": 10, "earned": 17, "judgeable": 18, "total": 18, "scorePct": 94.4, "coveragePct": 100, "contribution": 9.44 },
+    { "id": "widgets", "required": true, "areaWeight": 20, "earned": 18, "judgeable": 34, "total": 34, "scorePct": 52.9, "coveragePct": 100, "contribution": 10.58 },
+    { "id": "crm", "required": false, "areaWeight": null, "earned": 0.5, "judgeable": 19, "total": 19, "scorePct": 2.6, "coveragePct": 100, "contribution": null }
+  ],
+  "items": {
+    "cfp": [
+      { "id": "CFP-01", "weight": 3, "type": "crud", "verdict": "pass" },
+      { "id": "CFP-02", "weight": 1, "type": "depth", "verdict": "pass" },
+      { "id": "CFP-03", "weight": 3, "type": "exists", "verdict": "pass" },
+      { "id": "CFP-04", "weight": 2, "type": "rule", "verdict": "partial" },
+      { "id": "CFP-05", "weight": 3, "type": "crud", "verdict": "pass" },
+      { "id": "CFP-06", "weight": 3, "type": "roundtrip", "verdict": "pass" },
+      { "id": "CFP-07", "weight": 1, "type": "depth", "verdict": "pass" },
+      { "id": "CFP-08", "weight": 1, "type": "side-effect", "verdict": "cannot_judge" },
+      { "id": "CFP-09", "weight": 2, "type": "roundtrip", "verdict": "pass" },
+      { "id": "CFP-10", "weight": 2, "type": "scoping", "verdict": "pass" },
+      { "id": "CFP-11", "weight": 2, "type": "roundtrip", "verdict": "pass" },
+      { "id": "CFP-12", "weight": 3, "type": "crud", "verdict": "pass" },
+      { "id": "CFP-13", "weight": 2, "type": "roundtrip", "verdict": "pass" },
+      { "id": "CFP-14", "weight": 2, "type": "side-effect", "verdict": "pass" },
+      { "id": "CFP-15", "weight": 2, "type": "handoff", "verdict": "partial" },
+      { "id": "CFP-16", "weight": 2, "type": "rule", "verdict": "pass" }
+    ],
+    "abstracts": [
+      { "id": "ABS-01", "weight": 3, "type": "crud", "verdict": "partial" },
+      { "id": "ABS-02", "weight": 2, "type": "scoping", "verdict": "fail" },
+      { "id": "ABS-03", "weight": 3, "type": "crud", "verdict": "partial" },
+      { "id": "ABS-04", "weight": 1, "type": "depth", "verdict": "pass" },
+      { "id": "ABS-05", "weight": 3, "type": "scoping", "verdict": "partial" },
+      { "id": "ABS-06", "weight": 2, "type": "bulk", "verdict": "pass" },
+      { "id": "ABS-07", "weight": 2, "type": "scoping", "verdict": "fail" },
+      { "id": "ABS-08", "weight": 2, "type": "roundtrip", "verdict": "fail" },
+      { "id": "ABS-09", "weight": 1, "type": "bulk", "verdict": "fail" },
+      { "id": "ABS-10", "weight": 3, "type": "roundtrip", "verdict": "partial" },
+      { "id": "ABS-11", "weight": 2, "type": "crud", "verdict": "partial" },
+      { "id": "ABS-12", "weight": 1, "type": "depth", "verdict": "fail" },
+      { "id": "ABS-13", "weight": 2, "type": "side-effect", "verdict": "fail" },
+      { "id": "ABS-14", "weight": 1, "type": "depth", "verdict": "fail" }
+    ],
+    "speakers": [
+      { "id": "SPK-01", "weight": 3, "type": "exists", "verdict": "pass" },
+      { "id": "SPK-02", "weight": 3, "type": "crud", "verdict": "fail" },
+      { "id": "SPK-03", "weight": 2, "type": "bulk", "verdict": "fail" },
+      { "id": "SPK-04", "weight": 2, "type": "crud", "verdict": "fail" },
+      { "id": "SPK-05", "weight": 2, "type": "crud", "verdict": "partial" },
+      { "id": "SPK-06", "weight": 2, "type": "side-effect", "verdict": "pass" },
+      { "id": "SPK-07", "weight": 3, "type": "scoping", "verdict": "pass" },
+      { "id": "SPK-08", "weight": 3, "type": "roundtrip", "verdict": "partial" },
+      { "id": "SPK-09", "weight": 2, "type": "crud", "verdict": "pass" },
+      { "id": "SPK-10", "weight": 2, "type": "roundtrip", "verdict": "pass" },
+      { "id": "SPK-11", "weight": 2, "type": "roundtrip", "verdict": "fail" },
+      { "id": "SPK-12", "weight": 2, "type": "roundtrip", "verdict": "partial" },
+      { "id": "SPK-13", "weight": 2, "type": "bulk", "verdict": "pass" },
+      { "id": "SPK-14", "weight": 1, "type": "depth", "verdict": "pass" },
+      { "id": "SPK-15", "weight": 1, "type": "depth", "verdict": "pass" },
+      { "id": "SPK-16", "weight": 1, "type": "side-effect", "verdict": "cannot_judge" }
+    ],
+    "content": [
+      { "id": "CNT-01", "weight": 3, "type": "crud", "verdict": "pass" },
+      { "id": "CNT-02", "weight": 3, "type": "crud", "verdict": "pass" },
+      { "id": "CNT-03", "weight": 3, "type": "scoping", "verdict": "pass" },
+      { "id": "CNT-04", "weight": 2, "type": "rule", "verdict": "pass" },
+      { "id": "CNT-05", "weight": 2, "type": "roundtrip", "verdict": "pass" },
+      { "id": "CNT-06", "weight": 1, "type": "depth", "verdict": "partial" },
+      { "id": "CNT-07", "weight": 3, "type": "roundtrip", "verdict": "partial" },
+      { "id": "CNT-08", "weight": 2, "type": "bulk", "verdict": "pass" },
+      { "id": "CNT-09", "weight": 2, "type": "crud", "verdict": "fail" },
+      { "id": "CNT-10", "weight": 2, "type": "crud", "verdict": "fail" },
+      { "id": "CNT-11", "weight": 2, "type": "depth", "verdict": "fail" },
+      { "id": "CNT-12", "weight": 3, "type": "rule", "verdict": "partial" },
+      { "id": "CNT-13", "weight": 1, "type": "exists", "verdict": "fail" },
+      { "id": "CNT-14", "weight": 2, "type": "bulk", "verdict": "fail" }
+    ],
+    "agenda": [
+      { "id": "AIA-01", "weight": 3, "type": "exists", "verdict": "pass" },
+      { "id": "AIA-02", "weight": 2, "type": "crud", "verdict": "pass" },
+      { "id": "AIA-03", "weight": 3, "type": "crud", "verdict": "pass" },
+      { "id": "AIA-04", "weight": 3, "type": "rule", "verdict": "pass" },
+      { "id": "AIA-05", "weight": 2, "type": "rule", "verdict": "pass" },
+      { "id": "AIA-06", "weight": 2, "type": "rule", "verdict": "pass" },
+      { "id": "AIA-07", "weight": 2, "type": "handoff", "verdict": "pass" },
+      { "id": "AIA-08", "weight": 1, "type": "depth", "verdict": "fail" }
+    ],
+    "widgets": [
+      { "id": "EMB-01", "weight": 3, "type": "exists", "verdict": "partial" },
+      { "id": "EMB-02", "weight": 2, "type": "rule", "verdict": "fail" },
+      { "id": "EMB-03", "weight": 2, "type": "rule", "verdict": "partial" },
+      { "id": "EMB-04", "weight": 3, "type": "exists", "verdict": "partial" },
+      { "id": "EMB-05", "weight": 2, "type": "roundtrip", "verdict": "partial" },
+      { "id": "EMB-06", "weight": 3, "type": "exists", "verdict": "pass" },
+      { "id": "EMB-07", "weight": 2, "type": "rule", "verdict": "pass" },
+      { "id": "EMB-08", "weight": 2, "type": "exists", "verdict": "partial" },
+      { "id": "EMB-09", "weight": 2, "type": "exists", "verdict": "partial" },
+      { "id": "EMB-10", "weight": 1, "type": "depth", "verdict": "partial" },
+      { "id": "EMB-11", "weight": 1, "type": "depth", "verdict": "partial" },
+      { "id": "EMB-12", "weight": 2, "type": "exists", "verdict": "partial" },
+      { "id": "EMB-13", "weight": 1, "type": "exists", "verdict": "fail" },
+      { "id": "EMB-14", "weight": 3, "type": "scoping", "verdict": "partial" },
+      { "id": "EMB-15", "weight": 2, "type": "handoff", "verdict": "partial" },
+      { "id": "EMB-16", "weight": 3, "type": "roundtrip", "verdict": "partial" }
+    ],
+    "crm": [
+      { "id": "CRM-01", "weight": 3, "type": "exists", "verdict": "fail" },
+      { "id": "CRM-02", "weight": 2, "type": "rule", "verdict": "fail" },
+      { "id": "CRM-03", "weight": 2, "type": "roundtrip", "verdict": "fail" },
+      { "id": "CRM-04", "weight": 1, "type": "depth", "verdict": "fail" },
+      { "id": "CRM-05", "weight": 2, "type": "bulk", "verdict": "fail" },
+      { "id": "CRM-06", "weight": 1, "type": "depth", "verdict": "fail" },
+      { "id": "CRM-07", "weight": 2, "type": "crud", "verdict": "fail" },
+      { "id": "CRM-08", "weight": 1, "type": "depth", "verdict": "fail" },
+      { "id": "CRM-09", "weight": 1, "type": "depth", "verdict": "fail" },
+      { "id": "CRM-10", "weight": 2, "type": "handoff", "verdict": "fail" },
+      { "id": "CRM-11", "weight": 1, "type": "bulk", "verdict": "partial" },
+      { "id": "CRM-12", "weight": 1, "type": "depth", "verdict": "fail" }
+    ]
+  }
+}
