@@ -583,7 +583,7 @@ test("organizer requests a controlled proposal revision with an auditable note",
   }
   const overflow = await page.evaluate(() => {
     const root = document.documentElement;
-    const offenders = [...document.querySelectorAll<HTMLElement>("body *")]
+    const geometry = [...document.querySelectorAll<HTMLElement>("body *")]
       .map((element) => {
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
@@ -597,8 +597,13 @@ test("organizer requests a controlled proposal revision with an auditable note",
           text: (element.innerText ?? element.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 100),
         };
       })
-      .filter((entry) => entry.width > 0 && (entry.right > root.clientWidth + 0.5 || entry.left < -0.5))
-      .slice(0, 12);
+      .filter((entry) => entry.width > 0);
+    const offenders = [
+      ...geometry.filter((entry) => entry.right > root.clientWidth + 0.5)
+        .sort((left, right) => right.right - left.right),
+      ...geometry.filter((entry) => entry.left < -0.5)
+        .sort((left, right) => left.left - right.left),
+    ].slice(0, 20);
     return { clientWidth: root.clientWidth, scrollWidth: root.scrollWidth, offenders };
   });
   expect(overflow.scrollWidth, JSON.stringify(overflow)).toBeLessThanOrEqual(overflow.clientWidth);
