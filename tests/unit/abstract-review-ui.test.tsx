@@ -13,6 +13,7 @@ vi.mock("../../src/client/workspace", () => ({
 }));
 
 import { AbstractReviewControl } from "../../src/client/AbstractReviewControl";
+import { EvaluationPlanStudio } from "../../src/client/EvaluationPlanStudio";
 import { FormResponseList } from "../../src/client/FormResponseList";
 
 let container: HTMLDivElement;
@@ -34,11 +35,38 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 describe("abstract review command center", () => {
+  it("renders review-round dates in the event timezone instead of the browser timezone", async () => {
+    const workspace = createDemoWorkspace("user-organizer");
+    workspaceState.current = { workspace, setNotice: vi.fn() };
+    vi.stubEnv("TZ", "UTC");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith("/review-plans")) return json({ plans: [{
+        id: "round-a", eventId: workspace.event.id, name: "Initial Review", round: 1, status: "active",
+        opensAt: "2026-08-01T00:00:00.000Z", closesAt: "2026-10-15T23:59:00.000Z",
+        anonymized: true, rubric: [{ id: "fit", label: "Program fit", type: "numeric", weight: 1, maxScore: 5 }],
+        reviewerIds: [], reviewerCaps: {}, submittedReviews: 0, updatedAt: "2026-08-09T00:00:00.000Z",
+      }] });
+      if (path.endsWith("/abstract-review")) return json({ reviewers: [], assignments: [], aiEvaluations: [], results: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    }));
+
+    await act(async () => {
+      root.render(<EvaluationPlanStudio />);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const dateInputs = container.querySelectorAll<HTMLInputElement>('input[type="datetime-local"]');
+    expect(dateInputs[0]?.value).toBe("2026-07-31T17:00");
+    expect(dateInputs[1]?.value).toBe("2026-10-15T16:59");
+  });
+
   it("renders proposal evidence without participant answers in a blind-review projection", async () => {
     const base = createDemoWorkspace("user-reviewer").proposals[0];
     const projected = workspaceProposalForRole({

@@ -4,7 +4,7 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => window.localStorage.clear());
 });
 
-test("organizer can assign, remind, compare, and explicitly override bounded AI triage", async ({ page }) => {
+test("organizer can assign, remind, compare, and explicitly override bounded AI triage", async ({ page, isMobile }) => {
   await page.goto("/proposals?eventId=event-aie-2026&role=organizer");
 
   await expect(page.getByRole("heading", { name: "Assign, monitor, and compare the committee." })).toBeVisible();
@@ -29,6 +29,12 @@ test("organizer can assign, remind, compare, and explicitly override bounded AI 
     .map((element) => ({ tag: element.tagName, className: element.getAttribute("class"), text: element.textContent?.trim().slice(0, 80), right: element.getBoundingClientRect().right }))
     .filter((element) => element.right > window.innerWidth + 1));
   expect(overflow).toEqual([]);
+  if (isMobile) {
+    const triage = page.locator(".ai-triage");
+    expect(await triage.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const proposalField = triage.locator(".field");
+    expect(await proposalField.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
 });
 
 test("organizer can inspect separate dated rounds and author all rubric field types", async ({ page }) => {

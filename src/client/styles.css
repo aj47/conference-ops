@@ -1951,7 +1951,8 @@ h3 { font-size: 1.06rem; line-height: 1.2; }
   .evaluation-pool__reviewer, .review-ops-switcher, .assignment-matrix__controls, .ai-evaluation-card__override, .recusal-control > div { grid-template-columns: 1fr; }
   .evaluation-studio__actions > span, .ai-triage > .section-heading { align-items: stretch; flex-direction: column; }
   .evaluation-studio__actions .button, .assignment-matrix__controls > .button { width: 100%; }
-  .ai-triage > .section-heading .field { min-width: 0; width: 100%; max-width: 100%; }
+  .ai-triage, .ai-triage > .section-heading, .ai-triage > .section-heading .field { min-width: 0; max-width: 100%; overflow: hidden; }
+  .ai-triage > .section-heading .field { width: 100%; }
   .ai-triage > .section-heading .field select { min-width: 0; width: 100%; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .review-results__table { overflow: visible; }
   .review-results__table .data-table { min-width: 0; table-layout: fixed; }

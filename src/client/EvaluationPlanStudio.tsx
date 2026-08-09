@@ -3,19 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReviewPlanDefinition, ReviewRubricCriterion } from "../shared/domain";
 import { abstractReviewApi, type ReviewPlanDraft } from "./abstract-review-api";
 import { EmptyState, Field, InlineAlert, StatusPill } from "./components";
+import { dateTimeLocalToInstant, instantToDateTimeLocal } from "./event-time";
 import { useWorkspace } from "./workspace";
-
-function localDateTime(value?: string) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const offset = date.getTimezoneOffset() * 60_000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-}
-
-function isoDateTime(value: string) {
-  return value ? new Date(value).toISOString() : undefined;
-}
 
 function initialRubric(): ReviewRubricCriterion[] {
   return [
@@ -152,8 +141,8 @@ export function EvaluationPlanStudio() {
           <div className="field-grid field-grid--2">
             <Field label="Round name"><input required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
             <Field label="Review availability"><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as ReviewPlanDefinition["status"] })}><option value="draft">Draft · configuring</option><option value="active">Open for review</option><option value="closed">Closed</option></select></Field>
-            <Field label="Opens"><input type="datetime-local" value={localDateTime(draft.opensAt)} onChange={(event) => setDraft({ ...draft, opensAt: isoDateTime(event.target.value) })} /></Field>
-            <Field label="Closes"><input type="datetime-local" value={localDateTime(draft.closesAt)} onChange={(event) => setDraft({ ...draft, closesAt: isoDateTime(event.target.value) })} /></Field>
+            <Field label="Opens"><input type="datetime-local" value={draft.opensAt ? instantToDateTimeLocal(draft.opensAt, workspace.event.timezone) : ""} onChange={(event) => setDraft({ ...draft, opensAt: event.target.value ? dateTimeLocalToInstant(event.target.value, workspace.event.timezone) : undefined })} /></Field>
+            <Field label="Closes"><input type="datetime-local" value={draft.closesAt ? instantToDateTimeLocal(draft.closesAt, workspace.event.timezone) : ""} onChange={(event) => setDraft({ ...draft, closesAt: event.target.value ? dateTimeLocalToInstant(event.target.value, workspace.event.timezone) : undefined })} /></Field>
           </div>
           <label className="blind-review-switch"><input type="checkbox" checked={Boolean(draft.anonymized)} onChange={(event) => setDraft({ ...draft, anonymized: event.target.checked })} /><EyeOff size={18} /><span><strong>Blind reviewer view</strong><small>Hide presenter names, companies, bios, and headshots from reviewers in this round. Organizers retain full identity context.</small></span></label>
           {locked && <InlineAlert tone="info"><strong>Submitted evidence is locked.</strong> {draft.submittedReviews} final review{draft.submittedReviews === 1 ? "" : "s"} use this scorecard. Dates, availability, and pool can still be managed without rewriting those responses.</InlineAlert>}
