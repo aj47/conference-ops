@@ -399,4 +399,186 @@ describe("production public submission mutation contract", () => {
     expect(window.location.search).toBe("");
     expect(container.textContent).not.toContain("Editing account draft.");
   });
+
+  it("lets the verified owner open a submitted proposal for editing from the account list", async () => {
+    const submitted: Proposal = {
+      id: "proposal-submitted",
+      eventId: event.id,
+      version: 2,
+      title: applicantSubmission.title,
+      summary: applicantSubmission.summary,
+      category: applicantSubmission.category,
+      format: "talk",
+      durationMinutes: 30,
+      level: "advanced",
+      status: "under_review",
+      speakers: [{
+        id: "speaker-ada",
+        name: "Ada María Rivera",
+        email: "ada.verified@example.com",
+        title: "Staff Engineer",
+        company: "Northstar",
+        bio: "Builds durable agent systems.",
+        profileComplete: true,
+      }],
+      submittedAt: "2027-02-01T12:00:00.000Z",
+      reviewCount: 1,
+      tags: [],
+      responses: {
+        "production-title": applicantSubmission.title,
+        "production-abstract": applicantSubmission.summary,
+        "production-lane": applicantSubmission.category,
+        "production-format": "Talk",
+      },
+      form: publicForm,
+    };
+    const snapshot = createDemoWorkspace("user-applicant");
+    const applicantSnapshot = {
+      ...snapshot,
+      demoMode: false,
+      event,
+      actor: { id: "user-verified", name: "Ada María Rivera", email: "ada.verified@example.com", role: "applicant" as const },
+      actors: [{ id: "user-verified", name: "Ada María Rivera", email: "ada.verified@example.com", role: "applicant" as const }],
+      forms: [publicForm],
+      proposals: [submitted],
+      reviews: [],
+      tasks: [],
+      tracks: [],
+      rooms: [],
+      sessions: [],
+      resources: [],
+      embeds: [],
+      activity: [],
+    };
+    vi.spyOn(conferenceApi, "publicEvent").mockResolvedValue({ event, form: publicForm, sessions: [], speakers: [], resources: [] });
+    vi.spyOn(conferenceApi, "bootstrap").mockResolvedValue(applicantSnapshot);
+    const reopen = vi.spyOn(conferenceApi, "reopenSubmission").mockResolvedValue({
+      id: submitted.id,
+      status: "revision_open",
+      version: 3,
+      revisionRequestedAt: "2027-02-03T12:00:00.000Z",
+      revokedAssignments: 1,
+      submittedReviewsPreserved: 1,
+    });
+
+    await act(async () => {
+      root.render(
+        <BrowserRouter>
+          <WorkspaceProvider>
+            <Routes><Route path="/submit/:slug" element={<PublicSubmissionWizard />} /></Routes>
+          </WorkspaceProvider>
+        </BrowserRouter>,
+      );
+    });
+
+    const editButton = () => [...container.querySelectorAll("button")]
+      .find((candidate) => candidate.textContent?.includes("Edit submission"));
+    await vi.waitFor(() => expect(editButton()).toBeTruthy());
+    await act(async () => editButton()!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+    await vi.waitFor(() => expect(reopen).toHaveBeenCalledWith(expect.any(String), event.id, submitted.id));
+    await vi.waitFor(() => expect(container.textContent).toContain("You opened this submission for editing."));
+    expect(window.location.search).toContain(`edit=${submitted.id}`);
+    expect(container.textContent).toContain("Requested revision restored · version 3");
+  });
+
+  it("shows an organizer revision note, saves progress, and resubmits the pinned proposal version", async () => {
+    const revision: Proposal = {
+      id: "proposal-revision",
+      eventId: event.id,
+      version: 5,
+      title: applicantSubmission.title,
+      summary: applicantSubmission.summary,
+      category: applicantSubmission.category,
+      format: "talk",
+      durationMinutes: 30,
+      level: "advanced",
+      status: "changes_requested",
+      revisionRequest: {
+        note: "Clarify the benchmark and name the trace artifact reviewers can inspect.",
+        requestedAt: "2027-02-02T12:00:00.000Z",
+      },
+      speakers: [{
+        id: "speaker-ada",
+        name: "Ada María Rivera",
+        email: "ada.verified@example.com",
+        title: "Staff Engineer",
+        company: "Northstar",
+        bio: "Builds durable agent systems.",
+        profileComplete: true,
+      }],
+      submittedAt: "2027-02-01T12:00:00.000Z",
+      reviewCount: 1,
+      tags: [],
+      responses: {
+        "production-title": applicantSubmission.title,
+        "production-abstract": applicantSubmission.summary,
+        "production-lane": applicantSubmission.category,
+        "production-format": "Talk",
+        "production-evidence": "Thirty days of traces and incident reports.",
+      },
+      form: publicForm,
+    };
+    const snapshot = createDemoWorkspace("user-applicant");
+    vi.spyOn(conferenceApi, "publicEvent").mockResolvedValue({ event, form: publicForm, sessions: [], speakers: [], resources: [] });
+    vi.spyOn(conferenceApi, "bootstrap").mockResolvedValue({
+      ...snapshot,
+      demoMode: false,
+      event,
+      actor: { id: "user-verified", name: "Ada María Rivera", email: "ada.verified@example.com", role: "applicant" },
+      actors: [{ id: "user-verified", name: "Ada María Rivera", email: "ada.verified@example.com", role: "applicant" }],
+      forms: [publicForm],
+      proposals: [revision],
+      reviews: [],
+      tasks: [],
+      tracks: [],
+      rooms: [],
+      sessions: [],
+      resources: [],
+      embeds: [],
+      activity: [],
+    });
+    vi.spyOn(conferenceApi, "enroll").mockResolvedValue({ eventId: event.id, role: "applicant", enrolled: false });
+    const update = vi.spyOn(conferenceApi, "updateSubmission")
+      .mockResolvedValueOnce({ id: revision.id, status: "changes_requested", version: 6, updatedAt: "2027-02-03T12:00:00.000Z" })
+      .mockResolvedValueOnce({ id: revision.id, status: "under_review", version: 7, updatedAt: "2027-02-03T12:05:00.000Z" });
+    window.history.replaceState({}, "", `/submit/${event.slug}?edit=${revision.id}`);
+
+    await act(async () => {
+      root.render(
+        <BrowserRouter>
+          <WorkspaceProvider>
+            <Routes><Route path="/submit/:slug" element={<PublicSubmissionWizard />} /></Routes>
+          </WorkspaceProvider>
+        </BrowserRouter>,
+      );
+    });
+
+    const button = (label: RegExp) => [...container.querySelectorAll("button")]
+      .find((candidate) => label.test(candidate.textContent ?? ""));
+    const click = async (label: RegExp) => {
+      await vi.waitFor(() => expect(button(label)).toBeTruthy());
+      await act(async () => button(label)!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    };
+
+    await vi.waitFor(() => expect(container.textContent).toContain("The program team requested changes."));
+    expect(container.textContent).toContain("Clarify the benchmark and name the trace artifact reviewers can inspect.");
+    expect(container.textContent).toContain("Requested revision restored · version 5");
+    await click(/Save revision progress/);
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][3]).toMatchObject({ expectedVersion: 5, submit: false });
+
+    await click(/^Continue/);
+    await vi.waitFor(() => expect(container.textContent).toContain("Who will be on stage?"));
+    await click(/^Continue/);
+    await vi.waitFor(() => expect(container.textContent).toContain("Final reviews already submitted remain preserved"));
+    const permission = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    await act(async () => permission.click());
+    await click(/Resubmit revision/);
+
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update.mock.calls[1][3]).toMatchObject({ expectedVersion: 6, submit: true });
+    await vi.waitFor(() => expect(container.textContent).toContain("Your revision is back in review."));
+    expect(container.textContent).toContain("historical final reviews were preserved");
+  });
 });

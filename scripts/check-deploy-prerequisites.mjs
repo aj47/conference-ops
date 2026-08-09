@@ -69,6 +69,17 @@ if (inputsOnly) {
     requiredEnvironment("ACCELEVENTS_API_KEY");
   }
 
+  const airtableEnabled = optionalBoolean("AIRTABLE_ENABLED");
+  if (airtableEnabled) {
+    if (!/^app[A-Za-z0-9]+$/.test(requiredEnvironment("AIRTABLE_BASE_ID"))) throw new Error("AIRTABLE_BASE_ID must be a valid base ID");
+    requiredEnvironment("AIRTABLE_TOKEN");
+    requiredEnvironment("AIRTABLE_WEBHOOK_MAC_SECRET");
+    const authority = requiredEnvironment("AIRTABLE_AUTHORITY_DEFAULT");
+    if (!["d1", "airtable"].includes(authority)) throw new Error("AIRTABLE_AUTHORITY_DEFAULT must be d1 or airtable");
+    const requestsPerSecond = Number(process.env.AIRTABLE_MAX_REQUESTS_PER_SECOND || "4");
+    if (!Number.isFinite(requestsPerSecond) || requestsPerSecond <= 0 || requestsPerSecond > 4) throw new Error("AIRTABLE_MAX_REQUESTS_PER_SECOND must be between 0 and 4");
+  }
+
   process.stdout.write(`${JSON.stringify({ environment, inputsValid: true })}\n`);
   process.exit(0);
 }

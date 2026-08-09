@@ -8,15 +8,16 @@ Browser / public embed
         v
 App Worker + static assets ---- service binding ----> Realtime Worker
         |                                              Durable Objects
-        +---- D1 (workflow and auth state)
+        +---- D1 (transactional workflow mirror and auth state)
         +---- private R2 (uploads)
         +---- Jobs Queue ----> Jobs Worker ----> Email Routing
-                                  |   |
+                                  |   |   |
+                                  |   |   +----> Airtable canonical records
                                   |   +--------> Accelevents (optional)
                                   +------------> D1 outbox / sync records
 ```
 
-The application Worker serves the built SPA and the Hono API. D1 is the source of truth. External integrations are projections of local state and never become authoritative for proposals, people, tasks, or the agenda.
+The application Worker serves the built SPA and the Hono API. When Airtable is commissioned, Airtable is the canonical system of record for registered business data and D1 is the transactional workflow mirror used for validated, event-scoped operations. When Airtable is disabled, D1 remains authoritative. Better Auth state, permissions, raw R2 bytes, outbox leases, and integration bookkeeping are always operational Cloudflare state rather than Airtable records.
 
 ## Runtime components
 
@@ -26,7 +27,7 @@ The App Worker terminates HTTP requests, runs Better Auth, enforces event roles,
 
 Every state-changing operation should remain event-scoped and auditable. Optimistic versions protect editable forms, proposals, and sessions from stale writes. A published form points to `published_version`; organizers can continue an unpublished `current_version` without changing the public CFP.
 
-Fresh-event creation is a transactional workflow rather than an empty database shell. It grants the creator organizer membership and initializes a private CFP draft/version with standard proposal and participant fields, a General reviewer group and active weighted review round, a Main room and General track, hotel-stay and flight-reimbursement portal forms, a slide file request, profile/slides/calendar task templates, five editable workflow messages, two scheduled reminder rules, and agenda/gallery embeds. Program setup exposes event-scoped track/reviewer routing, persistent task/form/file-request authoring, message/reminder editing, and a read-only readiness assistant. Organizers can create, edit, and delete event-scoped rooms and tracks afterward; duplicate resources and deletion of resources already used by sessions are rejected.
+Fresh-event creation is a transactional workflow rather than an empty database shell. It grants the creator organizer membership and initializes a private CFP draft/version with standard proposal and participant fields, a General reviewer group and active weighted review round, a Main room and General track, hotel-stay and flight-reimbursement portal forms, a slide file request, profile/slides/calendar task templates, five editable workflow messages, two scheduled reminder rules, and agenda/gallery embeds. Program setup exposes event-scoped track/reviewer routing, review-plan/rubric editing, persistent task/form/file-request authoring, participant resources, message/reminder editing and delivery history, and a read-only readiness assistant. Organizers can create, edit, and delete event-scoped rooms and tracks afterward; duplicate resources and deletion of resources already used by sessions are rejected.
 
 Submitted proposals store every selected CFP track and materialize the union of eligible reviewers covering those tracks. Final acceptance is one guarded D1 batch: it records the decision, activates claimed speaker membership/publication, creates one linked unscheduled session, attaches its speaker roster, instantiates contact- and proposal-scoped onboarding tasks, and persists the configured decision email before Queue dispatch.
 
@@ -45,6 +46,14 @@ The uploads bucket is private. D1 stores metadata and ownership while R2 stores 
 Email and calendar work enters the environment-specific jobs queue. The Worker records idempotency keys in the D1 outbox before delivery, retries transient failures with backoff, and routes exhausted messages to a dedicated DLQ. The scheduled trigger marks due speaker tasks overdue, persists deduplicated overdue-task and CFP-draft reminders from organizer-configured rules, and re-enqueues due `queued` or `failed` outbox records.
 
 This creates two recovery views: Cloudflare Queue/DLQ for transport failures and D1 outbox rows for product-level status and operator context. Replaying either path must preserve the original idempotency key.
+
+### Airtable canonical records
+
+The Airtable connector represents every registered business row as canonical JSON in `Conference Ops Records`, with stable external keys, entity type, event identifier, tombstone state, source version, and reconciliation hashes. D1 triggers enqueue inserts, updates, and deletes; the Jobs Worker batches and rate-limits Airtable writes, renews the webhook, and records remote mappings and conflicts.
+
+Authority changes are explicit for the single environment-wide connection. Event-scoped connectors fail closed. In `d1` mode, remote drift is restored from D1. In `airtable` mode, allowlisted descriptive edits are identity-bound, validated, and applied to D1 with the required version/timestamp/calendar side effects, after which the normal triggers echo the canonical result. Lifecycle transitions, identity/permission changes, referential edits, and deletions never become raw spreadsheet SQL; they require an idempotent `Workflow Commands` adapter or are rejected into the conflict queue. This preserves Airtable as the business source of truth without allowing a spreadsheet to bypass domain invariants.
+
+Initial cutover always starts in `d1` mode, performs a full reconciliation, checks counts/hashes/conflicts, and only then switches authority through a Workflow Command. See [infra/AIRTABLE.md](infra/AIRTABLE.md).
 
 ### Realtime Worker
 
@@ -113,4 +122,5 @@ Production promotion is manual and protected. Migration compatibility should spa
 - Realtime regression: roll back code only when the Durable Object storage migration is compatible; otherwise ship a forward fix.
 - Bad D1 migration or data mutation: stop writers, identify the pre-change bookmark/backup, rehearse restore into staging, then restore production under an incident record.
 - Accelevents outage or API mismatch: mark records `manual_action` and use the controlled CSV workflow. Local state remains authoritative.
+- Airtable outage or conflict: keep D1 serving the last validated mirror, pause authority-changing commands, inspect `airtable_conflicts` and dead changes, then resume with the same external keys and webhook cursor. Never recreate canonical rows with new keys as an improvised repair.
 - Terraform state loss: restore an encrypted state copy or import the existing resources. Never recreate stateful resources under new names as an improvised recovery.

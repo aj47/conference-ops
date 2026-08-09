@@ -1,7 +1,7 @@
 export const OUTBOX_MAX_DELIVERY_ATTEMPTS = 5;
 export const OUTBOX_STALE_AFTER_MS = 10 * 60 * 1000;
 
-export type OutboxKind = "email" | "calendar" | "accelevents";
+export type OutboxKind = "email" | "calendar" | "accelevents" | "airtable";
 export type OutboxStatus = "queued" | "processing" | "sent" | "failed" | "dead";
 
 export interface JobBody {

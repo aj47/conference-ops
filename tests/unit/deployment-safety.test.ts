@@ -51,9 +51,10 @@ function generatedConfig(environment: DeployEnvironment) {
 
 function readinessBindings(overrides: Partial<Bindings> = {}): Bindings {
   const first = vi.fn().mockResolvedValue({ ok: 1 });
+  const all = vi.fn().mockResolvedValue({ results: [] });
   const fetch = vi.fn().mockResolvedValue(Response.json({ status: "ok", service: "conference-ops-realtime", durableObject: true }));
   return {
-    DB: { prepare: vi.fn(() => ({ first })) } as unknown as D1Database,
+    DB: { prepare: vi.fn(() => ({ first, all })) } as unknown as D1Database,
     UPLOADS: {} as R2Bucket,
     JOBS_QUEUE: {} as Queue,
     REALTIME: { fetch } as unknown as Fetcher,
@@ -222,6 +223,41 @@ describe("authenticated readiness", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ status: "not_ready", checks: { configuration: "failed", database: "skipped", realtime: "skipped" } });
     expect(bindings.DB.prepare).not.toHaveBeenCalled();
+  });
+
+  it("fails readiness when Airtable is authoritative but its integrity gates are not clean", async () => {
+    const realtimeFetch = vi.fn().mockResolvedValue(Response.json({ status: "ok" }));
+    const prepare = vi.fn((sql: string) => ({
+      first: vi.fn().mockResolvedValue(sql === "SELECT 1 AS ok" ? { ok: 1 } : null),
+      all: vi.fn().mockResolvedValue({ results: [{
+        event_id: null,
+        enabled: 1,
+        status: "degraded",
+        webhook_id: "achWebhook123",
+        webhook_expires_at: Date.now() + 86_400_000,
+        last_reconciled_at: Date.now() - 60_000,
+        reconciliation_started_at: null,
+        pending_changes: 1,
+        dead_changes: 0,
+        open_conflicts: 0,
+      }] }),
+    }));
+    const bindings = readinessBindings({
+      DB: { prepare } as unknown as D1Database,
+      REALTIME: { fetch: realtimeFetch } as unknown as Fetcher,
+      AIRTABLE_ENABLED: "true",
+      AIRTABLE_AUTHORITY_DEFAULT: "airtable",
+    });
+    const response = await app.request("https://conference.example.com/api/ready", {
+      headers: { authorization: `Bearer ${readinessToken}` },
+    }, bindings);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      status: "not_ready",
+      checks: { configuration: "ok", database: "ok", airtable: "failed", realtime: "skipped" },
+    });
+    expect(realtimeFetch).not.toHaveBeenCalled();
   });
 
 });

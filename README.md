@@ -1,18 +1,20 @@
 # Conference Ops
 
-Conference Ops is a Cloudflare-native workspace for running a call for proposals through review, speaker onboarding, scheduling, publishing, and external event-platform handoff. It is designed around the work an organizer actually needs to finish: versioned forms, track-to-reviewer routing, review queues, automatic acceptance activation, organizer-authored onboarding forms and file requests, conflict-aware scheduling, a speaker portal, working communications/calendar delivery, public embeds, audit history, and operational reporting.
+Conference Ops is a Cloudflare-native workspace for running a call for proposals through review, speaker onboarding, scheduling, publishing, and external event-platform handoff. It is designed around the work an organizer actually needs to finish: multiple versioned CFPs, track-to-reviewer routing, review queues, controlled revisions, automatic acceptance activation, organizer-authored onboarding forms and file requests, collaborative file history, conflict-aware scheduling, participant resources, working communications/calendar delivery, public embeds, Airtable canonical records, audit history, and operational reporting.
 
 **Live walkthrough:** [conference-ops-staging-app.techfren.workers.dev](https://conference-ops-staging-app.techfren.workers.dev) · [Public CFP](https://conference-ops-staging-app.techfren.workers.dev/submit/ai-engineer-summit-2026) · [Published agenda](https://conference-ops-staging-app.techfren.workers.dev/events/ai-engineer-summit-2026/agenda)
 
 The staging walkthrough starts in demo mode and includes an in-product persona switcher for organizer, reviewer, applicant, and speaker journeys. No setup or credentials are required.
 
-Organizers can also start from a clean account instead of seed data. Creating an event grants organizer access and initializes a private CFP draft, a routed review round, a Main room and General track, hotel-stay and flight-reimbursement forms, profile/slides/calendar tasks, decision and reminder templates, scheduled reminder rules, and public agenda/gallery embeds. The **Program setup** workspace lets organizers map every CFP track to one or more reviewers, edit persistent onboarding tasks, write the messages the workflow actually sends, tune reminder timing, and ask a read-only readiness assistant what needs attention next. Rooms and tracks remain fully organizer-managed as the venue plan changes.
+Organizers can also start from a clean account instead of seed data. Creating an event grants organizer access and initializes a private CFP draft, a routed review round, a Main room and General track, hotel-stay and flight-reimbursement forms, profile/slides/calendar tasks, decision and reminder templates, scheduled reminder rules, and public agenda/gallery embeds. The **Program setup** workspace lets organizers map every CFP track to one or more reviewers, configure the active scoring plan, edit persistent onboarding tasks, publish participant resources, write the messages the workflow actually sends, tune reminder timing, and ask a read-only readiness assistant what needs attention next. Rooms and tracks remain fully organizer-managed as the venue plan changes.
+
+The current product boundary and the evidence-backed comparison with Sessionboard's participant and organizer workflows are documented in [docs/SESSIONBOARD-PARITY.md](docs/SESSIONBOARD-PARITY.md).
 
 ## Prospective-client pilot
 
 The persistent organizer pilot is a separate, non-demo Workers.dev environment. Each prospect creates and verifies an account, receives an isolated organization, and creates an event from scratch. The in-product Control Room includes a nine-step trial runway and links to the bundled [Organizer Trial Guide](public/conference-ops-organizer-trial-guide.pdf).
 
-The pilot defaults to a 30-day evaluation, synthetic or representative test data, Cloudflare D1 as the authoritative database, native Cloudflare email, and disabled Airtable/Accelevents integrations. Provision it with the `pilot` Terraform and Wrangler environment; do not reuse the demo staging database or its persona switcher.
+The pilot defaults to a 30-day evaluation, synthetic or representative test data, native Cloudflare email, and disabled Accelevents. Airtable is the canonical business-record system when its per-environment connection is commissioned; D1 remains the transactional workflow mirror and continues to own authentication, authorization, queue leases, and upload metadata. Provision it with the `pilot` Terraform and Wrangler environment; do not reuse the demo staging database or its persona switcher.
 
 ## Stack
 
@@ -21,6 +23,7 @@ The pilot defaults to a 30-day evaluation, synthetic or representative test data
 - Cloudflare D1 for relational state
 - private R2 storage for speaker files
 - Cloudflare Queues plus a DLQ for email, calendar, and integration jobs
+- Airtable canonical business records with webhook reconciliation and guarded Workflow Commands
 - a Durable Object Worker for event-scoped realtime updates
 - Terraform for stateful account resources; Wrangler for Worker code, bindings, routes, and Durable Object migrations
 
@@ -96,9 +99,9 @@ Infrastructure is split deliberately:
 
 Pushes to `main` always verify. They deploy staging only after the repository variable `DEPLOY_ENABLED=true` is deliberately set; this keeps the initial repository green before Cloudflare state and secrets exist. Production is manual and should use a protected GitHub Environment with required reviewers. Demo seeding is an explicit staging-only workflow option and defaults off.
 
-Release status on 2026-08-08: the linked demo staging environment was provisioned manually and is not yet imported into Terraform state; production is not provisioned. Do not run Terraform apply against the live staging resources until the state bucket exists and those exact resources have been imported and reconciled to a zero-change plan.
+Release status on 2026-08-09: the linked demo staging environment was provisioned manually and is not yet imported into Terraform state; production is not provisioned. Do not run Terraform apply against the live staging resources until the state bucket exists and those exact resources have been imported and reconciled to a zero-change plan.
 
-Before the first deployment, complete [infra/DEPLOYMENT_CHECKLIST.md](infra/DEPLOYMENT_CHECKLIST.md). Integration behavior and the manual import path are in [infra/ACCELEVENTS.md](infra/ACCELEVENTS.md).
+Before the first deployment, complete [infra/DEPLOYMENT_CHECKLIST.md](infra/DEPLOYMENT_CHECKLIST.md). Airtable provisioning, authority cutover, and recovery are in [infra/AIRTABLE.md](infra/AIRTABLE.md). Accelevents remains optional and is documented in [infra/ACCELEVENTS.md](infra/ACCELEVENTS.md).
 
 ## Useful commands
 

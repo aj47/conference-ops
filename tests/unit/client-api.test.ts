@@ -127,6 +127,57 @@ describe("conference client communication and export requests", () => {
     );
   });
 
+  it("opens a controlled proposal revision with an organizer note", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        proposalId: "proposal-1",
+        status: "changes_requested",
+        note: "Clarify the benchmark and attach the promised evidence.",
+        revisionRequestedAt: "2026-08-08T12:00:00.000Z",
+        revokedAssignments: 2,
+        submittedReviewsPreserved: 1,
+        messagesQueued: 1,
+        messagesDispatched: 1,
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(conferenceApi.requestProposalChanges(
+      "user-organizer",
+      "event-aie-2026",
+      "proposal-1",
+      "Clarify the benchmark and attach the promised evidence.",
+    )).resolves.toMatchObject({ status: "changes_requested", submittedReviewsPreserved: 1 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/events/event-aie-2026/proposals/proposal-1/request-changes",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ note: "Clarify the benchmark and attach the promised evidence." }),
+      }),
+    );
+  });
+
+  it("opens an applicant-owned submitted proposal for editing", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        id: "proposal-1",
+        status: "revision_open",
+        version: 4,
+        revisionRequestedAt: "2026-08-08T12:00:00.000Z",
+        revokedAssignments: 1,
+        submittedReviewsPreserved: 2,
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(conferenceApi.reopenSubmission("user-applicant", "event-aie-2026", "proposal-1"))
+      .resolves.toMatchObject({ status: "revision_open", version: 4 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/events/event-aie-2026/submissions/proposal-1/reopen",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("queues a communication with the selected profiles and idempotency key", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: { queued: 2, idempotencyKey: "send-1" },
@@ -157,6 +208,40 @@ describe("conference client communication and export requests", () => {
           "x-demo-actor": "user-organizer",
         },
       }),
+    );
+  });
+
+  it("loads the organizer's event-scoped communication delivery history", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: {
+        deliveries: [{
+          id: "delivery-1",
+          kind: "reminder",
+          transport: "email",
+          recipient: "speaker@example.test",
+          subject: "Tasks due",
+          status: "sent",
+          attempts: 1,
+          createdAt: "2026-08-08T12:00:00.000Z",
+          updatedAt: "2026-08-08T12:00:08.000Z",
+          sentAt: "2026-08-08T12:00:08.000Z",
+        }],
+        generatedAt: "2026-08-08T12:01:00.000Z",
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(conferenceApi.communicationHistory("user-organizer", "event-aie-2026")).resolves.toMatchObject({
+      deliveries: [{ id: "delivery-1", status: "sent" }],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/events/event-aie-2026/communications/history",
+      {
+        headers: {
+          "content-type": "application/json",
+          "x-demo-actor": "user-organizer",
+        },
+      },
     );
   });
 
@@ -413,6 +498,36 @@ describe("conference client venue resource requests", () => {
       headers: { "content-type": "application/json", "x-demo-actor": "user-organizer" },
     });
     expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/events/event%2Fa/rooms/room%2Fa", {
+      method: "DELETE",
+      headers: { "content-type": "application/json", "x-demo-actor": "user-organizer" },
+    });
+  });
+});
+
+describe("conference client participant resource requests", () => {
+  it("creates, publishes, and deletes event-scoped wiki pages", async () => {
+    const draft = { title: "Arrival guide", slug: "arrival-guide", summary: "Day-of logistics.", body: "Use the north entrance.", linkUrl: "https://events.example.com/arrival", status: "draft" as const };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { id: "resource-a", ...draft, updatedAt: "2026-08-08T12:00:00.000Z" } }), { status: 201, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { id: "resource-a", ...draft, status: "published", updatedAt: "2026-08-08T12:01:00.000Z" } }), { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { id: "resource-a", deleted: true } }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await conferenceApi.createResourcePage("user-organizer", "event/a", draft);
+    await conferenceApi.updateResourcePage("user-organizer", "event/a", "resource/a", { ...draft, status: "published" });
+    await conferenceApi.deleteResourcePage("user-organizer", "event/a", "resource/a");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/events/event%2Fa/resources", {
+      method: "POST",
+      body: JSON.stringify(draft),
+      headers: { "content-type": "application/json", "x-demo-actor": "user-organizer" },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/events/event%2Fa/resources/resource%2Fa", {
+      method: "PUT",
+      body: JSON.stringify({ ...draft, status: "published" }),
+      headers: { "content-type": "application/json", "x-demo-actor": "user-organizer" },
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/events/event%2Fa/resources/resource%2Fa", {
       method: "DELETE",
       headers: { "content-type": "application/json", "x-demo-actor": "user-organizer" },
     });

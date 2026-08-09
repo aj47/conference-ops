@@ -74,7 +74,7 @@ describe("demo API smoke flow", () => {
         form: { status: string };
         sessions: Array<{ status: string; trackName?: string; trackColor?: string; roomName?: string }>;
         speakers: Array<{ id: string; email?: string }>;
-        resources: Array<{ status: string }>;
+        resources: Array<{ status: string; body: string }>;
       };
     };
 
@@ -89,6 +89,7 @@ describe("demo API smoke flow", () => {
     expect(payload.data.speakers.map((speaker) => speaker.id)).toEqual(expect.arrayContaining(["speaker-jon", "speaker-marco", "speaker-priya"]));
     expect(payload.data.speakers.every((speaker) => !("email" in speaker))).toBe(true);
     expect(payload.data.resources.every((resource) => resource.status === "published")).toBe(true);
+    expect(payload.data.resources.every((resource) => resource.body.length > 0)).toBe(true);
   });
 
   it("bootstraps the requested demo actor and workspace", async () => {
@@ -103,6 +104,73 @@ describe("demo API smoke flow", () => {
       rubric: expect.arrayContaining([expect.objectContaining({ id: "relevance", maxScore: 5 })]),
       scores: { relevance: 5, evidence: 4, delivery: 4 },
     });
+  });
+
+  it("supports creating and closing distinct CFP forms", async () => {
+    const created = await jsonRequest("/api/v1/events/event-aie-2026/forms", {
+      name: "Workshop proposals",
+      publicTitle: "Workshop proposals",
+      pageHeading: "Workshop",
+      submissionType: "abstract",
+      collectsParticipants: true,
+      welcomeTitle: "Share your workshop",
+      welcomeCopy: "Tell the program team what participants will build.",
+      confirmationCopy: "Your workshop proposal is in the review queue.",
+      maxSpeakers: 3,
+      maxSubmissionsPerUser: 2,
+      allowMultipleDrafts: true,
+      redirectToPortal: true,
+      confirmationEmailEnabled: true,
+      fields: [
+        { id: "field-title", type: "short_text", label: "Title", required: true },
+        { id: "field-summary", type: "long_text", label: "Summary", required: true },
+        { id: "field-category", type: "select", label: "Track", required: true, options: ["Build", "Evaluate"] },
+        { id: "field-format", type: "select", label: "Format", required: true, options: ["workshop"] },
+      ],
+    });
+
+    expect(created.status).toBe(201);
+    const form = (await responseJson<SuccessPayload>(created)).data as { id: string; slug: string; status: string; version: number };
+    expect(form).toMatchObject({ status: "draft", version: 1 });
+    expect(form.slug).toMatch(/^workshop-proposals-/);
+
+    const closed = await jsonRequest(`/api/v1/events/event-aie-2026/forms/${encodeURIComponent(form.id)}/close`, {});
+    expect(closed.status).toBe(200);
+    expect((await responseJson<SuccessPayload>(closed)).data).toMatchObject({ formId: form.id, status: "closed" });
+  });
+
+  it("lets organizers inspect and update the active review scoring plan", async () => {
+    const listed = await request("/api/v1/events/event-aie-2026/review-plans", {
+      headers: { "x-demo-actor": "user-organizer" },
+    });
+    expect(listed.status).toBe(200);
+    const plans = (await listed.json() as { data: { plans: Array<{ id: string; name: string; rubric: Array<{ id: string }> }> } }).data.plans;
+    expect(plans[0]).toMatchObject({ id: "round-1", rubric: expect.arrayContaining([expect.objectContaining({ id: "relevance" })]) });
+
+    const updated = await request("/api/v1/events/event-aie-2026/review-plans/round-1", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-demo-actor": "user-organizer" },
+      body: JSON.stringify({
+        name: "Program fit review",
+        status: "active",
+        rubric: [
+          { id: "program_fit", label: "Program fit", description: "Clear fit for the selected track.", weight: 60, maxScore: 5 },
+          { id: "evidence", label: "Evidence", description: "Concrete, credible lessons.", weight: 40, maxScore: 5 },
+        ],
+      }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await responseJson<SuccessPayload>(updated)).data).toMatchObject({
+      id: "round-1",
+      name: "Program fit review",
+      status: "active",
+      rubric: [expect.objectContaining({ id: "program_fit", weight: 60 }), expect.objectContaining({ id: "evidence", weight: 40 })],
+    });
+
+    const reviewerDenied = await request("/api/v1/events/event-aie-2026/review-plans", {
+      headers: { "x-demo-actor": "user-reviewer" },
+    });
+    expect(reviewerDenied.status).toBe(403);
   });
 
   it("allows an organizer decision and a reviewer score, but rejects reviewer decisions", async () => {
@@ -310,6 +378,65 @@ describe("demo API smoke flow", () => {
     const wrongEvent = await jsonRequest("/api/v1/events/event-other/rooms", { name: "Other room", capacity: 20 });
     const wrongRole = await jsonRequest("/api/v1/events/event-aie-2026/tracks", { name: "Reviewer track", color: "#112233" }, "user-reviewer");
 
+    expect(wrongEvent.status).toBe(404);
+    expect((await responseJson<ErrorPayload>(wrongEvent)).error.code).toBe("EVENT_NOT_FOUND");
+    expect(wrongRole.status).toBe(403);
+    expect((await responseJson<ErrorPayload>(wrongRole)).error.code).toBe("ROLE_REQUIRED");
+  });
+
+  it("lets organizers author and publish safe participant resources", async () => {
+    const draft = {
+      title: "Arrival map",
+      slug: "arrival-map",
+      summary: "How to find check-in.",
+      body: "Enter through the north lobby and follow signs to speaker check-in.",
+      linkUrl: "https://events.example.com/arrival",
+      status: "draft",
+    };
+    const created = await jsonRequest("/api/v1/events/event-aie-2026/resources", draft);
+    const published = await request("/api/v1/events/event-aie-2026/resources/resource-3", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-demo-actor": "user-organizer" },
+      body: JSON.stringify({ ...draft, status: "published" }),
+    });
+    const deletedDraft = await request("/api/v1/events/event-aie-2026/resources/resource-3", {
+      method: "DELETE",
+      headers: { "x-demo-actor": "user-organizer" },
+    });
+    const blockedPublishedDelete = await request("/api/v1/events/event-aie-2026/resources/resource-1", {
+      method: "DELETE",
+      headers: { "x-demo-actor": "user-organizer" },
+    });
+    const unpublished = await request("/api/v1/events/event-aie-2026/resources/resource-1", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-demo-actor": "user-organizer" },
+      body: JSON.stringify({ ...draft, slug: "speaker-field-guide", status: "draft" }),
+    });
+
+    expect(created.status).toBe(201);
+    expect((await responseJson<SuccessPayload>(created)).data).toMatchObject({ ...draft, status: "draft" });
+    expect(published.status).toBe(200);
+    expect((await responseJson<SuccessPayload>(published)).data).toMatchObject({ id: "resource-3", status: "published", body: draft.body });
+    expect(deletedDraft.status).toBe(200);
+    expect((await responseJson<SuccessPayload>(deletedDraft)).data).toEqual({ id: "resource-3", deleted: true });
+    expect(blockedPublishedDelete.status).toBe(409);
+    expect((await responseJson<ErrorPayload>(blockedPublishedDelete)).error.code).toBe("RESOURCE_PUBLISHED");
+    expect(unpublished.status).toBe(200);
+    expect((await responseJson<SuccessPayload>(unpublished)).data).toMatchObject({ id: "resource-1", status: "draft" });
+  });
+
+  it("validates participant resource publication, slugs, links, event scope, and organizer role", async () => {
+    const base = { title: "Travel guide", slug: "travel-guide", summary: "Travel details.", body: "Airport and ground transport details.", status: "draft" };
+    const duplicate = await jsonRequest("/api/v1/events/event-aie-2026/resources", { ...base, slug: "speaker-field-guide" });
+    const unsafeLink = await jsonRequest("/api/v1/events/event-aie-2026/resources", { ...base, linkUrl: "javascript:alert(1)" });
+    const emptyPublished = await jsonRequest("/api/v1/events/event-aie-2026/resources", { ...base, body: "", status: "published" });
+    const wrongEvent = await jsonRequest("/api/v1/events/event-other/resources", base);
+    const wrongRole = await jsonRequest("/api/v1/events/event-aie-2026/resources", base, "user-reviewer");
+
+    expect(duplicate.status).toBe(409);
+    expect((await responseJson<ErrorPayload>(duplicate)).error.code).toBe("RESOURCE_SLUG_TAKEN");
+    expect(unsafeLink.status).toBe(400);
+    expect(emptyPublished.status).toBe(400);
     expect(wrongEvent.status).toBe(404);
     expect((await responseJson<ErrorPayload>(wrongEvent)).error.code).toBe("EVENT_NOT_FOUND");
     expect(wrongRole.status).toBe(403);

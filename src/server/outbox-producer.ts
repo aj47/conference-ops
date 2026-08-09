@@ -1,6 +1,6 @@
 import type { Bindings } from "./env";
 
-export type OutboxJobKind = "email" | "calendar" | "accelevents";
+export type OutboxJobKind = "email" | "calendar" | "accelevents" | "airtable";
 
 export interface OutboxJob {
   kind: OutboxJobKind;

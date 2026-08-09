@@ -85,7 +85,7 @@ function fixture() {
     CREATE TABLE task_templates (
       id TEXT PRIMARY KEY, event_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
       type TEXT NOT NULL, target_type TEXT NOT NULL, completion_mode TEXT NOT NULL,
-      relative_due_days INTEGER NOT NULL, form_version_id TEXT, file_request_id TEXT,
+      relative_due_days INTEGER NOT NULL, external_url TEXT, form_version_id TEXT, file_request_id TEXT,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
     CREATE TABLE speaker_tasks (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, template_id TEXT);
@@ -193,5 +193,40 @@ describe("organizer program configuration API", () => {
     expect(d1.sqlite.prepare("SELECT kind, enabled, offset_days FROM communication_schedules").all()).toEqual([
       { kind: "task_overdue", enabled: 0, offset_days: 4 },
     ]);
+  });
+
+  it("accepts HTTPS action links only for manual tasks", async () => {
+    const valid = await request(d1, "/task-templates", "POST", {
+      title: "Confirm attendance",
+      description: "Open the scheduling page, confirm, then mark this task complete.",
+      type: "calendar",
+      targetType: "contact",
+      relativeDueDays: 7,
+      externalUrl: "https://schedule.example.test/speaker/confirm",
+    });
+    const insecure = await request(d1, "/task-templates", "POST", {
+      title: "Insecure attendance",
+      description: "This link must be rejected.",
+      type: "calendar",
+      targetType: "contact",
+      relativeDueDays: 7,
+      externalUrl: "http://schedule.example.test/speaker/confirm",
+    });
+    const linkedUpload = await request(d1, "/task-templates", "POST", {
+      title: "Upload with unrelated link",
+      description: "This task already has a file action.",
+      type: "upload",
+      targetType: "submission",
+      relativeDueDays: 7,
+      externalUrl: "https://schedule.example.test/unrelated",
+    });
+
+    expect(valid.status).toBe(201);
+    expect(insecure.status).toBe(400);
+    expect(linkedUpload.status).toBe(400);
+    expect(d1.sqlite.prepare("SELECT completion_mode, external_url FROM task_templates").get()).toEqual({
+      completion_mode: "manual",
+      external_url: "https://schedule.example.test/speaker/confirm",
+    });
   });
 });

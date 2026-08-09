@@ -9,7 +9,7 @@ const DAY_IN_MILLISECONDS = 86_400_000;
  * idempotent even before the database unique indexes are considered.
  */
 export const instantiateAcceptedSpeakerTasksSql = `INSERT INTO speaker_tasks
-  (id, event_id, template_id, speaker_profile_id, proposal_id, title, description, type, status, due_at, created_at, updated_at)
+  (id, event_id, template_id, speaker_profile_id, proposal_id, title, description, type, status, external_url, due_at, created_at, updated_at)
   SELECT
     'task-' || lower(hex(randomblob(16))),
     p.event_id,
@@ -23,6 +23,7 @@ export const instantiateAcceptedSpeakerTasksSql = `INSERT INTO speaker_tasks
       WHEN e.starts_at - (tt.relative_due_days * ${DAY_IN_MILLISECONDS}) < ? THEN 'overdue'
       ELSE 'not_started'
     END,
+    tt.external_url,
     e.starts_at - (tt.relative_due_days * ${DAY_IN_MILLISECONDS}),
     ?,
     ?

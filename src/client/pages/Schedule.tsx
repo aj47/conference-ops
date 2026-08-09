@@ -1,9 +1,12 @@
 import {
   AlertTriangle,
+  CalendarRange,
   CalendarDays,
   Check,
   Clock3,
   GripVertical,
+  LayoutGrid,
+  List,
   ListFilter,
   MoveRight,
   Plus,
@@ -14,8 +17,8 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import type { ScheduleConflict } from "../../shared/domain";
+import { Link, useSearchParams } from "react-router-dom";
+import type { ProgramSession, Room, ScheduleConflict, Track } from "../../shared/domain";
 import { EmptyState, Field, InlineAlert, PageHeader, SectionHeading, StatusPill } from "../components";
 import { useDialogA11y } from "../dialog-a11y";
 import {
@@ -27,6 +30,15 @@ import {
   timeZoneAbbreviation,
 } from "../event-time";
 import { privateEventPath } from "../private-routes";
+import {
+  chronologicalSessions,
+  persistentScheduleConflicts,
+  scheduleDayGroups,
+  scheduleViewFromValue,
+  type PersistentScheduleConflict,
+  type ScheduleDayGroup,
+  type ScheduleViewId,
+} from "../schedule-views";
 import { useWorkspace } from "../workspace";
 import { VenueSettingsDrawer } from "../VenueSettingsDrawer";
 
@@ -39,17 +51,215 @@ interface PendingMove {
   conflicts: ScheduleConflict[];
 }
 
+const scheduleViews: Array<{ id: ScheduleViewId; label: string; detail: string; icon: typeof List }> = [
+  { id: "list", label: "List", detail: "Scan every session", icon: List },
+  { id: "board", label: "Day / rooms", detail: "Place and reschedule", icon: LayoutGrid },
+  { id: "week", label: "Week", detail: "Read the full run", icon: CalendarRange },
+  { id: "conflicts", label: "Conflicts", detail: "Review live overlaps", icon: ShieldAlert },
+];
+
+function sessionLocation(session: ProgramSession, rooms: Room[], tracks: Track[]) {
+  return {
+    room: rooms.find((room) => room.id === session.roomId)?.name ?? "Room not set",
+    track: tracks.find((track) => track.id === session.trackId)?.name ?? "Track not set",
+  };
+}
+
+function sessionDayLabel(session: ProgramSession, timezone: string) {
+  if (!session.startsAt) return "Unscheduled";
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    timeZone: timezone,
+  }).format(new Date(session.startsAt));
+}
+
+function ScheduleViewSwitcher({
+  active,
+  conflictCount,
+  onChange,
+}: {
+  active: ScheduleViewId;
+  conflictCount: number;
+  onChange: (view: ScheduleViewId) => void;
+}) {
+  return (
+    <div className="schedule-view-switcher" role="group" aria-label="Schedule view">
+      {scheduleViews.map((view) => {
+        const Icon = view.icon;
+        return (
+          <button
+            type="button"
+            key={view.id}
+            className={active === view.id ? "active" : ""}
+            aria-pressed={active === view.id}
+            onClick={() => onChange(view.id)}
+          >
+            <Icon size={15} />
+            <span><strong>{view.label}{view.id === "conflicts" && conflictCount ? ` · ${conflictCount}` : ""}</strong><small>{view.detail}</small></span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ScheduleListView({
+  sessions,
+  rooms,
+  tracks,
+  timezone,
+  onOpenBoard,
+  onPlace,
+}: {
+  sessions: ProgramSession[];
+  rooms: Room[];
+  tracks: Track[];
+  timezone: string;
+  onOpenBoard: (session: ProgramSession) => void;
+  onPlace: (sessionId: string) => void;
+}) {
+  const ordered = chronologicalSessions(sessions);
+  const placedCount = ordered.filter((session) => session.startsAt && session.roomId).length;
+  const unplacedCount = ordered.length - placedCount;
+  return (
+    <section className="schedule-view-panel schedule-list-view" aria-labelledby="schedule-list-title">
+      <header className="schedule-view-heading">
+        <div><p className="eyebrow">Run-of-show index</p><h2 id="schedule-list-title">Every session, one scan.</h2><p>Unplaced work stays visible beside the sessions already committed to a room and time.</p></div>
+        <dl><div><dt>Placed</dt><dd>{placedCount}</dd></div><div><dt>Ready to place</dt><dd>{unplacedCount}</dd></div></dl>
+      </header>
+      {ordered.length ? (
+        <div className="schedule-list" role="list" aria-label="All schedule sessions">
+          {ordered.map((session, index) => {
+            const location = sessionLocation(session, rooms, tracks);
+            const placed = Boolean(session.startsAt && session.endsAt && session.roomId);
+            return (
+              <article className={`schedule-list-row${placed ? "" : " schedule-list-row--unplaced"}`} role="listitem" key={session.id}>
+                <span className="schedule-list-row__number">{String(index + 1).padStart(2, "0")}</span>
+                <div className="schedule-list-row__time">
+                  <strong>{sessionDayLabel(session, timezone)}</strong>
+                  <span>{session.startsAt && session.endsAt ? `${formatEventTime(session.startsAt, timezone)}–${formatEventTime(session.endsAt, timezone)}` : "Needs room + time"}</span>
+                </div>
+                <div className="schedule-list-row__session"><strong>{session.title}</strong><span>{session.speakerNames.join(" · ") || "Program block"}</span></div>
+                <div className="schedule-list-row__stage"><strong>{location.room}</strong><span>{location.track}</span></div>
+                <StatusPill status={session.status} />
+                <button type="button" className="button button--quiet" onClick={() => placed ? onOpenBoard(session) : onPlace(session.id)}>{placed ? "Open on board" : "Place session"} <MoveRight size={14} /></button>
+              </article>
+            );
+          })}
+        </div>
+      ) : <EmptyState title="No sessions yet" detail="Accepted proposals and direct program blocks will appear here before they are placed." />}
+    </section>
+  );
+}
+
+function ScheduleWeekView({
+  groups,
+  unscheduled,
+  rooms,
+  tracks,
+  timezone,
+  onOpenBoard,
+  onPlace,
+}: {
+  groups: ScheduleDayGroup[];
+  unscheduled: ProgramSession[];
+  rooms: Room[];
+  tracks: Track[];
+  timezone: string;
+  onOpenBoard: (session: ProgramSession) => void;
+  onPlace: (sessionId: string) => void;
+}) {
+  return (
+    <section className="schedule-view-panel schedule-week-view" aria-labelledby="schedule-week-title">
+      <header className="schedule-view-heading">
+        <div><p className="eyebrow">Weekly run sheet</p><h2 id="schedule-week-title">The whole program, day by day.</h2><p>Read each event day in time order, then jump into the placement board for a precise change.</p></div>
+        <span className="schedule-week-view__timezone">All times · {timezone}</span>
+      </header>
+      {unscheduled.length > 0 && (
+        <aside className="schedule-unplaced-strip" aria-label={`${unscheduled.length} sessions ready to place`}>
+          <div><AlertTriangle size={17} /><span><strong>{unscheduled.length} ready to place</strong><small>These sessions are not part of a day until a room and time are selected.</small></span></div>
+          <div>{unscheduled.map((session) => <button type="button" key={session.id} onClick={() => onPlace(session.id)}>{session.title} <MoveRight size={13} /></button>)}</div>
+        </aside>
+      )}
+      <div className="schedule-week-grid">
+        {groups.map((group, index) => (
+          <section className="schedule-day-sheet" key={group.key} aria-labelledby={`schedule-day-${group.key}`}>
+            <header><span>DAY {String(index + 1).padStart(2, "0")}</span><div><h3 id={`schedule-day-${group.key}`}>{group.label}</h3><p>{group.sessions.length} placed {group.sessions.length === 1 ? "session" : "sessions"}</p></div></header>
+            {group.sessions.length ? <ol>{group.sessions.map((session) => {
+              const location = sessionLocation(session, rooms, tracks);
+              return (
+                <li key={session.id}>
+                  <time dateTime={session.startsAt}>{formatEventTime(session.startsAt, timezone)}<small>{formatEventTime(session.endsAt, timezone)}</small></time>
+                  <i aria-hidden="true" />
+                  <div><strong>{session.title}</strong><span>{location.room} · {location.track}</span><small>{session.speakerNames.join(" · ") || "Program block"}</small></div>
+                  <button type="button" aria-label={`Open ${session.title} on the day and room board`} onClick={() => onOpenBoard(session)}><MoveRight size={15} /></button>
+                </li>
+              );
+            })}</ol> : <EmptyState title="No placed sessions" detail="This day is open. Place a session from List or Day / rooms." />}
+          </section>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ScheduleConflictsView({
+  conflicts,
+  rooms,
+  tracks,
+  timezone,
+  onOpenBoard,
+}: {
+  conflicts: PersistentScheduleConflict[];
+  rooms: Room[];
+  tracks: Track[];
+  timezone: string;
+  onOpenBoard: (session?: ProgramSession) => void;
+}) {
+  const resourceCount = conflicts.reduce((total, conflict) => total + conflict.resources.length, 0);
+  return (
+    <section className="schedule-view-panel schedule-conflicts-view" aria-labelledby="schedule-conflicts-title">
+      <header className="schedule-view-heading schedule-view-heading--danger">
+        <div><p className="eyebrow">Persistent conflict review</p><h2 id="schedule-conflicts-title">Overlaps that still exist in the live grid.</h2><p>This docket is derived from the current schedule, so intentional overrides remain visible after reload until one of the sessions moves.</p></div>
+        <dl><div><dt>Session pairs</dt><dd>{conflicts.length}</dd></div><div><dt>Resource collisions</dt><dd>{resourceCount}</dd></div></dl>
+      </header>
+      {conflicts.length ? <div className="conflict-docket">{conflicts.map((conflict, index) => (
+        <article key={conflict.id}>
+          <header><span>CONFLICT {String(index + 1).padStart(2, "0")}</span><div>{conflict.resources.map((resource) => <span className="conflict-type" key={`${resource.type}:${resource.id}`}>{resource.type} · {resource.name}</span>)}</div></header>
+          <div className="conflict-docket__sessions">{conflict.sessions.map((session) => {
+            const location = sessionLocation(session, rooms, tracks);
+            return (
+              <section key={session.id}>
+                <p>{sessionDayLabel(session, timezone)} · {formatEventTime(session.startsAt, timezone)}–{formatEventTime(session.endsAt, timezone)}</p>
+                <h3>{session.title}</h3>
+                <span>{location.room} · {location.track}</span>
+                {session.overrideReason && <small><Check size={12} /> Override recorded: {session.overrideReason}</small>}
+                <button type="button" className="button button--quiet" onClick={() => onOpenBoard(session)}>Open exact session <MoveRight size={14} /></button>
+              </section>
+            );
+          })}</div>
+        </article>
+      ))}</div> : <EmptyState title="No active schedule conflicts" detail="Room, track, and speaker overlaps will appear here whenever they exist in the current grid." action={<button type="button" className="button button--primary" onClick={() => onOpenBoard()}>Open day / rooms</button>} />}
+    </section>
+  );
+}
+
 export function ScheduleBoard() {
   const { workspace, detectConflicts, scheduleSession, addDirectSession, setNotice, privateWorkspaceEventId } = useWorkspace();
   const eventId = privateWorkspaceEventId ?? workspace.event.id;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = scheduleViewFromValue(searchParams.get("view"));
+  const targetSessionId = searchParams.get("session");
   const dayOptions = useMemo(() => eventDayOptions(workspace.event, workspace.sessions), [workspace.event, workspace.sessions]);
-  const [selectedDay, setSelectedDay] = useState(() => eventDateKey(workspace.event.startsAt, workspace.event.timezone));
+  const [selectedDay, setSelectedDay] = useState(() => searchParams.get("day") ?? eventDateKey(workspace.event.startsAt, workspace.event.timezone));
   const activeDay = dayOptions.find((day) => day.key === selectedDay) ?? dayOptions[0];
   const slots = useMemo(
     () => activeDay ? scheduleSlotStarts(workspace.event, activeDay, workspace.sessions) : [],
     [activeDay, workspace.event, workspace.sessions],
   );
-  const [trackFilter, setTrackFilter] = useState("all");
+  const [trackFilter, setTrackFilter] = useState(() => searchParams.get("track") ?? "all");
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingMove | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
@@ -74,13 +284,67 @@ export function ScheduleBoard() {
   const unscheduled = workspace.sessions.filter((session) => session.status === "unscheduled");
   const visibleSessions = workspace.sessions.filter((session) => trackFilter === "all" || session.trackId === trackFilter);
   const scheduled = visibleSessions.filter((session) => session.startsAt && session.roomId && eventDateKey(session.startsAt, workspace.event.timezone) === activeDay?.key);
-  const conflictCount = pending?.conflicts.length ?? 0;
+  const conflictDocket = useMemo(
+    () => persistentScheduleConflicts(workspace.sessions, workspace.rooms, workspace.tracks),
+    [workspace.rooms, workspace.sessions, workspace.tracks],
+  );
+  const weekGroups = useMemo(
+    () => scheduleDayGroups(workspace.event, visibleSessions),
+    [visibleSessions, workspace.event],
+  );
+  const conflictCount = conflictDocket.length;
   const speakers = [...new Map(workspace.proposals.flatMap((proposal) => proposal.speakers).map((speaker) => [speaker.id, speaker])).values()];
   const directSpeakerOptional = direct.format === "break" || direct.format === "networking";
 
+  const updateScheduleQuery = (updates: Partial<Record<"view" | "day" | "track" | "session", string | null>>) => {
+    const next = new URLSearchParams(searchParams);
+    for (const [key, value] of Object.entries(updates)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    setSearchParams(next, { replace: true });
+  };
+
+  const changeView = (nextView: ScheduleViewId) => {
+    updateScheduleQuery({ view: nextView, session: null });
+  };
+
+  const changeDay = (day: string) => {
+    setSelectedDay(day);
+    updateScheduleQuery({ day, session: null });
+  };
+
+  const changeTrack = (track: string) => {
+    setTrackFilter(track);
+    updateScheduleQuery({ track: track === "all" ? null : track, session: null });
+  };
+
   useEffect(() => {
-    if (trackFilter !== "all" && !workspace.tracks.some((track) => track.id === trackFilter)) setTrackFilter("all");
-  }, [trackFilter, workspace.tracks]);
+    const requestedDay = searchParams.get("day");
+    if (requestedDay && dayOptions.some((day) => day.key === requestedDay) && requestedDay !== selectedDay) {
+      setSelectedDay(requestedDay);
+      return;
+    }
+    if (!dayOptions.some((day) => day.key === selectedDay) && dayOptions[0]) setSelectedDay(dayOptions[0].key);
+  }, [dayOptions, searchParams, selectedDay]);
+
+  useEffect(() => {
+    const requestedTrack = searchParams.get("track") ?? "all";
+    const validTrack = requestedTrack === "all" || workspace.tracks.some((track) => track.id === requestedTrack);
+    const nextTrack = validTrack ? requestedTrack : "all";
+    if (nextTrack !== trackFilter) setTrackFilter(nextTrack);
+  }, [searchParams, trackFilter, workspace.tracks]);
+
+  useEffect(() => {
+    const sessionId = searchParams.get("session");
+    if (view !== "board" || !sessionId) return;
+    const timeout = window.setTimeout(() => {
+      const target = document.getElementById(`schedule-session-${sessionId}`);
+      target?.focus({ preventScroll: true });
+      target?.scrollIntoView({ block: "center", inline: "center" });
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [searchParams, view, workspace.sessions]);
 
   const durationFor = (sessionId: string) => {
     const session = workspace.sessions.find((item) => item.id === sessionId);
@@ -102,6 +366,24 @@ export function ScheduleBoard() {
     setPlacingSlot(session?.startsAt ?? slots[0] ?? workspace.event.startsAt);
     setPlacingTrack(session?.trackId ?? matchingTrack?.id ?? workspace.tracks[0]?.id ?? "");
     setPlacingId(sessionId);
+  };
+
+  const openOnBoard = (session?: ProgramSession) => {
+    const day = session?.startsAt ? eventDateKey(session.startsAt, workspace.event.timezone) : activeDay?.key;
+    if (day) setSelectedDay(day);
+    setTrackFilter("all");
+    updateScheduleQuery({
+      view: "board",
+      day: day ?? null,
+      track: null,
+      session: session?.id ?? null,
+    });
+  };
+
+  const openPlacementFromView = (sessionId: string) => {
+    setTrackFilter("all");
+    updateScheduleQuery({ view: "board", track: null, session: null });
+    openPlacement(sessionId);
   };
 
   const prepareMove = (sessionId: string, roomId: string, startsAt: string, trackId?: string) => {
@@ -148,17 +430,22 @@ export function ScheduleBoard() {
       <PageHeader
         eyebrow={`Stage call sheet · ${activeDay?.label ?? "Event day"}`}
         title="Every room, track, and speaker gets one place."
-        description="Drag sessions onto the grid or place them by keyboard. Conflicts enter a review queue; overrides require a durable reason."
-        actions={<><button type="button" className="button button--quiet" onClick={() => setVenueOpen(true)}><Settings2 size={16} /> Rooms & tracks</button><button type="button" className="button button--quiet" onClick={() => setDirectOpen(true)}><Plus size={16} /> Add direct session</button><label className="select-control"><CalendarDays size={16} /><span className="sr-only">Schedule day</span><select value={activeDay?.key ?? ""} onChange={(event) => setSelectedDay(event.target.value)}>{dayOptions.map((day, index) => <option key={day.key} value={day.key}>Day {index + 1} · {day.label}</option>)}</select></label><Link to={privateEventPath("/publish", eventId)} className="button button--primary"><Radio size={16} /> Review & publish</Link></>}
+        description="Scan the run of show in List or Week, place sessions by room, and keep every active overlap visible in the conflict docket."
+        actions={<><button type="button" className="button button--quiet" onClick={() => setVenueOpen(true)}><Settings2 size={16} /> Rooms & tracks</button><button type="button" className="button button--quiet" onClick={() => setDirectOpen(true)}><Plus size={16} /> Add direct session</button>{view === "board" && <label className="select-control"><CalendarDays size={16} /><span className="sr-only">Schedule day</span><select value={activeDay?.key ?? ""} onChange={(event) => changeDay(event.target.value)}>{dayOptions.map((day, index) => <option key={day.key} value={day.key}>Day {index + 1} · {day.label}</option>)}</select></label>}<Link to={privateEventPath("/publish", eventId)} className="button button--primary"><Radio size={16} /> Review & publish</Link></>}
       />
 
+      <ScheduleViewSwitcher active={view} conflictCount={conflictCount} onChange={changeView} />
       <div className="schedule-toolbar">
-        <label className="select-control"><ListFilter size={15} /><span className="sr-only">Filter schedule by track</span><select value={trackFilter} onChange={(event) => setTrackFilter(event.target.value)}><option value="all">All tracks</option>{workspace.tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label>
+        {view !== "conflicts" && <label className="select-control"><ListFilter size={15} /><span className="sr-only">Filter schedule by track</span><select value={trackFilter} onChange={(event) => changeTrack(event.target.value)}><option value="all">All tracks</option>{workspace.tracks.map((track) => <option key={track.id} value={track.id}>{track.name}</option>)}</select></label>}
         <div className="schedule-legend">{workspace.tracks.length ? workspace.tracks.map((track) => <span key={track.id}><i style={{ background: track.color }} />{track.name}</span>) : <span>No tracks configured</span>}</div>
-        <span className={`conflict-counter${conflictCount ? " conflict-counter--active" : ""}`}><ShieldAlert size={15} /> {conflictCount} conflicts</span>
+        <button type="button" className={`conflict-counter${conflictCount ? " conflict-counter--active" : ""}`} onClick={() => changeView("conflicts")} aria-label={`Open conflicts view, ${conflictCount} active session ${conflictCount === 1 ? "pair" : "pairs"}`}><ShieldAlert size={15} /> {conflictCount} active {conflictCount === 1 ? "conflict" : "conflicts"}</button>
       </div>
 
-      <div className="schedule-layout">
+      {view === "list" && <ScheduleListView sessions={visibleSessions} rooms={workspace.rooms} tracks={workspace.tracks} timezone={workspace.event.timezone} onOpenBoard={openOnBoard} onPlace={openPlacementFromView} />}
+      {view === "week" && <ScheduleWeekView groups={weekGroups} unscheduled={trackFilter === "all" ? unscheduled : []} rooms={workspace.rooms} tracks={workspace.tracks} timezone={workspace.event.timezone} onOpenBoard={openOnBoard} onPlace={openPlacementFromView} />}
+      {view === "conflicts" && <ScheduleConflictsView conflicts={conflictDocket} rooms={workspace.rooms} tracks={workspace.tracks} timezone={workspace.event.timezone} onOpenBoard={openOnBoard} />}
+
+      {view === "board" && <div className="schedule-layout">
         <aside className="unscheduled-drawer">
           <SectionHeading title="Ready to place" description={`${unscheduled.length} sessions outside the grid`} />
           {unscheduled.length ? unscheduled.map((session) => {
@@ -166,7 +453,9 @@ export function ScheduleBoard() {
             return (
               <article
                 key={session.id}
-                className="unscheduled-card"
+                id={`schedule-session-${session.id}`}
+                className={`unscheduled-card${targetSessionId === session.id ? " unscheduled-card--targeted" : ""}`}
+                tabIndex={targetSessionId === session.id ? -1 : undefined}
                 draggable
                 onDragStart={() => setDraggingId(session.id)}
                 onDragEnd={() => setDraggingId(null)}
@@ -202,10 +491,12 @@ export function ScheduleBoard() {
                       const track = workspace.tracks.find((item) => item.id === session.trackId);
                       return (
                         <article
+                          id={`schedule-session-${session.id}`}
                           draggable
                           onDragStart={() => setDraggingId(session.id)}
                           onDragEnd={() => setDraggingId(null)}
-                          className="schedule-card"
+                          className={`schedule-card${targetSessionId === session.id ? " schedule-card--targeted" : ""}`}
+                          tabIndex={targetSessionId === session.id ? -1 : undefined}
                           style={{ "--track-color": track?.color ?? "#171713" } as React.CSSProperties}
                           key={session.id}
                         >
@@ -224,7 +515,7 @@ export function ScheduleBoard() {
             ])}
           </div> : <EmptyState title="Set the stage before placing sessions" detail="Add at least one room and one program track. They become the columns and color lanes used throughout this schedule." action={<button type="button" className="button button--primary" onClick={() => setVenueOpen(true)}><Settings2 size={16} /> Configure rooms & tracks</button>} />}
         </section>
-      </div>
+      </div>}
 
       {placingId && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setPlacingId(null)}>

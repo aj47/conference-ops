@@ -23,6 +23,7 @@ import { useDialogA11y } from "../dialog-a11y";
 import { addMinutes, dateTimeLocalToInstant, instantToDateTimeLocal } from "../event-time";
 import { FormResponseList } from "../FormResponseList";
 import { TaskArtifactEvidence } from "../TaskArtifactEvidence";
+import { TaskDiscussion } from "../TaskDiscussion";
 import { taskFormResponseItems } from "../task-form-model";
 import { resolveSpeakerOpsTarget } from "../speaker-ops-target";
 import { useWorkspace } from "../workspace";
@@ -51,7 +52,7 @@ function AddTaskDialog({ speaker, onClose }: { speaker: SpeakerProfile; onClose:
 }
 
 export function SpeakerOperations() {
-  const { workspace, source, privateWorkspaceEventId, toggleTask, downloadTaskArtifact, setNotice } = useWorkspace();
+  const { workspace, source, privateWorkspaceEventId, toggleTask, downloadTaskArtifact, addTaskComment, setNotice } = useWorkspace();
   const eventId = privateWorkspaceEventId ?? workspace.event.id;
   const [searchParams, setSearchParams] = useSearchParams();
   const speakers = useMemo(() => {
@@ -97,11 +98,11 @@ export function SpeakerOperations() {
     setSearchParams(next, { replace: true });
   };
 
-  const downloadArtifact = async (taskId: string) => {
+  const downloadArtifact = async (taskId: string, uploadId?: string) => {
     setWorkingTaskId(taskId);
     setTaskError(null);
     try {
-      await downloadTaskArtifact(taskId);
+      await downloadTaskArtifact(taskId, uploadId);
     } catch (error) {
       setTaskError(error instanceof Error ? error.message : "The submitted file could not be downloaded.");
     } finally {
@@ -193,8 +194,9 @@ export function SpeakerOperations() {
                     {task.targetTitle && <small>For “{task.targetTitle}”</small>}
                     <p>{task.description}</p>
                     <small>{task.status === "waived" ? "Waived · no action required" : `Due ${due}${!canToggle ? ` · Verified from ${evidenceSource}` : ""}`}</small>
-                    <TaskArtifactEvidence task={task} busy={workingTaskId === task.id} onDownload={() => void downloadArtifact(task.id)} />
+                    <TaskArtifactEvidence task={task} busy={workingTaskId === task.id} onDownload={(uploadId) => void downloadArtifact(task.id, uploadId)} />
                     <FormResponseList responses={responses} title="Submitted form responses" />
+                    <TaskDiscussion task={task} onAdd={(body) => addTaskComment(task.id, body)} />
                   </div>
                   <StatusPill status={task.status} />
                 </article>

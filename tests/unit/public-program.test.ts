@@ -104,7 +104,7 @@ function publicRows(): PublicDatabaseRows {
       bio: "Builds production systems.", profileComplete: 1, hasHeadshot: 1,
       objectKey: "private/event-a/speaker-a/headshot",
     }],
-    resources: [{ id: "resource-a", title: "Arrival guide", slug: "arrival", summary: "Day-of details.", updatedAt: startsAt }],
+    resources: [{ id: "resource-a", title: "Arrival guide", slug: "arrival", summary: "Day-of details.", body: "Use the north entrance.", linkUrl: "https://events.example.com/arrival", updatedAt: startsAt }],
   };
 }
 
@@ -167,11 +167,12 @@ describe("production public program API", () => {
       },
       sessions: [{ speakerIds: ["speaker-a", "speaker-b"], speakerNames: ["Ada Rivera", "Lin Park"] }],
       speakers: [{ id: "speaker-a", headshotUrl: "/api/v1/public/events/summit-2026/speakers/speaker-a/headshot" }],
-      resources: [{ id: "resource-a", updatedAt: "2026-08-28T16:00:00.000Z" }],
+      resources: [{ id: "resource-a", body: "Use the north entrance.", linkUrl: "https://events.example.com/arrival", updatedAt: "2026-08-28T16:00:00.000Z" }],
     });
     expect(serialized).not.toContain("objectKey");
     expect(serialized).not.toContain("private/event-a");
     expect(prepare.mock.calls.find(([sql]) => String(sql).includes("FROM submission_forms"))?.[0]).toContain("fv.settings");
+    expect(prepare.mock.calls.find(([sql]) => String(sql).includes("FROM resource_pages"))?.[0]).toContain("sanitized_html AS body");
   });
 
   it("projects published version controls ahead of denormalized legacy form columns", async () => {

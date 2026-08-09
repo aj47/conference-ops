@@ -19,6 +19,10 @@ const task: OnboardingTask = {
   artifactUploadId: "upload-deck",
   artifactFileName: "Final deck.pdf",
   artifactContentType: "application/pdf",
+  artifactVersions: [
+    { uploadId: "upload-deck", fileName: "Final deck.pdf", contentType: "application/pdf", uploadedAt: "2026-08-10T10:00:00.000Z" },
+    { uploadId: "upload-draft", fileName: "Draft deck.pptx", contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", uploadedAt: "2026-08-09T10:00:00.000Z" },
+  ],
 };
 
 let container: HTMLDivElement;
@@ -45,11 +49,16 @@ describe("task artifact evidence", () => {
     ));
 
     expect(container.textContent).toContain("Final deck.pdf");
-    expect(container.textContent).toContain("PDF · private task file");
+    expect(container.textContent).toContain("PDF · current private file");
+    expect(container.textContent).toContain("1 earlier version");
+    expect(container.textContent).toContain("Draft deck.pptx");
     const download = container.querySelector<HTMLButtonElement>('button[aria-label="Download Final deck.pdf"]');
     expect(download).not.toBeNull();
     download?.click();
     expect(onDownload).toHaveBeenCalledOnce();
+    expect(onDownload).toHaveBeenLastCalledWith("upload-deck");
+    container.querySelector<HTMLButtonElement>('button[aria-label="Download earlier version Draft deck.pptx"]')?.click();
+    expect(onDownload).toHaveBeenLastCalledWith("upload-draft");
     expect(container.querySelector<HTMLInputElement>('input[aria-label="Replace Final deck.pdf"]')).not.toBeNull();
   });
 

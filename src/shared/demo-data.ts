@@ -25,7 +25,10 @@ export const defaultForm: FormDefinition = {
   publicTitle: "Call for Speakers · AI Engineer Summit 2026",
   pageHeading: "Apply",
   version: 3,
+  publishedVersion: 3,
   status: "published",
+  kind: "cfp",
+  targetType: "submission",
   submissionType: "abstract",
   collectsParticipants: true,
   welcomeTitle: "Bring the work behind the breakthrough",
@@ -103,7 +106,7 @@ export function createDemoWorkspace(actorId = "user-organizer"): WorkspaceSnapsh
       { id: "task-2", eventId: "event-aie-2026", speakerId: "speaker-marco", proposalId: "proposal-1", targetTitle: "The eval flywheel that caught our agent regressions", title: "Upload final slides", description: "PDF or PPTX, maximum 50 MB.", dueAt: "2026-08-24T23:59:00.000Z", status: "in_progress", type: "upload" },
       { id: "task-3", eventId: "event-aie-2026", speakerId: "speaker-priya", proposalId: "proposal-3", targetTitle: "Red-team your tool-using model", title: "Workshop logistics", description: "Tell production what attendees need to bring and install.", dueAt: "2026-08-18T23:59:00.000Z", status: "not_started", type: "form", formId: "form-logistics" },
       { id: "task-4", eventId: "event-aie-2026", speakerId: "speaker-leah", title: "Complete public profile", description: "Add a bio and upload a headshot.", dueAt: "2026-08-13T23:59:00.000Z", status: "overdue", type: "profile" },
-      { id: "task-5", eventId: "event-aie-2026", speakerId: "speaker-priya", title: "Accept calendar invitation", description: "Confirm the scheduled workshop time.", dueAt: "2026-08-20T23:59:00.000Z", status: "not_started", type: "calendar" },
+      { id: "task-5", eventId: "event-aie-2026", speakerId: "speaker-priya", title: "Accept calendar invitation", description: "Open the speaker calendar, confirm the scheduled workshop time, then mark this task complete.", dueAt: "2026-08-20T23:59:00.000Z", status: "not_started", type: "calendar", completionMode: "manual", externalUrl: "https://example.com/ai-engineer-summit/speaker-calendar" },
     ],
     tracks: [
       { id: "track-build", name: "Build", color: "#2d6a6c" },
@@ -122,9 +125,9 @@ export function createDemoWorkspace(actorId = "user-organizer"): WorkspaceSnapsh
       { id: "session-unscheduled", eventId: "event-aie-2026", proposalId: "proposal-4", title: "Designing the first ten minutes of an AI SDK", description: "Developer experience case study.", speakerIds: ["speaker-jon"], speakerNames: ["Jon Bell"], status: "unscheduled" },
     ],
     resources: [
-      { id: "resource-1", title: "Speaker field guide", slug: "speaker-field-guide", status: "published", summary: "Travel, arrival, green room, A/V, and day-of contacts.", updatedAt: "2026-08-07T18:00:00.000Z" },
-      { id: "resource-2", title: "Slide and recording policy", slug: "slides-recording", status: "published", summary: "File formats, licenses, recording consent, and release timeline.", updatedAt: "2026-08-06T12:00:00.000Z" },
-      { id: "resource-3", title: "Workshop production checklist", slug: "workshop-production", status: "draft", summary: "Room setup, Wi-Fi, power, helpers, and attendee prerequisites.", updatedAt: "2026-08-08T06:30:00.000Z" },
+      { id: "resource-1", title: "Speaker field guide", slug: "speaker-field-guide", status: "published", summary: "Travel, arrival, green room, A/V, and day-of contacts.", body: "Arrive at Fort Mason Center 45 minutes before your session. Speaker check-in is inside the Cowell Theater lobby.\n\nThe green room has water, power, and a quiet preparation area. Bring your final deck on a USB drive as a backup; production will have the version uploaded through your task portal.", linkUrl: "https://example.com/ai-engineer-summit", updatedAt: "2026-08-07T18:00:00.000Z" },
+      { id: "resource-2", title: "Slide and recording policy", slug: "slides-recording", status: "published", summary: "File formats, licenses, recording consent, and release timeline.", body: "Upload PDF or PowerPoint files through the Slides task in your portal. The recording team will confirm consent on site before your session.\n\nPublished recordings include the session title, speaker profile, and event branding. Contact the program team before the event if any material must be removed from the public recording.", updatedAt: "2026-08-06T12:00:00.000Z" },
+      { id: "resource-3", title: "Workshop production checklist", slug: "workshop-production", status: "draft", summary: "Room setup, Wi-Fi, power, helpers, and attendee prerequisites.", body: "Confirm table layout, power requirements, attendee software, helper count, and any downloadable materials before publishing this guide.", updatedAt: "2026-08-08T06:30:00.000Z" },
     ],
     embeds: [
       { id: "embed-agenda", name: "Public agenda", eventId: "event-aie-2026", format: "agenda", enabled: true, theme: "light", updatedAt: "2026-08-08T07:15:00.000Z" },
@@ -149,7 +152,7 @@ export function createDemoWorkspace(actorId = "user-organizer"): WorkspaceSnapsh
         { id: "flight-estimate", label: "Estimated round-trip cost", type: "short_text", required: false, section: "proposal", condition: { sourceFieldId: "flight-needed", operator: "equals", value: "true" } },
       ] },
       { id: "template-slides", title: "Upload final slides", description: "PDF or PPTX, maximum 50 MB.", type: "upload", targetType: "submission", completionMode: "file_request", relativeDueDays: 7, fileRequestId: "request-slides" },
-      { id: "template-calendar", title: "Accept calendar invitation", description: "Confirm the scheduled session time.", type: "calendar", targetType: "contact", completionMode: "manual", relativeDueDays: 5 },
+      { id: "template-calendar", title: "Accept calendar invitation", description: "Open the speaker calendar, confirm the scheduled session time, then mark this task complete.", type: "calendar", targetType: "contact", completionMode: "manual", relativeDueDays: 5, externalUrl: "https://example.com/ai-engineer-summit/speaker-calendar" },
     ],
     messageTemplates: [
       { id: "message-confirmation", kind: "submission_confirmation", name: "Submission confirmation", subject: "We received your {{event.name}} proposal", html: "<p>Hi {{speaker.name}},</p><p>Your proposal <strong>{{proposal.title}}</strong> is in the review queue.</p><p><a href=\"{{speaker.portal_url}}\">Open your portal</a></p>", text: "Hi {{speaker.name}}, your proposal {{proposal.title}} is in the review queue. Open your portal: {{speaker.portal_url}}", updatedAt: "2026-08-08T07:17:00.000Z" },

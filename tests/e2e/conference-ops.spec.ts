@@ -121,11 +121,11 @@ test("a selected secondary event survives organizer navigation and mutations", a
 
   await page.getByRole("link", { name: "CFP builder", exact: true }).click();
   await page.getByRole("button", { name: "Preview draft" }).click();
-  await expect(page).toHaveURL(`/submit/secondary-conference-2026?preview=draft&eventId=${selectedEventId}`);
+  await expect(page).toHaveURL(`/submit/secondary-conference-2026?preview=draft&eventId=${selectedEventId}&form=form-main-cfp`);
   await expect(page.getByText("Private draft preview.")).toBeVisible();
   await page.reload();
   await expect(page.getByText("Private draft preview.")).toBeVisible();
-  await expect(page).toHaveURL(`/submit/secondary-conference-2026?preview=draft&eventId=${selectedEventId}`);
+  await expect(page).toHaveURL(`/submit/secondary-conference-2026?preview=draft&eventId=${selectedEventId}&form=form-main-cfp`);
 });
 
 test("control-room exceptions open the event-scoped speaker task after navigation and reload", async ({ page }) => {
@@ -234,6 +234,79 @@ test("scheduled sessions expose a keyboard reschedule flow", async ({ page }) =>
   await page.keyboard.press("Escape");
   await expect(placementDialog).toBeHidden();
   await expect(reschedule).toBeFocused();
+});
+
+test("organizer schedule views persist and return to an exact board session", async ({ page }) => {
+  await page.goto("/schedule?view=list");
+
+  const listView = page.getByRole("button", { name: /^List/ });
+  await expect(listView).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("listitem").filter({ hasText: "Opening call" })).toContainText("Open on board");
+  await expect(page.getByRole("listitem").filter({ hasText: "Designing the first ten minutes of an AI SDK" })).toContainText("Place session");
+  await page.reload();
+  await expect(listView).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByRole("listitem").filter({ hasText: "Designing the first ten minutes of an AI SDK" }).getByRole("button", { name: "Place session" }).click();
+  const placementDialog = page.getByRole("dialog", { name: "Place session" });
+  await expect(placementDialog.getByRole("combobox", { name: "Room" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(placementDialog).toBeHidden();
+
+  await page.getByRole("button", { name: /^Week/ }).click();
+  await expect(page).toHaveURL(/view=week/);
+  await expect(page.getByRole("heading", { name: "The whole program, day by day." })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Designing the first ten minutes of an AI SDK/ })).toBeVisible();
+  await page.getByRole("button", { name: "Open Opening call on the day and room board" }).click();
+
+  await expect(page).toHaveURL(/view=board.*session=session-opening/);
+  const exactSession = page.locator("#schedule-session-session-opening");
+  await expect(exactSession).toHaveClass(/schedule-card--targeted/);
+  await expect(exactSession).toBeFocused();
+
+  await page.getByRole("button", { name: /^Conflicts/ }).click();
+  await expect(page).toHaveURL(/view=conflicts/);
+  await expect(page.getByRole("heading", { name: "No active schedule conflicts" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: /^Conflicts/ })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Open day / rooms" }).click();
+  await expect(page.getByRole("button", { name: /^Day \/ rooms/ })).toHaveAttribute("aria-pressed", "true");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test("the conflict docket survives reload and identifies every shared resource", async ({ page }) => {
+  await page.route("**/api/v1/bootstrap**", async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json() as { data: { sessions: Array<Record<string, unknown>> } };
+    const opening = payload.data.sessions.find((item) => item.id === "session-opening");
+    const overlapping = payload.data.sessions.find((item) => item.id !== "session-opening" && item.startsAt);
+    if (opening && overlapping) {
+      Object.assign(overlapping, {
+        roomId: opening.roomId,
+        trackId: opening.trackId,
+        speakerIds: opening.speakerIds,
+        speakerNames: opening.speakerNames,
+        startsAt: "2026-08-28T16:10:00.000Z",
+        endsAt: "2026-08-28T16:40:00.000Z",
+        overrideReason: "Stage manager approved this intentional shared handoff.",
+      });
+    }
+    await route.fulfill({ response, json: payload });
+  });
+
+  await page.goto("/schedule?view=conflicts");
+  const docket = page.locator(".schedule-conflicts-view");
+  await expect(docket.locator(".conflict-docket > article")).toHaveCount(1);
+  await expect(docket.getByText("room · Cowell Theater", { exact: true })).toBeVisible();
+  await expect(docket.getByText("track · Build", { exact: true })).toBeVisible();
+  await expect(docket.getByText("speaker · Jon Bell", { exact: true })).toBeVisible();
+  await expect(docket.getByText(/Override recorded: Stage manager approved/)).toBeVisible();
+
+  await page.reload();
+  await expect(docket.locator(".conflict-docket > article")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /^Conflicts · 1/ })).toHaveAttribute("aria-pressed", "true");
+  await docket.getByRole("button", { name: "Open exact session" }).first().click();
+  await expect(page).toHaveURL(/view=board.*session=session-opening/);
+  await expect(page.locator("#schedule-session-session-opening")).toBeFocused();
 });
 
 test("agenda publishing explains the live reschedule contract", async ({ page }) => {
@@ -483,6 +556,24 @@ test("proposal and speaker filters expose distinct accessible names", async ({ p
 
   await page.goto("/events/ai-engineer-summit-2026/speakers");
   await expect(page.getByRole("textbox", { name: "Search speakers" })).toBeVisible();
+});
+
+test("organizer requests a controlled proposal revision with an auditable note", async ({ page }) => {
+  await page.goto("/proposals?eventId=event-aie-2026&role=organizer");
+  await page.getByRole("button", { name: /Observability for agents that run all afternoon/ }).click();
+  await page.getByRole("button", { name: "Request changes" }).click();
+
+  await expect(page.getByText("Pending reviewer work stops; submitted reviews stay preserved as historical evidence.")).toBeVisible();
+  const note = page.getByRole("textbox", { name: "Changes the applicant must make" });
+  await expect(page.getByRole("button", { name: "Send revision request" })).toBeDisabled();
+  await note.fill("Clarify the benchmark, select the correct track, and link the trace artifact reviewers should inspect.");
+  await page.getByRole("button", { name: "Send revision request" }).click();
+
+  await expect(page.getByText("Applicant revision open.")).toBeVisible();
+  await expect(page.getByText(/Clarify the benchmark, select the correct track/)).toBeVisible();
+  await expect(page.getByLabel("Details for Observability for agents that run all afternoon").getByText("changes requested", { exact: true })).toBeVisible();
+  await expect(page.getByText(/Revision requested\./)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
 test("public agenda favorites survive a reload and stay scoped to the event", async ({ page }) => {

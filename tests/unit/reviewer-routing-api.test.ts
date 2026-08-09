@@ -76,14 +76,16 @@ function fixture() {
     );
     CREATE TABLE proposals (
       id TEXT PRIMARY KEY, event_id TEXT NOT NULL, category TEXT NOT NULL,
-      status TEXT NOT NULL, owner_user_id TEXT NOT NULL, updated_at INTEGER NOT NULL
+      status TEXT NOT NULL, owner_user_id TEXT NOT NULL, updated_at INTEGER NOT NULL,
+      review_cycle INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE review_rounds (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, round INTEGER NOT NULL, status TEXT NOT NULL);
     CREATE TABLE review_assignments (
       id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL, round_id TEXT NOT NULL,
       reviewer_user_id TEXT NOT NULL, status TEXT NOT NULL, scores TEXT NOT NULL,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
-      UNIQUE (proposal_id, round_id, reviewer_user_id)
+      review_cycle INTEGER NOT NULL DEFAULT 1,
+      UNIQUE (proposal_id, round_id, reviewer_user_id, review_cycle)
     );
     CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, user_id TEXT);
     CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
@@ -95,8 +97,8 @@ function fixture() {
     INSERT INTO reviewer_groups VALUES ('group-agents', 'event-a', 'Old committee', 'Agents', 1, 1);
     INSERT INTO reviewer_group_members VALUES ('group-agents', 'reviewer-a', 1);
     INSERT INTO proposals VALUES
-      ('proposal-multi', 'event-a', 'Agents, Evaluation', 'submitted', 'applicant-a', 1),
-      ('proposal-owned', 'event-a', 'Agents', 'submitted', 'reviewer-a', 1);
+      ('proposal-multi', 'event-a', 'Agents, Evaluation', 'submitted', 'applicant-a', 1, 1),
+      ('proposal-owned', 'event-a', 'Agents', 'submitted', 'reviewer-a', 1, 1);
     INSERT INTO review_rounds VALUES ('round-a', 'event-a', 1, 'active');
   `);
   return d1;
@@ -161,6 +163,28 @@ describe("organizer reviewer routing", () => {
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({ error: { code: "REVIEWER_MEMBERSHIP_REQUIRED" } });
     expect(d1.sqlite.prepare("SELECT name FROM reviewer_groups WHERE id = 'group-agents'").get()).toEqual({ name: "Old committee" });
+    expect(d1.sqlite.prepare("SELECT COUNT(*) AS count FROM review_assignments").get()).toEqual({ count: 0 });
+  });
+
+  it("rejects comma-containing lane names before rebuilding assignments", async () => {
+    const d1 = fixture();
+
+    const response = await app.request("http://localhost/api/v1/events/event-a/reviewer-routing", {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-event-role": "organizer" },
+      body: JSON.stringify({ groups: [
+        { id: "group-agents", name: "AI ethics committee", category: "AI, Ethics", reviewerIds: ["reviewer-a"] },
+      ] }),
+    }, bindings(d1));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { name: "ZodError", message: expect.stringContaining("Program lane names cannot contain commas") },
+    });
+    expect(d1.sqlite.prepare("SELECT name, category FROM reviewer_groups WHERE id = 'group-agents'").get()).toEqual({
+      name: "Old committee",
+      category: "Agents",
+    });
     expect(d1.sqlite.prepare("SELECT COUNT(*) AS count FROM review_assignments").get()).toEqual({ count: 0 });
   });
 });

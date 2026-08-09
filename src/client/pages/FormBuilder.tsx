@@ -32,7 +32,7 @@ import type { FormField, FormFieldType } from "../../shared/domain";
 import { Field, InlineAlert, PageHeader, ProgressBar, StatusPill } from "../components";
 import { useDialogA11y } from "../dialog-a11y";
 import { requiredUnsupportedFileFields } from "../form-builder-validation";
-import { draftSubmissionPreviewPath } from "../public-routes";
+import { draftSubmissionPreviewPath, publicSubmissionPath } from "../public-routes";
 import { useWorkspace } from "../workspace";
 
 const builderSteps = [
@@ -75,6 +75,55 @@ function LongTextField({ value, onChange, label, hint }: { value: string; onChan
         <textarea rows={6} value={value} onChange={(event) => onChange(event.target.value)} />
       </div>
     </Field>
+  );
+}
+
+function NewSubmissionFormDialog({
+  busy,
+  onClose,
+  onCreate,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onCreate: (name: string) => Promise<void>;
+}) {
+  const dialogRef = useDialogA11y<HTMLFormElement>(onClose);
+  const [name, setName] = useState("");
+  const [error, setError] = useState("");
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <form
+        ref={dialogRef}
+        className="drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-submission-form-title"
+        tabIndex={-1}
+        onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={async (event) => {
+          event.preventDefault();
+          const value = name.trim();
+          if (value.length < 3) {
+            setError("Use at least three characters so your team can distinguish this form.");
+            return;
+          }
+          try {
+            setError("");
+            await onCreate(value);
+          } catch (caught) {
+            setError(caught instanceof Error ? caught.message : "The form could not be created.");
+          }
+        }}
+      >
+        <div className="drawer__head"><div><p className="eyebrow">Additional intake lane</p><h2 id="new-submission-form-title">Create another submission form</h2></div><button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X size={18} /></button></div>
+        <div className="drawer__body form-stack">
+          <p>Conference Ops will copy the active form’s questions and rules into a private draft. Give it a distinct name, then tailor and publish it with its own share link.</p>
+          {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+          <Field label="Internal form name" hint="Examples: External CFP, Staff proposals, Workshops"><input data-dialog-initial-focus maxLength={255} value={name} onChange={(event) => setName(event.target.value)} /></Field>
+        </div>
+        <div className="drawer__foot"><button type="button" className="button button--quiet" onClick={onClose}>Cancel</button><button type="submit" className="button button--primary" disabled={busy}><Plus size={15} /> {busy ? "Creating…" : "Create private draft"}</button></div>
+      </form>
+    </div>
   );
 }
 
@@ -199,12 +248,17 @@ function FieldRows({ fields, onChange, participant = false }: { fields: FormFiel
 }
 
 export function FormBuilder() {
-  const { workspace, builder, updateBuilder, replaceBuilderFields, saveBuilder, publishBuilder, setNotice } = useWorkspace();
+  const { workspace, builder, selectBuilderForm, createBuilderForm, closeBuilderForm, updateBuilder, replaceBuilderFields, saveBuilder, publishBuilder, setNotice } = useWorkspace();
   const navigate = useNavigate();
   const [step, setStep] = useState<BuilderStepId>("setup");
   const [publishing, setPublishing] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [closing, setClosing] = useState(false);
   const currentIndex = builderSteps.findIndex((item) => item.id === step);
   const requiredFileFields = requiredUnsupportedFileFields(builder.proposalFields, builder.participantFields);
+  const forms = workspace.forms.filter((form) => form.kind === "cfp");
+  const activeForm = forms.find((form) => form.id === builder.formId);
 
   const completed = useMemo(() => ({
     setup: Boolean(builder.submissionKind),
@@ -221,7 +275,7 @@ export function FormBuilder() {
 
   const copyLink = async () => {
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}/submit/${encodeURIComponent(workspace.event.slug)}`);
+      await navigator.clipboard.writeText(`${window.location.origin}${publicSubmissionPath(workspace.event.slug, activeForm?.slug ?? activeForm?.id)}`);
       setNotice("Public submission link copied.");
     } catch {
       setNotice("Could not copy the submission link. Open Preview draft and copy the address from your browser.");
@@ -236,17 +290,44 @@ export function FormBuilder() {
         description="The public flow is generated from these decisions. Locked fields preserve identity; everything else should earn its place."
         actions={
           <>
-            <button type="button" className="button button--quiet" onClick={() => navigate(draftSubmissionPreviewPath(workspace.event.slug, workspace.event.id))}><Eye size={16} /> Preview draft</button>
+            <button type="button" className="button button--quiet" onClick={() => navigate(draftSubmissionPreviewPath(workspace.event.slug, workspace.event.id, builder.formId))}><Eye size={16} /> Preview draft</button>
             <button type="button" className="button button--quiet" onClick={copyLink}><Clipboard size={16} /> Copy link</button>
             <button type="button" className="button button--dark" onClick={() => void saveBuilder()} disabled={!builder.dirty}><Save size={16} /> Save draft</button>
           </>
         }
       />
 
+      <section className="form-portfolio" aria-labelledby="form-portfolio-title">
+        <header><div><p className="eyebrow">Form portfolio</p><h2 id="form-portfolio-title">One event, distinct intake paths.</h2><p>Each published form keeps its own version, deadline, questions, and share link.</p></div><button type="button" className="button button--primary" disabled={forms.length >= 24} onClick={() => setShowCreate(true)}><Plus size={15} /> New form</button></header>
+        <div className="form-portfolio__list">
+          {forms.map((form) => (
+            <button
+              type="button"
+              key={form.id}
+              className={form.id === builder.formId ? "form-portfolio__card active" : "form-portfolio__card"}
+              aria-current={form.id === builder.formId ? "true" : undefined}
+              onClick={() => {
+                if (form.id === builder.formId) return;
+                if (builder.dirty && !window.confirm("Switch forms and discard the unsaved changes in this editor?")) return;
+                selectBuilderForm(form.id);
+                setStep("setup");
+              }}
+            >
+              <span><StatusPill status={form.status} /><small>V{form.version}{form.publishedVersion ? ` · live V${form.publishedVersion}` : " · not published"}</small></span>
+              <strong>{form.name}</strong>
+              <small>{form.submissions} submitted {form.submissions === 1 ? "proposal" : "proposals"}</small>
+            </button>
+          ))}
+        </div>
+        <footer><span>{forms.length} of 24 forms</span>{builder.status === "published" && <button type="button" className="text-link text-link--danger" disabled={closing} onClick={async () => { if (!window.confirm(`Close “${builder.internalName}”? Its public link will stop accepting new or updated submissions.`)) return; setClosing(true); try { await closeBuilderForm(); } finally { setClosing(false); } }}>{closing ? "Closing…" : "Close active form"}</button>}</footer>
+      </section>
+
       <div className="builder-statusbar">
         <span><StatusPill status={builder.status} />{builder.dirty ? <b className="unsaved-mark">Unpublished changes</b> : <span>Saved {new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(builder.lastSavedAt))}</span>}</span>
         <ProgressBar label="Setup complete" value={Object.values(completed).filter(Boolean).length} max={builderSteps.length} />
       </div>
+
+      {showCreate && <NewSubmissionFormDialog busy={creating} onClose={() => { if (!creating) setShowCreate(false); }} onCreate={async (name) => { setCreating(true); try { await createBuilderForm(name); setStep("setup"); setShowCreate(false); } finally { setCreating(false); } }} />}
 
       <div className="builder-layout">
         <aside className="builder-steps" aria-label="Form setup steps">

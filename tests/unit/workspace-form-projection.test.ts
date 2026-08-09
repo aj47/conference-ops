@@ -10,6 +10,7 @@ function databaseWithPublishedAndDraftVersions() {
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL,
       name TEXT NOT NULL,
+      slug TEXT NOT NULL,
       kind TEXT NOT NULL,
       target_type TEXT NOT NULL,
       status TEXT NOT NULL,
@@ -43,7 +44,7 @@ function databaseWithPublishedAndDraftVersions() {
       status TEXT NOT NULL
     );
 
-    INSERT INTO submission_forms VALUES ('form-a', 'event-a', 'CFP', 'cfp', 'submission', 'published', 2, 1, 'abstract', 1, 3, 1, 1, 100, 20);
+    INSERT INTO submission_forms VALUES ('form-a', 'event-a', 'CFP', 'external-cfp', 'cfp', 'submission', 'published', 2, 1, 'abstract', 1, 3, 1, 1, 100, 20);
     INSERT INTO form_versions VALUES
       ('form-a-v1', 'form-a', 1, 'Published title', 'Apply', 'Published welcome', 'Published copy', 'Published confirmation', 2, 1, '[{"id":"published-field"}]', '{"proposalSectionTitle":"Published section","submissionControls":{"submissionType":"abstract","collectsParticipants":true,"maxSubmissionsPerUser":3,"redirectToPortal":true,"confirmationEmailEnabled":true,"closesAt":"2027-01-01T00:00:00.000Z"}}'),
       ('form-a-v2', 'form-a', 2, 'Private draft title', 'Draft', 'Private draft welcome', 'Unpublished copy', 'Unpublished confirmation', 4, 1, '[{"id":"private-draft-field"}]', '{"proposalSectionTitle":"Private draft section","submissionControls":{"submissionType":"session","collectsParticipants":false,"maxSubmissionsPerUser":9,"redirectToPortal":false,"confirmationEmailEnabled":false,"closesAt":"2027-02-01T00:00:00.000Z"}}');

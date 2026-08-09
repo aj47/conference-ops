@@ -39,12 +39,16 @@ const cleanup = {};
 if (options.worker === "app") {
   secrets.BETTER_AUTH_SECRET = requiredSecret("BETTER_AUTH_SECRET", 32);
   secrets.REALTIME_TOKEN = requiredSecret("REALTIME_TOKEN", 32);
+  if (optionalBoolean("AIRTABLE_ENABLED")) secrets.AIRTABLE_WEBHOOK_MAC_SECRET = requiredSecret("AIRTABLE_WEBHOOK_MAC_SECRET");
+  else cleanup.AIRTABLE_WEBHOOK_MAC_SECRET = null;
   cleanup.BOOTSTRAP_TOKEN = null;
 }
 if (options.worker === "jobs") {
   const integrationEnabled = optionalBoolean("ACCELEVENTS_ENABLED");
   if (integrationEnabled) secrets.ACCELEVENTS_API_KEY = requiredSecret("ACCELEVENTS_API_KEY");
   else cleanup.ACCELEVENTS_API_KEY = null;
+  if (optionalBoolean("AIRTABLE_ENABLED")) secrets.AIRTABLE_TOKEN = requiredSecret("AIRTABLE_TOKEN");
+  else cleanup.AIRTABLE_TOKEN = null;
 }
 if (options.worker === "realtime") {
   secrets.REALTIME_TOKEN = requiredSecret("REALTIME_TOKEN", 32);

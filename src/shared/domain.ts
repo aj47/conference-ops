@@ -2,6 +2,8 @@ export type Role = "organizer" | "reviewer" | "applicant" | "speaker";
 
 export type ProposalStatus =
   | "draft"
+  | "changes_requested"
+  | "revision_open"
   | "submitted"
   | "under_review"
   | "accept_queue"
@@ -134,8 +136,10 @@ export interface SpeakerProfile {
 export interface Proposal {
   id: string;
   eventId: string;
-  /** Optimistic concurrency token for applicant-owned draft updates. */
+  /** Optimistic concurrency token for applicant-owned draft and requested-revision updates. */
   version?: number;
+  /** Increments only when a controlled applicant revision starts. */
+  reviewCycle?: number;
   title: string;
   summary: string;
   category: string;
@@ -143,6 +147,12 @@ export interface Proposal {
   durationMinutes: number;
   level: "introductory" | "intermediate" | "advanced";
   status: ProposalStatus;
+  /** Latest controlled revision opening. Earlier openings remain in the audit log. */
+  revisionRequest?: {
+    note: string;
+    requestedAt: string;
+    requestedBy?: "organizer" | "applicant";
+  };
   speakers: SpeakerProfile[];
   submittedAt: string;
   score?: number;
@@ -174,6 +184,10 @@ export interface ReviewAssignment {
   round: number;
   roundName: string;
   status: ReviewStatus;
+  /** Proposal review cycle this immutable assignment belongs to. */
+  reviewCycle?: number;
+  /** Present for final evidence so organizers can distinguish pre-revision reviews. */
+  submittedAt?: string;
   rubric: ReviewRubricCriterion[];
   scores: Record<string, number>;
   score?: number;
@@ -187,6 +201,17 @@ export interface ReviewRubricCriterion {
   weight: number;
   maxScore: number;
   description?: string;
+}
+
+export interface ReviewPlanDefinition {
+  id: string;
+  eventId: string;
+  name: string;
+  round: number;
+  status: "draft" | "active" | "closed";
+  rubric: ReviewRubricCriterion[];
+  submittedReviews: number;
+  updatedAt: string;
 }
 
 export interface ReviewerGroupConfig {
@@ -204,9 +229,25 @@ export interface TaskTemplateDefinition {
   targetType: "contact" | "group" | "submission";
   completionMode: "manual" | "form" | "file_request";
   relativeDueDays: number;
+  externalUrl?: string;
   formId?: string;
   fileRequestId?: string;
   formFields?: FormField[];
+}
+
+export interface TaskArtifactVersion {
+  uploadId: string;
+  fileName: string;
+  contentType: string;
+  uploadedAt: string;
+}
+
+export interface TaskComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  body: string;
+  createdAt: string;
 }
 
 export type MessageTemplateKind = "submission_confirmation" | "acceptance" | "rejection" | "reminder" | "calendar";
@@ -219,6 +260,34 @@ export interface MessageTemplateDefinition {
   html: string;
   text: string;
   updatedAt: string;
+}
+
+export type CommunicationDeliveryKind =
+  | "submission_confirmation"
+  | "acceptance"
+  | "rejection"
+  | "revision_request"
+  | "reminder"
+  | "draft_reminder"
+  | "calendar"
+  | "staff_invitation"
+  | "operational_email";
+
+export type CommunicationDeliveryStatus = "queued" | "processing" | "sent" | "failed" | "dead";
+
+export interface CommunicationDelivery {
+  id: string;
+  kind: CommunicationDeliveryKind;
+  transport: "email" | "calendar";
+  recipient: string;
+  recipientName?: string;
+  subject: string;
+  status: CommunicationDeliveryStatus;
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  sentAt?: string;
+  lastError?: string;
 }
 
 export interface ReminderRule {
@@ -239,6 +308,40 @@ export interface ReadinessInsight {
   actionPath: string;
 }
 
+export type AirtableOperatorHealth = "healthy" | "degraded" | "disabled";
+
+export interface AirtableOperatorStatus {
+  enabled: boolean;
+  configured: boolean;
+  health: AirtableOperatorHealth;
+  authority: "d1" | "airtable";
+  connection: {
+    scope: "event" | "environment" | "none";
+    state: "provisioning" | "syncing" | "healthy" | "degraded" | "blocked" | "disabled" | "not_configured";
+    schemaVersion: number | null;
+  };
+  sync: {
+    lastPushAt: string | null;
+    lastPullAt: string | null;
+    lastReconciledAt: string | null;
+    webhook: "active" | "expiring" | "expired" | "not_configured";
+    webhookExpiresAt: string | null;
+  };
+  workload: {
+    scope: "event" | "unavailable";
+    pending: number | null;
+    dead: number | null;
+    openConflicts: number | null;
+  };
+  guidance: {
+    mode: "commission" | "validate" | "operate" | "recover";
+    title: string;
+    detail: string;
+    steps: string[];
+  };
+  generatedAt: string;
+}
+
 export interface OnboardingTask {
   id: string;
   eventId: string;
@@ -252,11 +355,14 @@ export interface OnboardingTask {
   proposalId?: string;
   targetTitle?: string;
   completionMode?: "manual" | "form" | "file_request";
+  externalUrl?: string;
   formId?: string;
   fileRequestId?: string;
   artifactUploadId?: string;
   artifactFileName?: string;
   artifactContentType?: string;
+  artifactVersions?: TaskArtifactVersion[];
+  comments?: TaskComment[];
   form?: TaskFormDefinition;
 }
 
@@ -320,6 +426,9 @@ export interface ResourcePage {
   slug: string;
   status: "draft" | "published";
   summary: string;
+  /** Plain text authored by an organizer. It is never interpreted as HTML. */
+  body: string;
+  linkUrl?: string;
   updatedAt: string;
 }
 

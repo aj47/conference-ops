@@ -10,7 +10,7 @@ Do not open a public issue for a suspected vulnerability or exposed credential. 
 - Cloudflare Access is optional defense in depth for a staging hostname. It does not replace application authorization and is intentionally blocked from production by Terraform's configuration guard.
 - The browser never receives `BETTER_AUTH_SECRET`, `REALTIME_TOKEN`, Cloudflare credentials, R2 credentials, or the Accelevents API key.
 - The Realtime Worker accepts application traffic only with its independent bearer secret.
-- D1 is authoritative. Accelevents and public embeds receive deliberately limited projections.
+- Airtable may be authoritative for registered business records; D1 remains the validated transactional mirror. Better Auth state, event authorization, raw R2 bytes, outbox leases, and integration bookkeeping never become Airtable records. Accelevents and public embeds receive deliberately limited projections.
 
 All new API writes should validate the actor's event membership, scope object lookup by `event_id`, reject stale versions where concurrent edits matter, and emit an audit entry for privileged workflow decisions.
 
@@ -27,11 +27,13 @@ Required secrets:
 
 Optional secrets:
 
+- `AIRTABLE_TOKEN`: Jobs Worker only; a PAT restricted to the selected base with the minimum record/schema/webhook scopes
+- `AIRTABLE_WEBHOOK_MAC_SECRET`: App Worker only; the provisioning-generated MAC secret for webhook verification
 - `ACCELEVENTS_API_KEY`: only when API sync has passed preflight
 - `DEMO_USER_PASSWORD`: staging only, and only if explicit demo seeding is needed
 - `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`: CI health checks through a protected preview, with a matching Access service-token rule
 
-Never reuse auth, realtime, backend, or integration credentials across staging and production. Rotate on personnel changes, suspected disclosure, and according to the organization's credential policy. A Better Auth secret rotation invalidates existing sessions and should be communicated.
+Never reuse auth, realtime, backend, or integration credentials across staging and production. Airtable PATs must be base-scoped rather than workspace-wide after provisioning and must never be placed in the browser, App Worker, source, or Terraform state. Rotate on personnel changes, suspected disclosure, and according to the organization's credential policy. A Better Auth secret rotation invalidates existing sessions and should be communicated.
 
 Staging demo mode bypasses account authentication to support evaluator persona switching and returns synthetic, non-persistent workflow results. Treat that environment as public sample software: never copy production records, real attendee files, live integration credentials, or privileged operational data into it. Protect a private preview with Access when review must be restricted.
 
@@ -41,6 +43,7 @@ Staging demo mode bypasses account authentication to support evaluator persona s
 - Uploads have purpose-specific size and MIME allowlists. Content-type checks are not malware scanning; add a scanning/quarantine workflow before accepting files from untrusted public users at scale.
 - Logs and audit metadata must not contain passwords, tokens, full session cookies, or uploaded document contents.
 - D1 exports and Terraform state can contain sensitive metadata. Store copies encrypted with restricted access and a documented retention period.
+- Airtable canonical records contain participant contact and workflow data. Restrict base membership, audit PAT access, retain webhook MAC material only in the App Worker secret store, and apply the same retention/deletion policy used for D1.
 - `allowed_embed_origins` should contain exact HTTPS origins. Avoid wildcards, and review it when an event closes.
 - Public speaker and agenda publication is explicit. A complete profile is not automatically consent to publish.
 

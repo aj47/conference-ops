@@ -23,6 +23,7 @@ const SpeakerPortal = lazy(() => import("./pages/Portal").then((module) => ({ de
 const AgendaEmbed = lazy(() => import("./pages/PublicProgram").then((module) => ({ default: module.AgendaEmbed })));
 const PublicAgenda = lazy(() => import("./pages/PublicProgram").then((module) => ({ default: module.PublicAgenda })));
 const SpeakerGallery = lazy(() => import("./pages/PublicProgram").then((module) => ({ default: module.SpeakerGallery })));
+const PublicResources = lazy(() => import("./pages/PublicProgram").then((module) => ({ default: module.PublicResources })));
 const AuthPage = lazy(() => import("./pages/Auth").then((module) => ({ default: module.AuthPage })));
 const InvitationPage = lazy(() => import("./pages/Invitation").then((module) => ({ default: module.InvitationPage })));
 const SpeakerClaimPage = lazy(() => import("./pages/SpeakerClaim").then((module) => ({ default: module.SpeakerClaimPage })));
@@ -138,6 +139,7 @@ export default function App() {
         <Route path="/portal/:section" element={<ProtectedPortal />} />
         <Route path="/events/:slug/agenda" element={<PublicProgramRoute><PublicAgenda /></PublicProgramRoute>} />
         <Route path="/events/:slug/speakers" element={<PublicProgramRoute><SpeakerGallery /></PublicProgramRoute>} />
+        <Route path="/events/:slug/resources" element={<PublicProgramRoute><PublicResources /></PublicProgramRoute>} />
         <Route path="/events/:slug/embed/agenda" element={<PublicProgramRoute><AgendaEmbed /></PublicProgramRoute>} />
         <Route path="/agenda" element={<LegacyPublicRedirect section="agenda" />} />
         <Route path="/speakers" element={<LegacyPublicRedirect section="speakers" />} />

@@ -125,6 +125,8 @@ export function publicResourceFromRow(row: Record<string, unknown>): ResourcePag
     slug: String(row.slug),
     status: "published",
     summary: String(row.summary ?? ""),
+    body: String(row.body ?? ""),
+    ...(row.linkUrl ? { linkUrl: String(row.linkUrl) } : {}),
     updatedAt: databaseTimestampToIso(row.updatedAt) ?? new Date(0).toISOString(),
   };
 }

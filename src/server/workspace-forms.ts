@@ -2,7 +2,7 @@ import type { AuthActor } from "./env";
 
 export function workspaceFormRowsSql(role: AuthActor["role"]) {
   const visibleVersion = role === "organizer" ? "sf.current_version" : "sf.published_version";
-  return `SELECT sf.id, sf.event_id, sf.name, sf.kind, sf.target_type, sf.status, sf.current_version, sf.published_version, sf.updated_at,
+  return `SELECT sf.id, sf.event_id, sf.name, sf.slug, sf.kind, sf.target_type, sf.status, sf.current_version, sf.published_version, sf.updated_at,
     sf.submission_type AS legacy_submission_type, sf.collects_participants AS legacy_collects_participants,
     sf.max_submissions_per_user AS legacy_max_submissions_per_user, sf.redirect_to_portal AS legacy_redirect_to_portal,
     sf.confirmation_email_enabled AS legacy_confirmation_email_enabled, sf.closes_at AS legacy_closes_at,

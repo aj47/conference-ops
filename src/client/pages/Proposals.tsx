@@ -20,6 +20,8 @@ import { useWorkspace } from "../workspace";
 
 const statusOptions: Array<{ label: string; value: "all" | ProposalStatus }> = [
   { label: "All states", value: "all" },
+  { label: "Changes requested", value: "changes_requested" },
+  { label: "Applicant revision", value: "revision_open" },
   { label: "Needs review", value: "under_review" },
   { label: "Submitted", value: "submitted" },
   { label: "Accept queue", value: "accept_queue" },
@@ -46,11 +48,21 @@ function ProposalFacts({ proposal }: { proposal: Proposal }) {
 }
 
 function ProposalDetail({ proposal }: { proposal: Proposal }) {
-  const { workspace, decideProposal } = useWorkspace();
+  const { workspace, decideProposal, requestProposalChanges } = useWorkspace();
   const [decisionNote, setDecisionNote] = useState("");
   const [pending, setPending] = useState<string | null>(null);
-  const [stageChoice, setStageChoice] = useState<"accept_queue" | "decline_queue" | null>(null);
+  const [stageChoice, setStageChoice] = useState<"accept_queue" | "decline_queue" | "changes_requested" | null>(null);
   const hasSession = workspace.sessions.some((session) => session.proposalId === proposal.id);
+  const reviewEvidence = workspace.reviews.filter((review) => review.proposalId === proposal.id);
+  const isHistoricalReview = (review: ReviewAssignment) => Boolean(review.status === "submitted" && (
+    review.reviewCycle !== undefined && proposal.reviewCycle !== undefined
+      ? review.reviewCycle !== proposal.reviewCycle
+      : proposal.revisionRequest && (!review.submittedAt || new Date(review.submittedAt).getTime() <= new Date(proposal.revisionRequest.requestedAt).getTime())
+  ));
+  const historicalReviewCount = reviewEvidence.filter(isHistoricalReview).length;
+  const currentReviewEvidence = reviewEvidence.filter((review) => !isHistoricalReview(review));
+  const revisionDeadline = new Date(proposal.form?.closesAt ?? workspace.event.cfpClosesAt).getTime();
+  const revisionWindowOpen = Number.isFinite(revisionDeadline) && revisionDeadline > Date.now() && proposal.form?.status !== "closed";
 
   const commitDecision = async (
     status: "accept_queue" | "accepted" | "decline_queue" | "rejected" | "waitlisted",
@@ -58,6 +70,18 @@ function ProposalDetail({ proposal }: { proposal: Proposal }) {
     setPending(status);
     try {
       await decideProposal(proposal.id, status, decisionNote.trim() || undefined);
+      setStageChoice(null);
+      setDecisionNote("");
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const commitRevisionRequest = async () => {
+    if (decisionNote.trim().length < 3) return;
+    setPending("changes_requested");
+    try {
+      await requestProposalChanges(proposal.id, decisionNote.trim());
       setStageChoice(null);
       setDecisionNote("");
     } finally {
@@ -73,18 +97,42 @@ function ProposalDetail({ proposal }: { proposal: Proposal }) {
       <div className="tag-list">{proposal.tags.map((tag) => <span key={tag}>{tag}</span>)}<span>{proposal.category}</span></div>
       <FormResponseList responses={proposal.customResponses} />
       <ProposalFacts proposal={proposal} />
+      {workspace.actor.role === "organizer" && (
+        <section className="review-evidence" aria-labelledby={`review-evidence-${proposal.id}`}>
+          <div className="section-heading"><div><p className="eyebrow">Committee record</p><h3 id={`review-evidence-${proposal.id}`}>Review evidence</h3></div><span>{currentReviewEvidence.filter((review) => review.status === "submitted").length}/{currentReviewEvidence.length} current{historicalReviewCount ? ` · ${historicalReviewCount} preserved` : ""}</span></div>
+          {reviewEvidence.length ? reviewEvidence.map((review) => {
+            const reviewer = workspace.actors.find((actor) => actor.id === review.reviewerId && actor.role === "reviewer");
+            const predatesRevision = isHistoricalReview(review);
+            return (
+              <article key={review.id}>
+                <header><span><Avatar name={reviewer?.name ?? "Reviewer"} size="sm" /><span><strong>{reviewer?.name ?? "Assigned reviewer"}</strong><small>{review.roundName} · Round {review.round}</small></span></span><StatusPill status={review.status} /></header>
+                {predatesRevision && <span className="review-evidence__historical"><ShieldCheck size={12} /> Preserved pre-revision evidence</span>}
+                <div className="review-evidence__signal"><strong>{review.recommendation ? review.recommendation.replace("strong_yes", "Strong approve").replace("yes", "Approve").replace("maybe", "Maybe").replace("no", "Deny") : "No recommendation"}</strong><span>{review.score === undefined ? "No final score" : `${review.score.toFixed(1)} / 5`}</span></div>
+                {review.notes ? <p>{review.notes}</p> : <p className="muted">No evidence note saved yet.</p>}
+              </article>
+            );
+          }) : <p className="muted">No reviewer evidence has been assigned to this proposal yet.</p>}
+        </section>
+      )}
       <section className="evidence-note"><MessageSquareQuote size={18} /><div><strong>Program evidence</strong><p>{proposal.score && proposal.score >= 4.5 ? "Strong committee signal. Confirm that the promised artifact or demonstration is specific enough for the agenda copy." : "Reviewers need a concrete failure story, proof point, or demo before this is ready for a final decision."}</p></div></section>
       {workspace.actor.role === "organizer" ? (
         <div className="decision-block">
           {stageChoice ? (
             <div className="decision-stage-editor">
               <InlineAlert tone={stageChoice === "accept_queue" ? "info" : "warning"}>
-                Stage for {stageChoice === "accept_queue" ? "acceptance" : "decline"}. This is an internal queue move, not the final applicant decision.
+                {stageChoice === "changes_requested"
+                  ? "Open a controlled applicant revision. Pending reviewer work stops; submitted reviews stay preserved as historical evidence."
+                  : `Stage for ${stageChoice === "accept_queue" ? "acceptance" : "decline"}. This is an internal queue move, not the final applicant decision.`}
               </InlineAlert>
-              <Field label="Queue note" hint="Internal and included in the audit log"><textarea rows={3} value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} placeholder="What should the final decision maker know?" /></Field>
+              <Field
+                label={stageChoice === "changes_requested" ? "Changes the applicant must make" : "Queue note"}
+                hint={stageChoice === "changes_requested" ? "Required · included in email and the audit log" : "Internal and included in the audit log"}
+              ><textarea rows={4} value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} placeholder={stageChoice === "changes_requested" ? "Name the exact abstract, track, speaker, or supporting detail that needs revision." : "What should the final decision maker know?"} /></Field>
               <div className="decision-actions">
                 <button type="button" className="button button--quiet" disabled={Boolean(pending)} onClick={() => { setStageChoice(null); setDecisionNote(""); }}>Cancel</button>
-                <button type="button" className="button button--primary" disabled={Boolean(pending)} onClick={() => void commitDecision(stageChoice)}><Check size={15} /> {pending ? "Saving…" : "Save queue move"}</button>
+                {stageChoice === "changes_requested"
+                  ? <button type="button" className="button button--primary" disabled={Boolean(pending) || decisionNote.trim().length < 3} onClick={() => void commitRevisionRequest()}><MessageSquareQuote size={15} /> {pending ? "Sending…" : "Send revision request"}</button>
+                  : <button type="button" className="button button--primary" disabled={Boolean(pending)} onClick={() => void commitDecision(stageChoice)}><Check size={15} /> {pending ? "Saving…" : "Save queue move"}</button>}
               </div>
             </div>
           ) : proposal.status === "accepted" || proposal.status === "session" ? (
@@ -92,17 +140,23 @@ function ProposalDetail({ proposal }: { proposal: Proposal }) {
               <InlineAlert tone="info">The final acceptance is recorded. Conference Ops created the speaker access, onboarding tasks, and an unscheduled program session automatically.</InlineAlert>
               <div className="button button--positive button--full" aria-label={hasSession ? "Program session created" : "Program session is being activated"}><Check size={15} /> {hasSession ? "Program session created" : "Activation will appear after refresh"}</div>
             </div>
+          ) : proposal.status === "changes_requested" || proposal.status === "revision_open" ? (
+            <div className="decision-stage-editor">
+              <InlineAlert tone="warning"><strong>{proposal.status === "revision_open" ? "Applicant opened an edit." : "Applicant revision open."}</strong> Reviewer work is paused while the applicant edits {proposal.form ? `pinned form version ${proposal.form.version}` : "their pinned submission form"}. Submitted reviews remain visible above and cannot be changed.</InlineAlert>
+              {proposal.revisionRequest && <blockquote className="revision-request-quote"><span>Request sent {new Date(proposal.revisionRequest.requestedAt).toLocaleString()}</span>{proposal.revisionRequest.note}</blockquote>}
+              <p className="muted">Decision actions return after the applicant resubmits. The revision must be saved before the CFP deadline.</p>
+            </div>
           ) : proposal.status === "accept_queue" ? (
             <div className="decision-stage-editor">
               <InlineAlert tone="info"><strong>Acceptance queue.</strong> Final approval creates speaker access, onboarding tasks, and the unscheduled program session together, then queues the configured acceptance email.</InlineAlert>
               <Field label="Decision feedback" hint="Saved in the audit trail and included in the decision email"><textarea rows={3} value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /></Field>
-              <div className="decision-actions"><button type="button" className="button button--quiet" onClick={() => setStageChoice("decline_queue")}>Move to decline queue</button><button type="button" className="button button--positive" disabled={Boolean(pending)} onClick={() => void commitDecision("accepted")}><Check size={15} /> Confirm acceptance</button></div>
+              <div className="decision-actions">{revisionWindowOpen && <button type="button" className="button button--quiet" onClick={() => setStageChoice("changes_requested")}>Request changes</button>}<button type="button" className="button button--quiet" onClick={() => setStageChoice("decline_queue")}>Move to decline queue</button><button type="button" className="button button--positive" disabled={Boolean(pending)} onClick={() => void commitDecision("accepted")}><Check size={15} /> Confirm acceptance</button></div>
             </div>
           ) : proposal.status === "decline_queue" ? (
             <div className="decision-stage-editor">
               <InlineAlert tone="warning"><strong>Decline queue.</strong> Final rejection is distinct from this internal recommendation.</InlineAlert>
               <Field label="Decision feedback" hint="Saved in the audit trail and included in the decision email"><textarea rows={3} value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} /></Field>
-              <div className="decision-actions"><button type="button" className="button button--quiet" onClick={() => setStageChoice("accept_queue")}>Move to accept queue</button><button type="button" className="button button--danger" disabled={Boolean(pending)} onClick={() => void commitDecision("rejected")}>Confirm decline</button></div>
+              <div className="decision-actions">{revisionWindowOpen && <button type="button" className="button button--quiet" onClick={() => setStageChoice("changes_requested")}>Request changes</button>}<button type="button" className="button button--quiet" onClick={() => setStageChoice("accept_queue")}>Move to accept queue</button><button type="button" className="button button--danger" disabled={Boolean(pending)} onClick={() => void commitDecision("rejected")}>Confirm decline</button></div>
             </div>
           ) : ["rejected", "withdrawn"].includes(proposal.status) ? (
             <InlineAlert tone="warning">This proposal is {proposal.status}. No queue action is available from this final state.</InlineAlert>
@@ -112,6 +166,7 @@ function ProposalDetail({ proposal }: { proposal: Proposal }) {
             <div className="decision-stage-editor">
               <p className="muted">This proposal remains pending. Move it into an acceptance or decline queue before recording a final decision.</p>
               <div className="decision-actions">
+                {revisionWindowOpen && <button type="button" className="button button--quiet" disabled={Boolean(pending)} onClick={() => setStageChoice("changes_requested")}>Request changes</button>}
                 <button type="button" className="button button--positive" disabled={Boolean(pending)} onClick={() => setStageChoice("accept_queue")}>Move to accept queue</button>
                 <button type="button" className="button button--danger" disabled={Boolean(pending)} onClick={() => setStageChoice("decline_queue")}>Move to decline queue</button>
               </div>
@@ -120,6 +175,7 @@ function ProposalDetail({ proposal }: { proposal: Proposal }) {
             <div className="decision-stage-editor">
               <p className="muted">Stage a recommendation for the final decision maker, or place the proposal on the waitlist now.</p>
               <div className="decision-actions">
+                {revisionWindowOpen && <button type="button" className="button button--quiet" disabled={Boolean(pending)} onClick={() => setStageChoice("changes_requested")}>Request changes</button>}
                 <button type="button" className="button button--positive" disabled={Boolean(pending)} onClick={() => setStageChoice("accept_queue")}>Move to accept queue</button>
                 <button type="button" className="button button--quiet" disabled={Boolean(pending)} onClick={() => void commitDecision("waitlisted")}>Waitlist</button>
                 <button type="button" className="button button--danger" disabled={Boolean(pending)} onClick={() => setStageChoice("decline_queue")}>Move to decline queue</button>

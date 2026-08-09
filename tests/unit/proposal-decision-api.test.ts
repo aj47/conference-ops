@@ -104,7 +104,8 @@ function createDatabase() {
       description TEXT NOT NULL,
       type TEXT NOT NULL,
       target_type TEXT NOT NULL,
-      relative_due_days INTEGER NOT NULL
+      relative_due_days INTEGER NOT NULL,
+      external_url TEXT
     );
     CREATE TABLE speaker_tasks (
       id TEXT PRIMARY KEY,
@@ -116,6 +117,7 @@ function createDatabase() {
       description TEXT NOT NULL,
       type TEXT NOT NULL,
       status TEXT NOT NULL,
+      external_url TEXT,
       due_at INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
@@ -187,8 +189,8 @@ function createDatabase() {
       ('proposal-review', 'speaker-a', 0),
       ('proposal-review-2', 'speaker-a', 0);
     INSERT INTO task_templates VALUES
-      ('template-profile', 'event-a', 'Complete profile', 'Add public details.', 'profile', 'contact', 7),
-      ('template-slides', 'event-a', 'Upload slides', 'Provide the final deck.', 'upload', 'submission', 7);
+      ('template-profile', 'event-a', 'Complete profile', 'Add public details.', 'profile', 'contact', 7, 'https://conference.example.test/profile'),
+      ('template-slides', 'event-a', 'Upload slides', 'Provide the final deck.', 'upload', 'submission', 7, NULL);
   `);
   return d1;
 }
@@ -239,6 +241,7 @@ describe("proposal decision API finality", () => {
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM speaker_tasks").get()).toEqual({ count: 0 });
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM program_sessions").get()).toEqual({ count: 0 });
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM outbox").get()).toEqual({ count: 0 });
+    expect(d1.database.prepare("SELECT published FROM speaker_profiles WHERE id = 'speaker-a'").get()).toEqual({ published: 0 });
   });
 
   it("requires a staged queue, creates onboarding once, and locks the final decision", async () => {

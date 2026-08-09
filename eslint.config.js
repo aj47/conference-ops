@@ -4,7 +4,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "coverage", ".wrangler", "playwright-report", "worker-configuration.d.ts"] },
+  { ignores: ["dist", "coverage", ".wrangler", "playwright-report", "output", "videos", "worker-configuration.d.ts"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
