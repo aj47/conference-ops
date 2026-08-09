@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "requirement": "CFP-08",
+  "evidenceType": "redacted-live-delivery-receipt",
+  "environment": "disposable pilot",
+  "observed": {
+    "messageKind": "submission_confirmation",
+    "idempotencyKeyPattern": "submission-confirmation:<redacted-submission-id>",
+    "outboxStatus": "sent",
+    "attempts": 1,
+    "sentAt": "2026-08-08T18:50:22.999Z",
+    "inboxReceived": true,
+    "inboxObservedAt": "2026-08-08T11:50:00-07:00",
+    "subject": "We received your Conference Ops Final Audit proposal"
+  },
+  "privateSources": [
+    "output/audit/role-lifecycle-evidence.json#checks[id=applicant.submit]",
+    "artifacts/backups/pilot-pre-v020-20260809.sql#outbox[idempotency_key^=submission-confirmation:]"
+  ],
+  "privateSourceAvailability": "local_gitignored_not_in_repository",
+  "redactedFields": [
+    "recipient email",
+    "recipient name",
+    "event, submission, and outbox identifiers",
+    "portal URL and query parameters",
+    "message body"
+  ],
+  "provenanceNote": "This safe record was transcribed from the retained private inbox observation and persisted sent outbox row. The raw sources stay outside version control because they contain personal data and signed portal URLs."
+}

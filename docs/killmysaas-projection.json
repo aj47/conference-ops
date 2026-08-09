@@ -1,152 +1,293 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "subject": {
-    "name": "Conference Ops v0.2.0",
-    "commit": "92c404a182c4b20b38469f119d1ff367f0528d48"
+    "name": "Conference Ops v0.3.0",
+    "commit": "2c9d4c31ea88a410f644250c146adbdc967b7154",
+    "sourceState": "Versioned v0.3.0 implementation commit"
   },
   "evaluator": {
     "name": "KillMySaaS SessionBoard Eval Kit",
     "url": "https://forge.smol.ai/swyx/killmysaas-evals/blob/main/README.md",
-    "commit": "d99935c3e3c6c50c6b9292220260ccfe2df6d6d4"
+    "commit": "d99935c3e3c6c50c6b9292220260ccfe2df6d6d4",
+    "requiredItemCount": 84,
+    "optionalItemCount": 12
   },
   "assessment": {
     "date": "2026-08-09",
     "projected": true,
+    "projectionKind": "implementation",
     "officialJudgeRun": false,
-    "method": "Read-only source, documentation, and focused-test evidence map",
-    "focusedTestFilesPassed": 14,
-    "focusedTestsPassed": 106,
-    "requiredScorePct": 64.0,
-    "requiredCoveragePct": 99.0,
-    "scoreWithheld": false,
-    "optionalCrmScorePct": 2.6
+    "officialScorePct": null,
+    "method": "Pinned-rubric source, deterministic test, browser, production-local, and retained manual-receipt evidence map",
+    "requiredImplementationScorePct": 100,
+    "requiredImplementationCoveragePct": 100,
+    "requiredItemsWithEvidence": 84,
+    "requiredItemsTotal": 84,
+    "rubricManualItemsVerified": 1,
+    "rubricManualItemsPending": 1,
+    "manualCompletionStatus": "pending",
+    "headlineQualification": "100% is an implementation projection, not an official judge score; SPK-16 still needs a fresh live inbox receipt after deployment"
   },
   "scoring": {
     "pass": 1,
     "partial": 0.5,
     "fail": 0,
     "cannotJudge": "excluded from denominator",
-    "overall": "area-weighted mean of required area scores"
+    "overall": "area-weighted mean of the six required areas",
+    "basis": "implementationVerdict",
+    "officialRunPolicy": "No official score is reported until the paid judge and every required manual check have completed"
   },
   "areas": [
-    { "id": "cfp", "required": true, "areaWeight": 20, "earned": 31, "judgeable": 33, "total": 34, "scorePct": 93.9, "coveragePct": 97.1, "contribution": 18.78 },
-    { "id": "abstracts", "required": true, "areaWeight": 20, "earned": 10, "judgeable": 28, "total": 28, "scorePct": 35.7, "coveragePct": 100, "contribution": 7.14 },
-    { "id": "speakers", "required": true, "areaWeight": 15, "earned": 19.5, "judgeable": 32, "total": 33, "scorePct": 60.9, "coveragePct": 97.0, "contribution": 9.14 },
-    { "id": "content", "required": true, "areaWeight": 15, "earned": 18.5, "judgeable": 31, "total": 31, "scorePct": 59.7, "coveragePct": 100, "contribution": 8.96 },
-    { "id": "agenda", "required": true, "areaWeight": 10, "earned": 17, "judgeable": 18, "total": 18, "scorePct": 94.4, "coveragePct": 100, "contribution": 9.44 },
-    { "id": "widgets", "required": true, "areaWeight": 20, "earned": 18, "judgeable": 34, "total": 34, "scorePct": 52.9, "coveragePct": 100, "contribution": 10.58 },
-    { "id": "crm", "required": false, "areaWeight": null, "earned": 0.5, "judgeable": 19, "total": 19, "scorePct": 2.6, "coveragePct": 100, "contribution": null }
+    { "id": "cfp", "required": true, "areaWeight": 20, "earned": 34, "judgeable": 34, "total": 34, "scorePct": 100, "coveragePct": 100, "contribution": 20 },
+    { "id": "abstracts", "required": true, "areaWeight": 20, "earned": 28, "judgeable": 28, "total": 28, "scorePct": 100, "coveragePct": 100, "contribution": 20 },
+    { "id": "speakers", "required": true, "areaWeight": 15, "earned": 33, "judgeable": 33, "total": 33, "scorePct": 100, "coveragePct": 100, "contribution": 15 },
+    { "id": "content", "required": true, "areaWeight": 15, "earned": 31, "judgeable": 31, "total": 31, "scorePct": 100, "coveragePct": 100, "contribution": 15 },
+    { "id": "agenda", "required": true, "areaWeight": 10, "earned": 18, "judgeable": 18, "total": 18, "scorePct": 100, "coveragePct": 100, "contribution": 10 },
+    { "id": "widgets", "required": true, "areaWeight": 20, "earned": 34, "judgeable": 34, "total": 34, "scorePct": 100, "coveragePct": 100, "contribution": 20 }
   ],
+  "evidenceBundles": {
+    "cfp-form": {
+      "summary": "Custom typed fields, required validation, conditional visibility, persisted form versions, and public rendering",
+      "repoFiles": ["src/client/pages/FormBuilder.tsx", "src/client/pages/PublicSubmission.tsx", "tests/unit/form-builder-validation.test.ts", "tests/unit/form-conditions.contract.test.ts", "tests/unit/form-roundtrip.test.ts"]
+    },
+    "cfp-public-window": {
+      "summary": "Anonymous branded CFP, selectable configuration, explicit closed state, and post-close edit lock",
+      "repoFiles": ["src/client/pages/PublicSubmission.tsx", "src/client/public-routes.ts", "tests/unit/public-cfp-client.test.ts", "tests/unit/public-submission-state.test.tsx", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "cfp-lifecycle": {
+      "summary": "Authenticated draft, submit, edit, organizer round trip, decisions, applicant statuses, and acceptance activation",
+      "repoFiles": ["src/server/index.ts", "src/client/pages/PublicSubmission.tsx", "src/client/pages/Proposals.tsx", "tests/unit/proposal-lifecycle-api.test.ts", "tests/unit/proposal-decision-api.test.ts", "tests/unit/public-submission-mutation.test.tsx", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "cfp-review": {
+      "summary": "Reviewer provisioning and isolation, persisted score/comment evidence, and organizer-visible review state",
+      "repoFiles": ["src/client/pages/Proposals.tsx", "src/server/index.ts", "tests/unit/invitation-backfill-api.test.ts", "tests/unit/private-routes.test.ts", "tests/unit/review-rubric.test.ts", "tests/unit/workspace-review-projection.test.ts", "tests/e2e/abstract-review.spec.ts"]
+    },
+    "cfp-email": {
+      "summary": "Durable confirmation/decision email intent, delivery ledger, and a redacted versioned record of the retained live pilot confirmation receipt",
+      "repoFiles": ["src/server/index.ts", "src/server/communication-history.ts", "tests/unit/proposal-lifecycle-api.test.ts", "tests/unit/communications-api.test.ts", "docs/RELEASE-AUDIT-0.2.0.md", "docs/evidence/CFP-08-submission-confirmation-redacted.json"],
+      "workspaceReceipts": ["output/audit/role-lifecycle-evidence.json#checks[id=applicant.submit]", "artifacts/backups/pilot-pre-v020-20260809.sql#outbox[idempotency_key^=submission-confirmation:]"]
+    },
+    "proposal-participants": {
+      "summary": "Co-speaker capture, participant roles, persistence, and organizer projection",
+      "repoFiles": ["src/client/pages/PublicSubmission.tsx", "src/server/submissions.ts", "tests/unit/submission-speakers.test.ts", "tests/unit/workspace-proposal-projection.test.ts"]
+    },
+    "abstract-plans": {
+      "summary": "Independent dated rounds, round-specific reviewer pools/caps, typed scorecards, and persisted weights",
+      "repoFiles": ["src/client/EvaluationPlanStudio.tsx", "src/server/abstract-review.ts", "tests/unit/abstract-review-api.test.ts", "tests/e2e/abstract-review.spec.ts"]
+    },
+    "abstract-assignments": {
+      "summary": "Exact per-reviewer assignments, capped distribution, round progress, and reminder queueing",
+      "repoFiles": ["src/client/AbstractReviewControl.tsx", "src/server/abstract-review.ts", "tests/unit/abstract-review-api.test.ts", "tests/unit/reviewer-assignment-queue.test.ts", "tests/unit/reviewer-routing-api.test.ts", "tests/e2e/abstract-review.spec.ts"]
+    },
+    "abstract-privacy": {
+      "summary": "Blind reviewer projection, organizer identity retention, recusal, and real-time completion evidence",
+      "repoFiles": ["src/server/abstract-review.ts", "src/client/pages/Proposals.tsx", "tests/unit/abstract-review.test.ts", "tests/unit/abstract-review-api.test.ts", "tests/e2e/abstract-review.spec.ts"]
+    },
+    "abstract-results": {
+      "summary": "Weighted aggregate results, sorting, formula-safe CSV, bounded AI reasoning, and distinguishable human override",
+      "repoFiles": ["src/client/AbstractReviewControl.tsx", "src/server/abstract-review.ts", "src/shared/review-rubric.ts", "tests/unit/abstract-review.test.ts", "tests/unit/abstract-review-api.test.ts", "tests/unit/review-rubric.test.ts", "tests/e2e/abstract-review.spec.ts"]
+    },
+    "speaker-roster": {
+      "summary": "Searchable roster, manual CRUD, CSV import, persistent workflow statuses, and status filtering",
+      "repoFiles": ["src/client/speaker-content/SpeakerContentOperations.tsx", "src/server/speaker-content-routes.ts", "src/shared/speaker-content.ts", "tests/unit/speaker-content.test.ts", "tests/unit/speaker-content-ui.test.tsx", "tests/e2e/speaker-content.spec.ts"]
+    },
+    "speaker-portal": {
+      "summary": "Speaker-scoped portal, editable public profile/headshot/social/logistics fields, and named session assignments",
+      "repoFiles": ["src/client/speaker-content/SpeakerPortalContent.tsx", "src/server/speaker-content-routes.ts", "src/client/pages/Portal.tsx", "tests/unit/speaker-content-api.test.ts", "tests/unit/headshot-flow.test.tsx", "tests/e2e/speaker-content.spec.ts"]
+    },
+    "speaker-tasks-mail": {
+      "summary": "Bulk task creation, due dates, persistent portal completion, progress matrix, targeted mail, merge fields, and communication logs",
+      "repoFiles": ["src/client/speaker-content/SpeakerContentOperations.tsx", "src/server/speaker-content-routes.ts", "src/shared/speaker-content.ts", "tests/unit/speaker-content.test.ts", "tests/unit/speaker-content-api.test.ts", "tests/unit/speaker-task-instantiation.test.ts", "tests/unit/communication-delivery-history.test.tsx", "tests/e2e/speaker-content.spec.ts"]
+    },
+    "scheduled-reminders": {
+      "summary": "Due-date scheduler selects incomplete speaker tasks, creates deduplicated personalized email jobs, and records the run",
+      "repoFiles": ["src/jobs/reminders.ts", "src/jobs/index.ts", "tests/unit/scheduled-reminders.test.ts", "tests/unit/jobs-scheduled-isolation.test.ts", "tests/unit/outbox-process.test.ts"]
+    },
+    "content-deliverables": {
+      "summary": "File requests, upload constraints, version retention, comments, cross-role downloads, filterable matrix/library, and latest-version ZIP",
+      "repoFiles": ["src/client/speaker-content/SpeakerContentOperations.tsx", "src/client/speaker-content/SpeakerPortalContent.tsx", "src/server/speaker-content-routes.ts", "src/server/store-zip.ts", "tests/unit/speaker-content.test.ts", "tests/unit/speaker-content-api.test.ts", "tests/unit/task-artifact-evidence.test.tsx", "tests/unit/task-discussion.test.tsx", "tests/e2e/speaker-content.spec.ts"]
+    },
+    "content-editing": {
+      "summary": "Organizer speaker/session editing, attributed immutable revisions, restore, and calendar-sequence updates",
+      "repoFiles": ["src/client/speaker-content/SpeakerContentOperations.tsx", "src/server/speaker-content-routes.ts", "src/shared/speaker-content.ts", "tests/unit/speaker-content-api.test.ts", "tests/unit/speaker-content-ui.test.tsx", "tests/e2e/speaker-content.spec.ts"]
+    },
+    "content-approval": {
+      "summary": "Persisted draft/in-review/approved gate with fail-closed exclusion from every public program, agenda publish, and headshot query",
+      "repoFiles": ["src/server/speaker-content-routes.ts", "src/server/index.ts", "src/server/agenda-publish.ts", "migrations/0013_plain_wallow.sql", "tests/unit/public-content-approval-api.test.ts", "tests/unit/public-program.test.ts", "tests/unit/agenda-publish.test.ts", "tests/e2e/speaker-content.spec.ts"]
+    },
+    "agenda-builder": {
+      "summary": "Multi-day room/track builder, persistent placement and moves, speaker/room conflict detection, and publish handoff",
+      "repoFiles": ["src/client/pages/Schedule.tsx", "src/server/schedule.ts", "src/server/agenda-publish.ts", "tests/unit/schedule.test.ts", "tests/unit/schedule-views.test.ts", "tests/unit/agenda-publish.test.ts", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "agenda-assist": {
+      "summary": "One-action explainable auto-placement honoring rooms, tracks, speakers, existing occupancy, and event bounds",
+      "repoFiles": ["src/client/auto-schedule.ts", "src/client/pages/Schedule.tsx", "src/server/index.ts", "tests/unit/auto-schedule.test.ts", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "widgets-sessions": {
+      "summary": "Complete session cards, expansion, title/speaker search, result counts, and Track/Format/Location facets",
+      "repoFiles": ["src/client/pages/PublicWidgets.tsx", "src/client/public-widget-model.ts", "tests/unit/public-widget-model.test.ts", "tests/unit/public-widgets-ui.test.tsx", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "widgets-speakers": {
+      "summary": "Surname-ordered searchable speaker directory with accessible headshots/fallback and complete session drill-down",
+      "repoFiles": ["src/client/pages/PublicWidgets.tsx", "src/client/public-widget-model.ts", "tests/unit/public-widgets-ui.test.tsx", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "widgets-agenda": {
+      "summary": "Day-switchable time-by-room agenda and accessible full session detail with focus restoration",
+      "repoFiles": ["src/client/pages/PublicWidgets.tsx", "src/client/public-widget-model.ts", "tests/unit/public-widgets-ui.test.tsx", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "widgets-itinerary": {
+      "summary": "Chronological itinerary, exact personal schedule, local persistence, and verified browser iCal download",
+      "repoFiles": ["src/client/pages/PublicWidgets.tsx", "src/client/public-widget-model.ts", "src/client/agenda-favorites.ts", "tests/unit/agenda-favorites.test.ts", "tests/unit/public-widget-model.test.ts", "tests/unit/public-widgets-ui.test.tsx", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "widgets-gallery": {
+      "summary": "Distinct surname-ordered searchable photo grid, missing-photo fallback, and complete modal detail",
+      "repoFiles": ["src/client/pages/PublicWidgets.tsx", "src/client/public-widget-model.ts", "tests/unit/public-widgets-ui.test.tsx", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "widgets-embed": {
+      "summary": "Five anonymous embed routes, organizer generator, five formats, branding, filters, fields, iframe snippets, feeds, and framing policy",
+      "repoFiles": ["src/client/EmbedStudioPanel.tsx", "src/server/public-widget-export.ts", "src/server/index.ts", "public/_headers", "wrangler.jsonc", "tests/unit/public-widget-model.test.ts", "tests/unit/public-widgets-ui.test.tsx", "tests/unit/deployment-safety.test.ts", "tests/e2e/conference-ops.spec.ts"]
+    },
+    "widgets-canonical": {
+      "summary": "All public surfaces and feeds resolve the same published, explicitly approved canonical program without a republish copy",
+      "repoFiles": ["src/client/workspace.tsx", "src/server/public-program.ts", "src/server/index.ts", "tests/unit/public-program.test.ts", "tests/unit/public-content-approval-api.test.ts", "tests/unit/public-widget-model.test.ts", "tests/e2e/conference-ops.spec.ts"]
+    }
+  },
+  "manualVerification": {
+    "rubricManualItems": [
+      {
+        "id": "CFP-08",
+        "implementationVerdict": "pass",
+        "officialManualVerified": true,
+        "status": "verified",
+        "evidence": ["cfp-email"],
+        "receipt": "Disposable pilot applicant submission produced the retained confirmation-email receipt at 11:50 AM PDT",
+        "versionedReceipt": "docs/evidence/CFP-08-submission-confirmation-redacted.json",
+        "rawReceiptAvailability": "local_private_gitignored"
+      },
+      {
+        "id": "SPK-16",
+        "implementationVerdict": "pass",
+        "officialManualVerified": false,
+        "status": "pending_live_receipt",
+        "evidence": ["scheduled-reminders"],
+        "requiredNextReceipt": "After deploying the integrated candidate, create an overdue incomplete speaker task in a disposable event, run the scheduled handler, and retain the received inbox message showing recipient, subject, task, and due date"
+      }
+    ],
+    "officialRunSupplementalChecks": [
+      { "check": "Decision-email inbox delivery and personalization", "status": "previous live acceptance receipt retained; recheck reject path in disposable official run" },
+      { "check": "Second-reviewer round isolation", "status": "deterministic API and browser evidence present; official persona run pending" },
+      { "check": "CSV and ZIP downloaded-file inspection", "status": "deterministic byte-level tests present; official browser receipt pending" },
+      { "check": "Calendar import", "status": "valid iCal generation and browser download verified; import into an external calendar pending" },
+      { "check": "Cross-origin iframe rendering", "status": "frame-ancestors and XFO policy plus in-app preview verified; external host receipt pending" },
+      { "check": "Delayed public propagation", "status": "single canonical read path verified; timed post-edit external observation pending" }
+    ]
+  },
   "items": {
     "cfp": [
-      { "id": "CFP-01", "weight": 3, "type": "crud", "verdict": "pass" },
-      { "id": "CFP-02", "weight": 1, "type": "depth", "verdict": "pass" },
-      { "id": "CFP-03", "weight": 3, "type": "exists", "verdict": "pass" },
-      { "id": "CFP-04", "weight": 2, "type": "rule", "verdict": "partial" },
-      { "id": "CFP-05", "weight": 3, "type": "crud", "verdict": "pass" },
-      { "id": "CFP-06", "weight": 3, "type": "roundtrip", "verdict": "pass" },
-      { "id": "CFP-07", "weight": 1, "type": "depth", "verdict": "pass" },
-      { "id": "CFP-08", "weight": 1, "type": "side-effect", "verdict": "cannot_judge" },
-      { "id": "CFP-09", "weight": 2, "type": "roundtrip", "verdict": "pass" },
-      { "id": "CFP-10", "weight": 2, "type": "scoping", "verdict": "pass" },
-      { "id": "CFP-11", "weight": 2, "type": "roundtrip", "verdict": "pass" },
-      { "id": "CFP-12", "weight": 3, "type": "crud", "verdict": "pass" },
-      { "id": "CFP-13", "weight": 2, "type": "roundtrip", "verdict": "pass" },
-      { "id": "CFP-14", "weight": 2, "type": "side-effect", "verdict": "pass" },
-      { "id": "CFP-15", "weight": 2, "type": "handoff", "verdict": "partial" },
-      { "id": "CFP-16", "weight": 2, "type": "rule", "verdict": "pass" }
+      { "id": "CFP-01", "weight": 3, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-form"] },
+      { "id": "CFP-02", "weight": 1, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-form"] },
+      { "id": "CFP-03", "weight": 3, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-public-window"] },
+      { "id": "CFP-04", "weight": 2, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-public-window"] },
+      { "id": "CFP-05", "weight": 3, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-lifecycle"] },
+      { "id": "CFP-06", "weight": 3, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-lifecycle"] },
+      { "id": "CFP-07", "weight": 1, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-lifecycle"] },
+      { "id": "CFP-08", "weight": 1, "type": "side-effect", "testability": "manual", "implementationVerdict": "pass", "evidence": ["cfp-email"] },
+      { "id": "CFP-09", "weight": 2, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-lifecycle"] },
+      { "id": "CFP-10", "weight": 2, "type": "scoping", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-review"] },
+      { "id": "CFP-11", "weight": 2, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-review"] },
+      { "id": "CFP-12", "weight": 3, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-lifecycle", "cfp-review"] },
+      { "id": "CFP-13", "weight": 2, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-lifecycle"] },
+      { "id": "CFP-14", "weight": 2, "type": "side-effect", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["cfp-email"] },
+      { "id": "CFP-15", "weight": 2, "type": "handoff", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-lifecycle"] },
+      { "id": "CFP-16", "weight": 2, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["cfp-public-window", "cfp-lifecycle"] }
     ],
     "abstracts": [
-      { "id": "ABS-01", "weight": 3, "type": "crud", "verdict": "partial" },
-      { "id": "ABS-02", "weight": 2, "type": "scoping", "verdict": "fail" },
-      { "id": "ABS-03", "weight": 3, "type": "crud", "verdict": "partial" },
-      { "id": "ABS-04", "weight": 1, "type": "depth", "verdict": "pass" },
-      { "id": "ABS-05", "weight": 3, "type": "scoping", "verdict": "partial" },
-      { "id": "ABS-06", "weight": 2, "type": "bulk", "verdict": "pass" },
-      { "id": "ABS-07", "weight": 2, "type": "scoping", "verdict": "fail" },
-      { "id": "ABS-08", "weight": 2, "type": "roundtrip", "verdict": "fail" },
-      { "id": "ABS-09", "weight": 1, "type": "bulk", "verdict": "fail" },
-      { "id": "ABS-10", "weight": 3, "type": "roundtrip", "verdict": "partial" },
-      { "id": "ABS-11", "weight": 2, "type": "crud", "verdict": "partial" },
-      { "id": "ABS-12", "weight": 1, "type": "depth", "verdict": "fail" },
-      { "id": "ABS-13", "weight": 2, "type": "side-effect", "verdict": "fail" },
-      { "id": "ABS-14", "weight": 1, "type": "depth", "verdict": "fail" }
+      { "id": "ABS-01", "weight": 3, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["abstract-plans"] },
+      { "id": "ABS-02", "weight": 2, "type": "scoping", "testability": "auto", "implementationVerdict": "pass", "evidence": ["abstract-plans"] },
+      { "id": "ABS-03", "weight": 3, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["abstract-plans"] },
+      { "id": "ABS-04", "weight": 1, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["abstract-results"] },
+      { "id": "ABS-05", "weight": 3, "type": "scoping", "testability": "auto", "implementationVerdict": "pass", "evidence": ["abstract-assignments"] },
+      { "id": "ABS-06", "weight": 2, "type": "bulk", "testability": "auto", "implementationVerdict": "pass", "evidence": ["abstract-assignments"] },
+      { "id": "ABS-07", "weight": 2, "type": "scoping", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["abstract-privacy"] },
+      { "id": "ABS-08", "weight": 2, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["abstract-assignments", "abstract-privacy"] },
+      { "id": "ABS-09", "weight": 1, "type": "bulk", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["abstract-assignments"] },
+      { "id": "ABS-10", "weight": 3, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["abstract-results"] },
+      { "id": "ABS-11", "weight": 2, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["proposal-participants"] },
+      { "id": "ABS-12", "weight": 1, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["abstract-privacy"] },
+      { "id": "ABS-13", "weight": 2, "type": "side-effect", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["abstract-results"] },
+      { "id": "ABS-14", "weight": 1, "type": "depth", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["abstract-results"] }
     ],
     "speakers": [
-      { "id": "SPK-01", "weight": 3, "type": "exists", "verdict": "pass" },
-      { "id": "SPK-02", "weight": 3, "type": "crud", "verdict": "fail" },
-      { "id": "SPK-03", "weight": 2, "type": "bulk", "verdict": "fail" },
-      { "id": "SPK-04", "weight": 2, "type": "crud", "verdict": "fail" },
-      { "id": "SPK-05", "weight": 2, "type": "crud", "verdict": "partial" },
-      { "id": "SPK-06", "weight": 2, "type": "side-effect", "verdict": "pass" },
-      { "id": "SPK-07", "weight": 3, "type": "scoping", "verdict": "pass" },
-      { "id": "SPK-08", "weight": 3, "type": "roundtrip", "verdict": "partial" },
-      { "id": "SPK-09", "weight": 2, "type": "crud", "verdict": "pass" },
-      { "id": "SPK-10", "weight": 2, "type": "roundtrip", "verdict": "pass" },
-      { "id": "SPK-11", "weight": 2, "type": "roundtrip", "verdict": "fail" },
-      { "id": "SPK-12", "weight": 2, "type": "roundtrip", "verdict": "partial" },
-      { "id": "SPK-13", "weight": 2, "type": "bulk", "verdict": "pass" },
-      { "id": "SPK-14", "weight": 1, "type": "depth", "verdict": "pass" },
-      { "id": "SPK-15", "weight": 1, "type": "depth", "verdict": "pass" },
-      { "id": "SPK-16", "weight": 1, "type": "side-effect", "verdict": "cannot_judge" }
+      { "id": "SPK-01", "weight": 3, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-roster"] },
+      { "id": "SPK-02", "weight": 3, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-roster"] },
+      { "id": "SPK-03", "weight": 2, "type": "bulk", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-roster"] },
+      { "id": "SPK-04", "weight": 2, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-roster"] },
+      { "id": "SPK-05", "weight": 2, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-tasks-mail"] },
+      { "id": "SPK-06", "weight": 2, "type": "side-effect", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["speaker-tasks-mail"] },
+      { "id": "SPK-07", "weight": 3, "type": "scoping", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["speaker-portal"] },
+      { "id": "SPK-08", "weight": 3, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-portal"] },
+      { "id": "SPK-09", "weight": 2, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-tasks-mail", "speaker-portal"] },
+      { "id": "SPK-10", "weight": 2, "type": "roundtrip", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["content-deliverables"] },
+      { "id": "SPK-11", "weight": 2, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-roster", "speaker-portal"] },
+      { "id": "SPK-12", "weight": 2, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-tasks-mail"] },
+      { "id": "SPK-13", "weight": 2, "type": "bulk", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["speaker-tasks-mail"] },
+      { "id": "SPK-14", "weight": 1, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-tasks-mail"] },
+      { "id": "SPK-15", "weight": 1, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-portal"] },
+      { "id": "SPK-16", "weight": 1, "type": "side-effect", "testability": "manual", "implementationVerdict": "pass", "evidence": ["scheduled-reminders"] }
     ],
     "content": [
-      { "id": "CNT-01", "weight": 3, "type": "crud", "verdict": "pass" },
-      { "id": "CNT-02", "weight": 3, "type": "crud", "verdict": "pass" },
-      { "id": "CNT-03", "weight": 3, "type": "scoping", "verdict": "pass" },
-      { "id": "CNT-04", "weight": 2, "type": "rule", "verdict": "pass" },
-      { "id": "CNT-05", "weight": 2, "type": "roundtrip", "verdict": "pass" },
-      { "id": "CNT-06", "weight": 1, "type": "depth", "verdict": "partial" },
-      { "id": "CNT-07", "weight": 3, "type": "roundtrip", "verdict": "partial" },
-      { "id": "CNT-08", "weight": 2, "type": "bulk", "verdict": "pass" },
-      { "id": "CNT-09", "weight": 2, "type": "crud", "verdict": "fail" },
-      { "id": "CNT-10", "weight": 2, "type": "crud", "verdict": "fail" },
-      { "id": "CNT-11", "weight": 2, "type": "depth", "verdict": "fail" },
-      { "id": "CNT-12", "weight": 3, "type": "rule", "verdict": "partial" },
-      { "id": "CNT-13", "weight": 1, "type": "exists", "verdict": "fail" },
-      { "id": "CNT-14", "weight": 2, "type": "bulk", "verdict": "fail" }
+      { "id": "CNT-01", "weight": 3, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-deliverables"] },
+      { "id": "CNT-02", "weight": 3, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-deliverables", "speaker-portal"] },
+      { "id": "CNT-03", "weight": 3, "type": "scoping", "testability": "auto", "implementationVerdict": "pass", "evidence": ["speaker-portal", "content-deliverables"] },
+      { "id": "CNT-04", "weight": 2, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-deliverables"] },
+      { "id": "CNT-05", "weight": 2, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-deliverables"] },
+      { "id": "CNT-06", "weight": 1, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-deliverables"] },
+      { "id": "CNT-07", "weight": 3, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-deliverables", "speaker-tasks-mail"] },
+      { "id": "CNT-08", "weight": 2, "type": "bulk", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["speaker-tasks-mail"] },
+      { "id": "CNT-09", "weight": 2, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-editing"] },
+      { "id": "CNT-10", "weight": 2, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-editing", "speaker-portal"] },
+      { "id": "CNT-11", "weight": 2, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-editing"] },
+      { "id": "CNT-12", "weight": 3, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-approval"] },
+      { "id": "CNT-13", "weight": 1, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["content-deliverables"] },
+      { "id": "CNT-14", "weight": 2, "type": "bulk", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["content-deliverables"] }
     ],
     "agenda": [
-      { "id": "AIA-01", "weight": 3, "type": "exists", "verdict": "pass" },
-      { "id": "AIA-02", "weight": 2, "type": "crud", "verdict": "pass" },
-      { "id": "AIA-03", "weight": 3, "type": "crud", "verdict": "pass" },
-      { "id": "AIA-04", "weight": 3, "type": "rule", "verdict": "pass" },
-      { "id": "AIA-05", "weight": 2, "type": "rule", "verdict": "pass" },
-      { "id": "AIA-06", "weight": 2, "type": "rule", "verdict": "pass" },
-      { "id": "AIA-07", "weight": 2, "type": "handoff", "verdict": "pass" },
-      { "id": "AIA-08", "weight": 1, "type": "depth", "verdict": "fail" }
+      { "id": "AIA-01", "weight": 3, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["agenda-builder"] },
+      { "id": "AIA-02", "weight": 2, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["agenda-builder"] },
+      { "id": "AIA-03", "weight": 3, "type": "crud", "testability": "auto", "implementationVerdict": "pass", "evidence": ["agenda-builder"] },
+      { "id": "AIA-04", "weight": 3, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["agenda-builder"] },
+      { "id": "AIA-05", "weight": 2, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["agenda-builder"] },
+      { "id": "AIA-06", "weight": 2, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["agenda-builder"] },
+      { "id": "AIA-07", "weight": 2, "type": "handoff", "testability": "auto", "implementationVerdict": "pass", "evidence": ["agenda-builder", "widgets-canonical"] },
+      { "id": "AIA-08", "weight": 1, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["agenda-assist"] }
     ],
     "widgets": [
-      { "id": "EMB-01", "weight": 3, "type": "exists", "verdict": "partial" },
-      { "id": "EMB-02", "weight": 2, "type": "rule", "verdict": "fail" },
-      { "id": "EMB-03", "weight": 2, "type": "rule", "verdict": "partial" },
-      { "id": "EMB-04", "weight": 3, "type": "exists", "verdict": "partial" },
-      { "id": "EMB-05", "weight": 2, "type": "roundtrip", "verdict": "partial" },
-      { "id": "EMB-06", "weight": 3, "type": "exists", "verdict": "pass" },
-      { "id": "EMB-07", "weight": 2, "type": "rule", "verdict": "pass" },
-      { "id": "EMB-08", "weight": 2, "type": "exists", "verdict": "partial" },
-      { "id": "EMB-09", "weight": 2, "type": "exists", "verdict": "partial" },
-      { "id": "EMB-10", "weight": 1, "type": "depth", "verdict": "partial" },
-      { "id": "EMB-11", "weight": 1, "type": "depth", "verdict": "partial" },
-      { "id": "EMB-12", "weight": 2, "type": "exists", "verdict": "partial" },
-      { "id": "EMB-13", "weight": 1, "type": "exists", "verdict": "fail" },
-      { "id": "EMB-14", "weight": 3, "type": "scoping", "verdict": "partial" },
-      { "id": "EMB-15", "weight": 2, "type": "handoff", "verdict": "partial" },
-      { "id": "EMB-16", "weight": 3, "type": "roundtrip", "verdict": "partial" }
-    ],
-    "crm": [
-      { "id": "CRM-01", "weight": 3, "type": "exists", "verdict": "fail" },
-      { "id": "CRM-02", "weight": 2, "type": "rule", "verdict": "fail" },
-      { "id": "CRM-03", "weight": 2, "type": "roundtrip", "verdict": "fail" },
-      { "id": "CRM-04", "weight": 1, "type": "depth", "verdict": "fail" },
-      { "id": "CRM-05", "weight": 2, "type": "bulk", "verdict": "fail" },
-      { "id": "CRM-06", "weight": 1, "type": "depth", "verdict": "fail" },
-      { "id": "CRM-07", "weight": 2, "type": "crud", "verdict": "fail" },
-      { "id": "CRM-08", "weight": 1, "type": "depth", "verdict": "fail" },
-      { "id": "CRM-09", "weight": 1, "type": "depth", "verdict": "fail" },
-      { "id": "CRM-10", "weight": 2, "type": "handoff", "verdict": "fail" },
-      { "id": "CRM-11", "weight": 1, "type": "bulk", "verdict": "partial" },
-      { "id": "CRM-12", "weight": 1, "type": "depth", "verdict": "fail" }
+      { "id": "EMB-01", "weight": 3, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-sessions"] },
+      { "id": "EMB-02", "weight": 2, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-sessions"] },
+      { "id": "EMB-03", "weight": 2, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-sessions"] },
+      { "id": "EMB-04", "weight": 3, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-speakers"] },
+      { "id": "EMB-05", "weight": 2, "type": "roundtrip", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-speakers"] },
+      { "id": "EMB-06", "weight": 3, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-agenda"] },
+      { "id": "EMB-07", "weight": 2, "type": "rule", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-agenda"] },
+      { "id": "EMB-08", "weight": 2, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-agenda"] },
+      { "id": "EMB-09", "weight": 2, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-itinerary"] },
+      { "id": "EMB-10", "weight": 1, "type": "depth", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-itinerary"] },
+      { "id": "EMB-11", "weight": 1, "type": "depth", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["widgets-itinerary"] },
+      { "id": "EMB-12", "weight": 2, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-gallery"] },
+      { "id": "EMB-13", "weight": 1, "type": "exists", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-gallery"] },
+      { "id": "EMB-14", "weight": 3, "type": "scoping", "testability": "auto", "implementationVerdict": "pass", "evidence": ["widgets-embed"] },
+      { "id": "EMB-15", "weight": 2, "type": "handoff", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["widgets-embed"] },
+      { "id": "EMB-16", "weight": 3, "type": "roundtrip", "testability": "auto-partial", "implementationVerdict": "pass", "evidence": ["widgets-canonical"] }
     ]
+  },
+  "optionalCrm": {
+    "areaId": "crm",
+    "includedInRequiredScore": false,
+    "officiallyAssessed": false,
+    "scorePct": null,
+    "itemCount": 12,
+    "totalWeight": 19,
+    "itemIds": ["CRM-01", "CRM-02", "CRM-03", "CRM-04", "CRM-05", "CRM-06", "CRM-07", "CRM-08", "CRM-09", "CRM-10", "CRM-11", "CRM-12"],
+    "note": "The evaluator explicitly excludes Speaker CRM from the required headline. No optional CRM score is inferred from adjacent event-speaker features."
   }
 }
