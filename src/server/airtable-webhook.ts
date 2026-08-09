@@ -12,11 +12,8 @@ function base64Bytes(value: string) {
   return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
 }
 
-function base64(value: ArrayBuffer) {
-  const bytes = new Uint8Array(value);
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
+function hexadecimal(value: ArrayBuffer) {
+  return [...new Uint8Array(value)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function constantTimeEqual(left: string, right: string) {
@@ -29,7 +26,7 @@ function constantTimeEqual(left: string, right: string) {
 }
 
 export async function verifyAirtableWebhookMac(rawBody: string, header: string | null | undefined, macSecretBase64: string) {
-  const provided = header?.match(/^hmac-sha256=(.+)$/i)?.[1]?.trim();
+  const provided = header?.match(/^hmac-sha256=([0-9a-f]{64})$/i)?.[1]?.toLowerCase();
   if (!provided || !macSecretBase64.trim()) return false;
   let keyBytes: Uint8Array;
   try {
@@ -40,7 +37,7 @@ export async function verifyAirtableWebhookMac(rawBody: string, header: string |
   const keyMaterial = Uint8Array.from(keyBytes).buffer as ArrayBuffer;
   const key = await crypto.subtle.importKey("raw", keyMaterial, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody));
-  return constantTimeEqual(base64(signature), provided);
+  return constantTimeEqual(hexadecimal(signature), provided);
 }
 
 export function parseAirtableWebhookSignal(rawBody: string): AirtableWebhookSignal | null {
