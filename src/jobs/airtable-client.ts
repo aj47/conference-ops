@@ -78,7 +78,9 @@ export class AirtableClient {
     if (!Number.isFinite(requestsPerSecond) || requestsPerSecond <= 0 || requestsPerSecond > 4) {
       throw new Error("Airtable requestsPerSecond must be between 0 and 4");
     }
-    this.fetcher = options.fetch ?? fetch;
+    // Workers' native fetch is Web-IDL branded and throws "Illegal invocation"
+    // when it is later called as an instance property without its global receiver.
+    this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.now = options.now ?? Date.now;
     this.wait = options.wait ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
     this.minimumIntervalMs = Math.ceil(1_000 / requestsPerSecond);

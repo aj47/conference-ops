@@ -2,6 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 import { AirtableClient, AirtableRateLimitError } from "../../src/jobs/airtable-client";
 
 describe("AirtableClient", () => {
+  it("keeps the Workers fetch receiver when using the runtime global", async () => {
+    const strictRuntimeFetch = vi.fn(function (this: unknown) {
+      if (this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(Response.json({ id: "recRecord123", fields: {} }));
+    });
+    vi.stubGlobal("fetch", strictRuntimeFetch);
+
+    try {
+      const client = new AirtableClient({ token: "pat-test", baseId: "appTestBase123" });
+
+      await expect(client.getRecord("tblRecords123", "recRecord123")).resolves.toMatchObject({ id: "recRecord123" });
+      expect(strictRuntimeFetch).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("batches upserts in groups of ten and stays under four requests per second", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     let recordNumber = 0;
