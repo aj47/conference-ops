@@ -20,7 +20,7 @@ import { LogoMark, NoticeRegion, PersonaSwitcher, StatusPill } from "./component
 import { useDialogA11y } from "./dialog-a11y";
 import { formatEventTicket } from "./event-time";
 import { privateEventPath } from "./private-routes";
-import { publicAgendaPath, publicResourcesPath, publicSpeakersPath, publicSubmissionPath } from "./public-routes";
+import { publicAgendaPath, publicGalleryPath, publicItineraryPath, publicResourcesPath, publicSessionsPath, publicSpeakersPath, publicSubmissionPath } from "./public-routes";
 import { useWorkspace } from "./workspace";
 
 const navSections = [
@@ -51,7 +51,7 @@ const navSections = [
     label: "Public",
     items: [
       { to: "/agenda", label: "Agenda", icon: Globe2, roles: ["organizer", "reviewer"] },
-      { to: "/speakers", label: "Speaker gallery", icon: Sparkles, roles: ["organizer", "reviewer"] },
+      { to: "/speakers", label: "Speakers", icon: Sparkles, roles: ["organizer", "reviewer"] },
     ],
   },
 ] as const;
@@ -237,19 +237,25 @@ export function ProductShell({ children }: PropsWithChildren) {
   );
 }
 
-export function PublicHeader({ active }: { active?: "agenda" | "speakers" | "resources" | "cfp" | "portal" }) {
+export function PublicHeader({ active }: { active?: "sessions" | "speakers" | "agenda" | "itinerary" | "gallery" | "resources" | "cfp" | "portal" }) {
   const { workspace, source, privateWorkspaceEventId } = useWorkspace();
   const submissionPath = publicSubmissionPath(workspace.event.slug);
+  const sessionsPath = publicSessionsPath(workspace.event.slug);
   const agendaPath = publicAgendaPath(workspace.event.slug);
   const speakersPath = publicSpeakersPath(workspace.event.slug);
+  const itineraryPath = publicItineraryPath(workspace.event.slug);
+  const galleryPath = publicGalleryPath(workspace.event.slug);
   const resourcesPath = publicResourcesPath(workspace.event.slug);
   const portalPath = privateEventPath("/portal/home", privateWorkspaceEventId ?? workspace.event.id);
   return (
     <header className="public-header">
       <NavLink to={agendaPath}><LogoMark /></NavLink>
       <nav aria-label="Public event navigation">
-        <NavLink className={active === "agenda" ? "active" : ""} to={agendaPath}>Agenda</NavLink>
+        <NavLink className={active === "sessions" ? "active" : ""} to={sessionsPath}>Sessions</NavLink>
         <NavLink className={active === "speakers" ? "active" : ""} to={speakersPath}>Speakers</NavLink>
+        <NavLink className={active === "agenda" ? "active" : ""} to={agendaPath}>Agenda</NavLink>
+        <NavLink className={active === "itinerary" ? "active" : ""} to={itineraryPath}>Itinerary</NavLink>
+        <NavLink className={active === "gallery" ? "active" : ""} to={galleryPath}>Gallery</NavLink>
         <NavLink className={active === "resources" ? "active" : ""} to={resourcesPath}>Resources</NavLink>
         <NavLink className={active === "cfp" ? "active" : ""} to={submissionPath}>Submit a talk</NavLink>
         <a className={active === "portal" ? "active" : ""} href={portalPath}>Portal</a>

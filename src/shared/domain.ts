@@ -131,6 +131,8 @@ export interface SpeakerProfile {
   city?: string;
   headshotUrl?: string;
   profileComplete: boolean;
+  /** Submission-specific label; populated when this profile is projected as a proposal participant. */
+  participantRole?: string;
 }
 
 export interface Proposal {
@@ -189,18 +191,27 @@ export interface ReviewAssignment {
   /** Present for final evidence so organizers can distinguish pre-revision reviews. */
   submittedAt?: string;
   rubric: ReviewRubricCriterion[];
-  scores: Record<string, number>;
+  scores: Record<string, ReviewResponseValue>;
   score?: number;
   recommendation?: "strong_yes" | "yes" | "maybe" | "no";
   notes?: string;
+  anonymized?: boolean;
+  recusedAt?: string;
+  recusalReason?: string;
 }
+
+export type ReviewResponseValue = number | string;
 
 export interface ReviewRubricCriterion {
   id: string;
   label: string;
+  /** Omitted on legacy rounds and treated as a numeric rating. */
+  type?: "numeric" | "dropdown" | "text";
   weight: number;
   maxScore: number;
   description?: string;
+  options?: string[];
+  required?: boolean;
 }
 
 export interface ReviewPlanDefinition {
@@ -210,6 +221,11 @@ export interface ReviewPlanDefinition {
   round: number;
   status: "draft" | "active" | "closed";
   rubric: ReviewRubricCriterion[];
+  opensAt?: string;
+  closesAt?: string;
+  anonymized?: boolean;
+  reviewerIds?: string[];
+  reviewerCaps?: Record<string, number>;
   submittedReviews: number;
   updatedAt: string;
 }

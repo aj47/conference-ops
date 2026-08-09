@@ -308,6 +308,15 @@ VALUES
    'track-build', NULL, NULL, NULL, 'unscheduled', NULL,
    'dx-2026@conference-ops.example', 0, 1, 1785585600000, 1786174200000);
 
+-- The curated fixture is already content-approved. Sessions created after
+-- seeding receive no status row and remain private until an organizer grants
+-- explicit approval.
+INSERT OR REPLACE INTO session_content_status
+  (session_id, event_id, status, created_at, updated_at)
+SELECT id, event_id, 'approved', created_at, updated_at
+FROM program_sessions
+WHERE event_id = 'event-aie-2026';
+
 INSERT OR REPLACE INTO session_speakers
   (session_id, speaker_profile_id)
 VALUES

@@ -136,6 +136,12 @@ function createDatabase() {
       PRIMARY KEY (proposal_id, reviewer_group_id)
     );
     CREATE TABLE review_rounds (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, round INTEGER NOT NULL, rubric TEXT NOT NULL, status TEXT NOT NULL);
+    CREATE TABLE review_round_reviewers (
+      round_id TEXT NOT NULL,
+      reviewer_user_id TEXT NOT NULL,
+      assignment_cap INTEGER NOT NULL DEFAULT 25,
+      PRIMARY KEY (round_id, reviewer_user_id)
+    );
     CREATE TABLE speaker_profiles (
       id TEXT PRIMARY KEY,
       user_id TEXT,
@@ -150,7 +156,7 @@ function createDatabase() {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
-    CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL, sort_order INTEGER NOT NULL, PRIMARY KEY (proposal_id, speaker_profile_id));
+    CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL, sort_order INTEGER NOT NULL, participant_role TEXT NOT NULL DEFAULT 'Presenter', PRIMARY KEY (proposal_id, speaker_profile_id));
     CREATE TABLE review_assignments (
       id TEXT PRIMARY KEY,
       proposal_id TEXT NOT NULL,
@@ -161,6 +167,8 @@ function createDatabase() {
       total_score REAL,
       recommendation TEXT,
       notes TEXT,
+      recused_at INTEGER,
+      recusal_reason TEXT,
       submitted_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
@@ -229,10 +237,14 @@ function createDatabase() {
     INSERT INTO proposal_reviewer_groups VALUES ('proposal-a', 'group-build');
     INSERT INTO reviewer_group_members VALUES ('group-build', 'reviewer-a'), ('group-build', 'reviewer-b');
     INSERT INTO review_rounds VALUES ('round-a', 'event-a', 1, '[{"id":"fit","label":"Program fit","weight":1,"maxScore":5}]', 'active');
+    INSERT INTO review_round_reviewers VALUES
+      ('round-a', 'reviewer-a', 25),
+      ('round-a', 'reviewer-b', 25),
+      ('round-a', 'reviewer-history', 25);
     INSERT INTO speaker_profiles VALUES
       ('speaker-primary', 'applicant-a', 'event-a', 'Old Applicant', 'applicant@example.com', '', '', '', 0, 0, 1, 1),
       ('speaker-old-co', NULL, 'event-a', 'Old Co-speaker', 'old@example.com', '', '', '', 0, 0, 1, 1);
-    INSERT INTO proposal_speakers VALUES ('proposal-a', 'speaker-primary', 0), ('proposal-a', 'speaker-old-co', 1);
+    INSERT INTO proposal_speakers VALUES ('proposal-a', 'speaker-primary', 0, 'Primary presenter'), ('proposal-a', 'speaker-old-co', 1, 'Co-presenter');
   `);
   d1.database.prepare("UPDATE form_versions SET settings = ? WHERE id = 'form-version-a'").run(JSON.stringify({
     submissionControls: {
@@ -609,8 +621,8 @@ describe("production proposal lifecycle API", () => {
     d1.database.exec(`
       UPDATE proposals SET status = 'under_review', submitted_at = 2, version = 2 WHERE id = 'proposal-a';
       INSERT INTO review_assignments VALUES
-        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-a', 'submitted', '{"fit":5}', 5, 'strong_yes', 'Preserved first-version evidence.', 2, 1, 2, 1),
-        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":3}', 3, 'maybe', 'Mutable draft evidence.', NULL, 1, 1, 1);
+        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-a', 'submitted', '{"fit":5}', 5, 'strong_yes', 'Preserved first-version evidence.', NULL, NULL, 2, 1, 2, 1),
+        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":3}', 3, 'maybe', 'Mutable draft evidence.', NULL, NULL, NULL, 1, 1, 1);
     `);
 
     const reopened = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a/reopen", { method: "POST" });
@@ -662,8 +674,8 @@ describe("production proposal lifecycle API", () => {
     d1.database.exec(`
       UPDATE proposals SET status = 'under_review', submitted_at = 2, version = 2 WHERE id = 'proposal-a';
       INSERT INTO review_assignments VALUES
-        ('review-a-cycle-1', 'proposal-a', 'round-a', 'reviewer-a', 'submitted', '{"fit":5}', 5, 'strong_yes', 'Reviewer A first-cycle evidence.', 2, 1, 2, 1),
-        ('review-b-cycle-1', 'proposal-a', 'round-a', 'reviewer-b', 'submitted', '{"fit":4}', 4, 'yes', 'Reviewer B first-cycle evidence.', 2, 1, 2, 1);
+        ('review-a-cycle-1', 'proposal-a', 'round-a', 'reviewer-a', 'submitted', '{"fit":5}', 5, 'strong_yes', 'Reviewer A first-cycle evidence.', NULL, NULL, 2, 1, 2, 1),
+        ('review-b-cycle-1', 'proposal-a', 'round-a', 'reviewer-b', 'submitted', '{"fit":4}', 4, 'yes', 'Reviewer B first-cycle evidence.', NULL, NULL, 2, 1, 2, 1);
     `);
 
     const reopened = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a/reopen", { method: "POST" });
@@ -750,9 +762,9 @@ describe("production proposal lifecycle API", () => {
     d1.database.exec(`
       UPDATE proposals SET status = 'under_review', submitted_at = 2, version = 2 WHERE id = 'proposal-a';
       INSERT INTO review_assignments VALUES
-        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-a', 'submitted', '{"fit":5}', 5, 'strong_yes', 'Immutable first-version evidence.', 2, 1, 2, 1),
-        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":4}', 4, 'yes', 'Mutable draft evidence.', NULL, 1, 1, 1),
-        ('review-pending', 'proposal-a', 'round-a', 'reviewer-history', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1, 1);
+        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-a', 'submitted', '{"fit":5}', 5, 'strong_yes', 'Immutable first-version evidence.', NULL, NULL, 2, 1, 2, 1),
+        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":4}', 4, 'yes', 'Mutable draft evidence.', NULL, NULL, NULL, 1, 1, 1),
+        ('review-pending', 'proposal-a', 'round-a', 'reviewer-history', 'pending', '{}', NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, 1);
     `);
     authUser.id = "organizer-a";
     authUser.name = "Organizer A";
@@ -885,9 +897,9 @@ describe("production proposal lifecycle API", () => {
     d1.database.exec(`
       UPDATE proposals SET status = 'under_review' WHERE id = 'proposal-a';
       INSERT INTO review_assignments VALUES
-        ('review-pending', 'proposal-a', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1, 1),
-        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":4}', 4, 'yes', 'A useful draft note.', NULL, 1, 1, 1),
-        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-history', 'submitted', '{"fit":5}', 5, 'strong_yes', 'A complete submitted review.', 2, 1, 2, 1);
+        ('review-pending', 'proposal-a', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, 1),
+        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":4}', 4, 'yes', 'A useful draft note.', NULL, NULL, NULL, 1, 1, 1),
+        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-history', 'submitted', '{"fit":5}', 5, 'strong_yes', 'A complete submitted review.', NULL, NULL, 2, 1, 2, 1);
     `);
 
     const withdrawn = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a/withdraw", { method: "POST" });

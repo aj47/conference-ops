@@ -35,17 +35,27 @@ export async function prepareScheduledReminders(env: Bindings, now = Date.now())
   for (const rule of rules.results) {
     if (rule.kind === "task_overdue") {
       const [speakers, template] = await Promise.all([
-        env.DB.prepare(`SELECT sp.id, sp.name, sp.email, COUNT(st.id) AS taskCount
+        env.DB.prepare(`SELECT sp.id, sp.name, sp.email, COUNT(st.id) AS taskCount,
+            json_group_array(json_object('title', st.title, 'dueAt', st.due_at)) AS taskDetails
           FROM speaker_profiles sp
           JOIN speaker_tasks st ON st.speaker_profile_id = sp.id AND st.event_id = sp.event_id
           WHERE sp.event_id = ? AND st.status = 'overdue' AND st.due_at <= ?
           GROUP BY sp.id, sp.name, sp.email`)
           .bind(rule.eventId, now - Math.max(0, rule.offsetDays) * DAY_MS)
-          .all<{ id: string; name: string; email: string; taskCount: number }>(),
+          .all<{ id: string; name: string; email: string; taskCount: number; taskDetails: string }>(),
         env.DB.prepare("SELECT subject, text, html FROM message_templates WHERE event_id = ? AND kind = 'reminder' ORDER BY updated_at DESC LIMIT 1")
           .bind(rule.eventId).first<{ subject: string; text: string; html: string }>(),
       ]);
       for (const speaker of speakers.results) {
+        const tasks = (() => {
+          try {
+            const parsed = JSON.parse(speaker.taskDetails) as Array<{ title?: unknown; dueAt?: unknown }>;
+            return parsed.filter((task) => typeof task.title === "string" && Number.isFinite(Number(task.dueAt)));
+          } catch {
+            return [];
+          }
+        })();
+        const taskDetailsText = tasks.map((task) => `• ${String(task.title)} — due ${new Date(Number(task.dueAt)).toISOString().slice(0, 10)}`).join("\n");
         const portalUrl = new URL("/portal/tasks", env.PUBLIC_APP_URL);
         portalUrl.searchParams.set("eventId", rule.eventId);
         portalUrl.searchParams.set("role", "speaker");
@@ -53,11 +63,17 @@ export async function prepareScheduledReminders(env: Bindings, now = Date.now())
           "event.name": rule.eventName,
           "speaker.name": speaker.name,
           "task.count": String(speaker.taskCount),
+          "task.details": taskDetailsText,
           "speaker.portal_url": portalUrl.toString(),
         };
         const htmlVariables = Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, escapeHtml(value)]));
-        const text = render(template?.text ?? "Hi {{speaker.name}}, you have {{task.count}} overdue onboarding task(s) for {{event.name}}. Open your portal: {{speaker.portal_url}}", variables);
-        const html = render(template?.html ?? "<p>Hi {{speaker.name}},</p><p>You have {{task.count}} overdue onboarding task(s) for {{event.name}}.</p><p><a href=\"{{speaker.portal_url}}\">Open speaker tasks</a></p>", htmlVariables);
+        const baseText = render(template?.text ?? "Hi {{speaker.name}}, you have {{task.count}} overdue onboarding task(s) for {{event.name}}. Open your portal: {{speaker.portal_url}}", variables);
+        const baseHtml = render(template?.html ?? "<p>Hi {{speaker.name}},</p><p>You have {{task.count}} overdue onboarding task(s) for {{event.name}}.</p><p><a href=\"{{speaker.portal_url}}\">Open speaker tasks</a></p>", htmlVariables);
+        const detailsAlreadyRendered = baseText.includes(taskDetailsText) || baseHtml.includes(escapeHtml(taskDetailsText));
+        const text = taskDetailsText && !detailsAlreadyRendered ? `${baseText}\n\nOutstanding tasks:\n${taskDetailsText}` : baseText;
+        const html = taskDetailsText && !detailsAlreadyRendered
+          ? `${baseHtml}<h3>Outstanding tasks</h3><ul>${tasks.map((task) => `<li>${escapeHtml(String(task.title))} — due ${escapeHtml(new Date(Number(task.dueAt)).toISOString().slice(0, 10))}</li>`).join("")}</ul>`
+          : baseHtml;
         const idempotencyKey = `scheduled-task-reminder:${rule.eventId}:${speaker.id}:${bucket}`;
         const result = await env.DB.prepare(`INSERT OR IGNORE INTO outbox
           (id, event_id, kind, idempotency_key, payload, status, attempts, available_at, created_at, updated_at)

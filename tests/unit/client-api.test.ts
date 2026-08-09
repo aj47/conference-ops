@@ -576,7 +576,6 @@ describe("conference client headshot requests", () => {
       bio: "Works on observability for long-running AI workflows.",
       city: "London, UK",
       headshotUploadId: "upload-headshot",
-      publish: true,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -590,7 +589,6 @@ describe("conference client headshot requests", () => {
           bio: "Works on observability for long-running AI workflows.",
           city: "London, UK",
           headshotUploadId: "upload-headshot",
-          publish: true,
         }),
       }),
     );

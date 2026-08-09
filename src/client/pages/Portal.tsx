@@ -27,6 +27,7 @@ import { TaskArtifactEvidence } from "../TaskArtifactEvidence";
 import { TaskDiscussion } from "../TaskDiscussion";
 import { TaskExternalAction } from "../TaskExternalAction";
 import { TaskResponseForm } from "../TaskResponseForm";
+import { SpeakerPortalAssignments, SpeakerPortalDeliverableConstraints, SpeakerPortalSessionBadge, SpeakerPortalSocialEditor } from "../speaker-content/SpeakerPortalContent";
 import { useWorkspace } from "../workspace";
 
 const portalTabs = [
@@ -92,7 +93,7 @@ export function SpeakerPortal() {
           {active === "home" && <PortalHome speaker={speaker} proposals={proposals} tasks={tasks} completeTasks={completeTasks} eventId={eventId} />}
           {active === "submissions" && <PortalSubmissions proposals={proposals} onReopen={reopenProposal} />}
           {active === "tasks" && <PortalTasks tasks={tasks} onToggle={toggleTask} onUpload={uploadTaskArtifact} onDownload={downloadTaskArtifact} onComment={addTaskComment} onSubmitForm={submitTaskForm} eventId={eventId} />}
-          {active === "profile" && <PortalProfile speaker={speaker} onSave={(patch) => updateProfile(speaker.id, patch)} onUpload={(file) => uploadHeadshot(speaker.id, file)} />}
+          {active === "profile" && <><PortalProfile speaker={speaker} onSave={(patch) => updateProfile(speaker.id, patch)} onUpload={(file) => uploadHeadshot(speaker.id, file)} /><SpeakerPortalSocialEditor /></>}
         </>}
       </main>
       <NoticeRegion />
@@ -108,6 +109,7 @@ function PortalHome({ speaker, proposals, tasks, completeTasks, eventId }: { spe
         <section className="portal-panel portal-panel--profile"><SectionHeading title="My public profile" action={<NavLink to={privateEventPath("/portal/profile", eventId)} className="text-link">Edit <ArrowRight size={14} /></NavLink>} /><div className="profile-summary"><SpeakerPortrait speaker={speaker} /><div><h3>{speaker.name}</h3><p>{speaker.title} · {speaker.company}</p><small>{speaker.email}</small></div></div><p>{speaker.bio || "Add a biography so attendees know the perspective behind your session."}</p><StatusPill status={speaker.profileComplete ? "profile ready" : "profile incomplete"} /></section>
       </div>
       <section className="portal-panel portal-panel--tasks"><SectionHeading title="Production tasks" description="Your completed work is visible to the organizer after each saved action." action={<NavLink to={privateEventPath("/portal/tasks", eventId)} className="text-link">Open all <ArrowRight size={14} /></NavLink>} /><ProgressBar label="Onboarding progress" value={completeTasks} max={Math.max(1, tasks.length)} /><div className="portal-task-preview">{tasks.filter((task) => isOutstandingTaskStatus(task.status)).slice(0, 3).map((task) => <NavLink to={privateEventPath("/portal/tasks", eventId)} key={task.id}><span className={`task-dot task-dot--${task.status}`} /><div><strong>{task.title}</strong>{task.targetTitle && <small>For “{task.targetTitle}”</small>}<small>Due {dueDate(task.dueAt)}</small></div><StatusPill status={task.status} /></NavLink>)}{!tasks.some((task) => isOutstandingTaskStatus(task.status)) && <EmptyState title="You’re clear" detail="No open speaker tasks. We will notify you when production adds one." />}</div></section>
+      <SpeakerPortalAssignments />
     </>
   );
 }
@@ -238,9 +240,11 @@ function PortalTasks({
             <div>
               <strong>{task.title}</strong>
               {task.targetTitle && <small className="portal-task-target">For “{task.targetTitle}”</small>}
+              {task.targetTitle && <SpeakerPortalSessionBadge />}
               <p>{task.description}</p>
               <small>{task.status === "waived" ? "Waived · no action required" : `Due ${dueDate(task.dueAt)}`}</small>
               {mode === "file_request" && outstanding && <label className="button button--quiet upload-button"><FileUp size={14} /> {busy ? "Uploading…" : "Upload required file"}<input type="file" disabled={busy} accept=".pdf,.ppt,.pptx,.doc,.docx,.txt" onChange={(event) => { const input = event.currentTarget; const file = input.files?.[0]; input.value = ""; if (file) void runTaskAction(task.id, async () => { await onUpload(task.id, file); setFilter("all"); }, "The file could not be uploaded."); }} /></label>}
+              {mode === "file_request" && outstanding && <SpeakerPortalDeliverableConstraints />}
               {mode === "file_request" && task.status === "complete" && <TaskArtifactEvidence task={task} busy={busy} onDownload={(uploadId) => void runTaskAction(task.id, () => onDownload(task.id, uploadId), "The file could not be downloaded.")} onReplace={(file) => void runTaskAction(task.id, () => onUpload(task.id, file), "The replacement file could not be uploaded.")} />}
               {mode === "form" && outstanding && <button type="button" className="button button--quiet" onClick={() => { setFormTaskId(task.id); setError(""); }}><FileText size={14} /> Open required form</button>}
               <TaskExternalAction task={task} />

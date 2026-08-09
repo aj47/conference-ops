@@ -75,6 +75,12 @@ describe("workspace review visibility", () => {
       CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, user_id TEXT);
       CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
       CREATE TABLE review_rounds (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, round INTEGER NOT NULL, name TEXT NOT NULL, rubric TEXT NOT NULL, status TEXT NOT NULL);
+      CREATE TABLE review_round_reviewers (
+        round_id TEXT NOT NULL,
+        reviewer_user_id TEXT NOT NULL,
+        assignment_cap INTEGER NOT NULL DEFAULT 25,
+        PRIMARY KEY (round_id, reviewer_user_id)
+      );
       CREATE TABLE review_assignments (
         id TEXT PRIMARY KEY,
         proposal_id TEXT NOT NULL,
@@ -96,6 +102,7 @@ describe("workspace review visibility", () => {
       INSERT INTO speaker_profiles VALUES ('speaker-claim-later', 'event-a', NULL);
       INSERT INTO proposal_speakers VALUES ('proposal-claim-later', 'speaker-claim-later');
       INSERT INTO review_rounds VALUES ('round-a', 'event-a', 1, 'Program review', '[]', 'active');
+      INSERT INTO review_round_reviewers VALUES ('round-a', 'reviewer-a', 25), ('round-a', 'reviewer-b', 25);
       INSERT INTO review_assignments VALUES
         ('review-active', 'proposal-active', 'round-a', 'reviewer-a', 'pending', '{}', NULL, 1, 1),
         ('review-final', 'proposal-final', 'round-a', 'reviewer-a', 'submitted', '{}', 2, 2, 1),
@@ -104,15 +111,21 @@ describe("workspace review visibility", () => {
         ('review-self-owned', 'proposal-self-owned', 'round-a', 'reviewer-a', 'pending', '{}', NULL, 5, 1),
         ('review-claim-later', 'proposal-claim-later', 'round-a', 'reviewer-a', 'pending', '{}', NULL, 6, 1),
         ('review-revised', 'proposal-revised', 'round-a', 'reviewer-a', 'submitted', '{}', 5, 7, 1);
+      ALTER TABLE review_rounds ADD COLUMN anonymized INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE review_assignments ADD COLUMN recused_at INTEGER;
+      ALTER TABLE review_assignments ADD COLUMN recusal_reason TEXT;
     `);
 
     const reviewerRowsBeforeClaim = db.prepare(workspaceReviewRowsSql).all("event-a", "reviewer", "reviewer-a", "reviewer-a", "reviewer-a");
     db.prepare("UPDATE speaker_profiles SET user_id = 'reviewer-a' WHERE id = 'speaker-claim-later'").run();
     const reviewerRowsAfterClaim = db.prepare(workspaceReviewRowsSql).all("event-a", "reviewer", "reviewer-a", "reviewer-a", "reviewer-a");
+    db.prepare("DELETE FROM review_round_reviewers WHERE round_id = 'round-a' AND reviewer_user_id = 'reviewer-a'").run();
+    const reviewerRowsAfterPoolRemoval = db.prepare(workspaceReviewRowsSql).all("event-a", "reviewer", "reviewer-a", "reviewer-a", "reviewer-a");
     const organizerRows = db.prepare(workspaceReviewRowsSql).all("event-a", "organizer", "organizer-a", "organizer-a", "organizer-a");
 
     expect(reviewerRowsBeforeClaim.map((row) => row.id)).toEqual(["review-active", "review-claim-later"]);
     expect(reviewerRowsAfterClaim.map((row) => row.id)).toEqual(["review-active"]);
+    expect(reviewerRowsAfterPoolRemoval).toEqual([]);
     expect(organizerRows.map((row) => row.id)).toEqual(["review-active", "review-final", "review-withdrawn", "review-other", "review-self-owned", "review-claim-later", "review-revised"]);
     expect(db.prepare("SELECT status FROM review_assignments WHERE id = 'review-withdrawn'").get()).toEqual({ status: "submitted" });
   });

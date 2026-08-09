@@ -81,6 +81,7 @@ function createDatabase() {
       owner_user_id TEXT NOT NULL,
       title TEXT NOT NULL,
       summary TEXT NOT NULL,
+      category TEXT NOT NULL,
       format TEXT NOT NULL,
       status TEXT NOT NULL,
       decided_at INTEGER,
@@ -97,6 +98,7 @@ function createDatabase() {
       updated_at INTEGER NOT NULL
     );
     CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL, sort_order INTEGER NOT NULL);
+    CREATE TABLE tracks (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, name TEXT NOT NULL);
     CREATE TABLE task_templates (
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL,
@@ -143,6 +145,7 @@ function createDatabase() {
       title TEXT NOT NULL,
       description TEXT NOT NULL,
       format TEXT NOT NULL,
+      track_id TEXT,
       status TEXT NOT NULL,
       calendar_uid TEXT NOT NULL,
       calendar_sequence INTEGER NOT NULL,
@@ -180,9 +183,12 @@ function createDatabase() {
     INSERT INTO events VALUES ('event-a', 'org-a', 'Conference A', 4102444800000);
     INSERT INTO event_memberships VALUES ('event-a', 'organizer-a', 'organizer', 1, 1);
     INSERT INTO proposals VALUES
-      ('proposal-draft', 'event-a', 'applicant-a', 'Draft proposal', 'Draft summary', 'talk', 'draft', NULL, 1, 1),
-      ('proposal-review', 'event-a', 'applicant-a', 'First proposal', 'First summary', 'talk', 'under_review', NULL, 1, 1),
-      ('proposal-review-2', 'event-a', 'applicant-a', 'Second proposal', 'Second summary', 'workshop', 'under_review', NULL, 1, 1);
+      ('proposal-draft', 'event-a', 'applicant-a', 'Draft proposal', 'Draft summary', 'Evaluate', 'talk', 'draft', NULL, 1, 1),
+      ('proposal-review', 'event-a', 'applicant-a', 'First proposal', 'First summary', 'Evaluate, Build', 'talk', 'under_review', NULL, 1, 1),
+      ('proposal-review-2', 'event-a', 'applicant-a', 'Second proposal', 'Second summary', 'Build', 'workshop', 'under_review', NULL, 1, 1);
+    INSERT INTO tracks VALUES
+      ('track-build', 'event-a', 'Build'),
+      ('track-evaluate', 'event-a', 'Evaluate');
     INSERT INTO speaker_profiles VALUES ('speaker-a', NULL, 'event-a', 'Speaker A', 'speaker@example.com', 0, 1);
     INSERT INTO proposal_speakers VALUES
       ('proposal-draft', 'speaker-a', 0),
@@ -257,12 +263,28 @@ describe("proposal decision API finality", () => {
     expect(d1.database.prepare("SELECT status, decided_at IS NOT NULL AS decided, version FROM proposals WHERE id = 'proposal-review'").get()).toEqual({ status: "accepted", decided: 1, version: 3 });
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 2 });
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM speaker_tasks").get()).toEqual({ count: 2 });
-    expect(d1.database.prepare("SELECT proposal_id, status FROM program_sessions").get()).toEqual({ proposal_id: "proposal-review", status: "unscheduled" });
+    expect(d1.database.prepare("SELECT proposal_id, track_id, status FROM program_sessions").get()).toEqual({ proposal_id: "proposal-review", track_id: "track-evaluate", status: "unscheduled" });
     expect(d1.database.prepare("SELECT speaker_profile_id FROM session_speakers").all()).toEqual([{ speaker_profile_id: "speaker-a" }]);
     expect(d1.database.prepare("SELECT published FROM speaker_profiles WHERE id = 'speaker-a'").get()).toEqual({ published: 1 });
     expect(d1.database.prepare("SELECT idempotency_key, status FROM outbox").all()).toEqual([
       { idempotency_key: "proposal-decision:proposal-review:accepted:speaker-a", status: "queued" },
     ]);
+  });
+
+  it("accepts an unmapped category and creates an unassigned session", async () => {
+    d1.database.exec(`
+      INSERT INTO proposals VALUES
+        ('proposal-unmapped', 'event-a', 'applicant-a', 'Unmapped proposal', 'Unmapped summary', 'Developer experience', 'talk', 'under_review', NULL, 1, 1);
+      INSERT INTO proposal_speakers VALUES ('proposal-unmapped', 'speaker-a', 0);
+    `);
+
+    const staged = await decide(d1, "proposal-unmapped", "accept_queue");
+    const accepted = await decide(d1, "proposal-unmapped", "accepted");
+
+    expect(staged.status).toBe(200);
+    expect(accepted.status).toBe(200);
+    expect(d1.database.prepare("SELECT proposal_id, track_id FROM program_sessions WHERE proposal_id = 'proposal-unmapped'").get())
+      .toEqual({ proposal_id: "proposal-unmapped", track_id: null });
   });
 
   it("creates contact tasks once and submission tasks for each accepted proposal", async () => {

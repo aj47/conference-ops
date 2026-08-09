@@ -9,6 +9,8 @@ export const defaultReviewRubric = [
   { id: "relevance", label: "Audience relevance", description: "Right problem for this program", weight: 2, maxScore: 5 },
   { id: "evidence", label: "Evidence and specificity", description: "Concrete proof, demo, or field lesson", weight: 3, maxScore: 5 },
   { id: "delivery", label: "Likely delivery quality", description: "The proposal supports a clear attendee outcome", weight: 1, maxScore: 5 },
+  { id: "confidence", label: "Decision confidence", description: "How confidently would you advance this proposal?", type: "dropdown" as const, options: ["High", "Medium", "Low"], weight: 1, maxScore: 5, required: false },
+  { id: "evidence-note", label: "Evidence to revisit", description: "Optional context for the committee discussion", type: "text" as const, weight: 1, maxScore: 5, required: false },
 ];
 
 export const demoActors: Actor[] = [
@@ -98,8 +100,8 @@ export function createDemoWorkspace(actorId = "user-organizer"): WorkspaceSnapsh
       { id: "proposal-5", eventId: "event-aie-2026", title: "Serving small models at the edge", summary: "Latency and cost lessons from routing compact models near users.", category: "Model infrastructure", format: "lightning", durationMinutes: 10, level: "intermediate", status: "submitted", speakers: [speakers.marco], submittedAt: "2026-08-08T04:10:00.000Z", reviewCount: 0, reviewerGroup: "Infrastructure committee", tags: ["edge", "latency"] },
     ],
     reviews: [
-      { id: "review-1", proposalId: "proposal-2", reviewerId: "user-reviewer", round: 1, roundName: "Program review", status: "in_progress", rubric: defaultReviewRubric, scores: { relevance: 5, evidence: 4, delivery: 4 }, score: 4.33, recommendation: "yes", notes: "Strong operational detail; ask for a clearer failure story." },
-      { id: "review-2", proposalId: "proposal-5", reviewerId: "user-reviewer", round: 1, roundName: "Program review", status: "pending", rubric: defaultReviewRubric, scores: {} },
+      { id: "review-1", proposalId: "proposal-2", reviewerId: "user-reviewer", round: 1, roundName: "Program review", status: "in_progress", rubric: defaultReviewRubric, scores: { relevance: 5, evidence: 4, delivery: 4, confidence: "High", "evidence-note": "Confirm the failure story before final selection." }, score: 4.33, recommendation: "yes", notes: "Strong operational detail; ask for a clearer failure story.", anonymized: true },
+      { id: "review-2", proposalId: "proposal-5", reviewerId: "user-reviewer", round: 1, roundName: "Program review", status: "pending", rubric: defaultReviewRubric, scores: {}, anonymized: true },
     ],
     tasks: [
       { id: "task-1", eventId: "event-aie-2026", speakerId: "speaker-marco", title: "Confirm speaker profile", description: "Review your title, company, bio, and public headshot.", dueAt: "2026-08-15T23:59:00.000Z", status: "complete", type: "profile" },

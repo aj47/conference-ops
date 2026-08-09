@@ -151,23 +151,23 @@ test("control-room exceptions open the event-scoped speaker task after navigatio
   });
 
   await taskException.click();
-  await expect(page.getByRole("heading", { name: "Leah Okafor" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Leah Okafor" })).toBeVisible();
   let targetedTask = page.locator('article.task-row[aria-current="true"]');
   await expect(targetedTask).toContainText("Complete public profile");
   await expect(targetedTask).toBeFocused();
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Leah Okafor" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Leah Okafor" })).toBeVisible();
   targetedTask = page.locator('article.task-row[aria-current="true"]');
   await expect(targetedTask).toContainText("Complete public profile");
   await expect(targetedTask).toBeFocused();
 
   await page.goto("/speaker-ops?eventId=event-aie-2026&speakerId=missing&taskId=task-4");
-  await expect(page.getByRole("heading", { name: "Marco Ruiz" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Marco Ruiz" })).toBeVisible();
   await expect(page.locator('article.task-row[aria-current="true"]')).toHaveCount(0);
 
   await page.goto("/speaker-ops?eventId=event-aie-2026&speakerId=speaker-leah&taskId=missing");
-  await expect(page.getByRole("heading", { name: "Leah Okafor" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Leah Okafor" })).toBeVisible();
   await expect(page.locator('article.task-row[aria-current="true"]')).toHaveCount(0);
 });
 
@@ -350,10 +350,12 @@ test("unsupported file fields cannot be authored and clipboard notices reflect t
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("conference-ops-test-copy"))).toBe("http://127.0.0.1:5173/events/ai-engineer-summit-2026/agenda");
   await expect(page.getByText("Agenda preview link copied.")).toBeVisible();
 
-  await page.goto("/events/ai-engineer-summit-2026/agenda");
-  await page.getByRole("button", { name: "Embed agenda" }).click();
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("conference-ops-test-copy"))).toBe("http://127.0.0.1:5173/events/ai-engineer-summit-2026/embed/agenda");
-  await expect(page.getByText("Embed URL copied.")).toBeVisible();
+  await page.goto("/program-settings");
+  await page.getByRole("button", { name: /Public widgets/ }).click();
+  await page.getByRole("button", { name: /Generate Styled HTML/ }).click();
+  await page.getByRole("button", { name: "Copy output" }).click();
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("conference-ops-test-copy"))).toContain("<iframe");
+  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("conference-ops-test-copy"))).toContain("/events/ai-engineer-summit-2026/embed/sessions");
 
   await page.evaluate(() => {
     Object.defineProperty(navigator, "clipboard", {
@@ -361,8 +363,8 @@ test("unsupported file fields cannot be authored and clipboard notices reflect t
       value: { writeText: async () => Promise.reject(new Error("Clipboard denied")) },
     });
   });
-  await page.getByRole("button", { name: "Embed agenda" }).click();
-  await expect(page.getByText("Could not copy the embed URL. Open the embed page and copy the address from your browser.")).toBeVisible();
+  await page.getByRole("button", { name: "Copy URL" }).click();
+  await expect(page.getByText("Copy was blocked by the browser. Select the generated output and copy it manually.")).toBeVisible();
 });
 
 test("organizer authors a one-level conditional CFP question", async ({ page, isMobile }) => {
@@ -422,6 +424,25 @@ test("organizer creates, places, and resolves a direct-session conflict", async 
   const publishedCard = page.locator(".schedule-card").filter({ hasText: "Opening call" });
   await publishedCard.getByRole("button", { name: "Reschedule Opening call" }).click();
   await expect(placementDialog).toBeVisible();
+});
+
+test("organizer previews and applies an explainable conflict-free schedule plan", async ({ page, isMobile }) => {
+  if (isMobile) await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/schedule");
+
+  await page.getByRole("button", { name: "Auto-place safe sessions" }).click();
+  const preview = page.getByRole("dialog", { name: "Preview safe placements" });
+  await expect(preview).toBeVisible();
+  await expect(preview.getByText("No black box and no silent overrides.")).toBeVisible();
+  await expect(preview.getByRole("list", { name: "Proposed session placements" })
+    .getByText("Designing the first ten minutes of an AI SDK", { exact: true })).toBeVisible();
+  await expect(preview.getByRole("button", { name: "Apply 1 placement" })).toBeFocused();
+
+  await preview.getByRole("button", { name: "Apply 1 placement" }).click();
+  await expect(page.getByText("Assisted placement scheduled 1 conflict-free session.")).toBeVisible();
+  const scheduled = page.locator(".schedule-card").filter({ hasText: "Designing the first ten minutes of an AI SDK" });
+  await expect(scheduled.getByRole("button", { name: "Reschedule Designing the first ten minutes of an AI SDK" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
 test("submitter completes the public CFP and sees a confirmation", async ({ page, isMobile }) => {
@@ -523,18 +544,36 @@ test("submitter completes the public CFP and sees a confirmation", async ({ page
 });
 
 test("public program, embed, and speaker portal are responsive", async ({ page }) => {
+  await page.goto("/events/ai-engineer-summit-2026/sessions");
+  await expect(page.getByRole("heading", { name: "Every session, with the context to choose well." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sessions list" })).toBeVisible();
+  await page.getByRole("textbox", { name: "Search sessions by title or speaker" }).fill("Ruiz");
+  await expect(page.getByRole("heading", { name: "The eval flywheel that caught our agent regressions" })).toBeVisible();
+
   await page.goto("/events/ai-engineer-summit-2026/agenda");
-  await expect(page.getByRole("heading", { name: "A program for people who operate the systems." })).toBeVisible();
-  await expect(page.getByText("August 28–29, 2026 · Fort Mason Center, San Francisco")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Opening call" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "The live program, mapped to place and time." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Agenda" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Opening call/ })).toBeVisible();
 
   await page.goto("/events/ai-engineer-summit-2026/speakers");
-  await expect(page.getByRole("heading", { name: "Meet the people behind the field notes." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "The people behind the field notes." })).toBeVisible();
   await expect(page.getByText("Marco Ruiz", { exact: true }).first()).toBeVisible();
 
+  await page.goto("/events/ai-engineer-summit-2026/itinerary");
+  await expect(page.getByRole("heading", { name: "Schedule itinerary" })).toBeVisible();
+  await page.getByRole("button", { name: /Add Opening call to my schedule/ }).click();
+  await expect(page.getByRole("button", { name: /Remove Opening call from my schedule/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export .ics" })).toBeEnabled();
+
+  await page.goto("/events/ai-engineer-summit-2026/gallery");
+  await expect(page.getByRole("heading", { name: "Speaker gallery" })).toBeVisible();
+  await page.getByRole("button", { name: /Marco Ruiz/ }).click();
+  await expect(page.getByRole("dialog", { name: "Marco Ruiz" })).toContainText("Sessions (1)");
+  await page.keyboard.press("Escape");
+
   await page.goto("/events/ai-engineer-summit-2026/embed/agenda");
-  await expect(page.getByText("Full agenda")).toBeVisible();
-  await expect(page.getByText("Program reflects the current live schedule when this page loads.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Open full view" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Agenda" })).toBeVisible();
 
   await page.goto("/portal/home");
   await page.getByRole("combobox", { name: "Switch demo persona" }).selectOption("user-speaker");
@@ -592,8 +631,16 @@ test("organizer requests a controlled proposal revision with an auditable note",
           left: Math.round(rect.left * 100) / 100,
           right: Math.round(rect.right * 100) / 100,
           width: Math.round(rect.width * 100) / 100,
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
           position: style.position,
           overflowX: style.overflowX,
+          parent: element.parentElement
+            ? `${element.parentElement.tagName.toLowerCase()}${[...element.parentElement.classList].map((name) => `.${name}`).join("")}`
+            : null,
+          region: element.closest("aside, table, section")?.getAttribute("aria-label")
+            ?? element.closest("aside, table, section")?.className
+            ?? null,
           text: (element.innerText ?? element.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 100),
         };
       })
@@ -604,23 +651,34 @@ test("organizer requests a controlled proposal revision with an auditable note",
       ...geometry.filter((entry) => entry.left < -0.5)
         .sort((left, right) => left.left - right.left),
     ].slice(0, 20);
-    return { clientWidth: root.clientWidth, scrollWidth: root.scrollWidth, offenders };
+    const internalOverflow = geometry
+      .filter((entry) => entry.scrollWidth > entry.clientWidth + 1)
+      .sort((left, right) => (right.scrollWidth - right.clientWidth) - (left.scrollWidth - left.clientWidth))
+      .slice(0, 20);
+    return { clientWidth: root.clientWidth, scrollWidth: root.scrollWidth, offenders, internalOverflow };
   });
   expect(overflow.scrollWidth, JSON.stringify(overflow)).toBeLessThanOrEqual(overflow.clientWidth);
 });
 
-test("public agenda favorites survive a reload and stay scoped to the event", async ({ page }) => {
-  await page.goto("/events/ai-engineer-summit-2026/agenda");
-  const addFavorite = page.getByRole("button", { name: "Add Opening call to favorites" });
+test("public itinerary selections survive reload and export as a calendar", async ({ page }) => {
+  await page.goto("/events/ai-engineer-summit-2026/itinerary");
+  const addFavorite = page.getByRole("button", { name: "Add Opening call to my schedule" });
   await expect(addFavorite).toHaveAttribute("aria-pressed", "false");
   await addFavorite.click();
-  await expect(page.getByRole("button", { name: "Remove Opening call from favorites" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Remove Opening call from my schedule" })).toHaveAttribute("aria-pressed", "true");
   await expect.poll(() => page.evaluate(() =>
     window.localStorage.getItem("conference-ops:agenda-favorites:ai-engineer-summit-2026"),
   )).toContain("session-opening");
 
   await page.reload();
-  await expect(page.getByRole("button", { name: "Remove Opening call from favorites" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Remove Opening call from my schedule" })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: /My schedule \(1\)/ }).click();
+  await expect(page.locator(".public-itinerary-card")).toHaveCount(1);
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export .ics" }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("ai-engineer-summit-2026-my-schedule.ics");
+  await expect(page.getByRole("status")).toContainText("Calendar file downloaded with 1 session");
 });
 
 test("public speaker gallery renders an accessible headshot and falls back when it fails", async ({ page }) => {
@@ -652,14 +710,14 @@ test("public speaker gallery renders an accessible headshot and falls back when 
     contentType: "image/png",
     body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XoR2AAAAAElFTkSuQmCC", "base64"),
   }));
-  await page.goto("/events/ai-engineer-summit-2026/speakers");
+  await page.goto("/events/ai-engineer-summit-2026/gallery");
 
   const portrait = page.getByRole("img", { name: "Portrait of Ada Rivera" });
   await expect(portrait).toBeVisible();
   await page.route("**/missing-headshot.png", (route) => route.abort());
   await portrait.evaluate((image) => { image.setAttribute("src", "/missing-headshot.png"); });
   await expect(page.getByRole("img", { name: "Portrait of Ada Rivera" })).toHaveCount(0);
-  await expect(page.locator(".speaker-card__portrait .avatar", { hasText: "AR" })).toBeVisible();
+  await expect(page.locator(".public-gallery-card__fallback .avatar", { hasText: "AR" })).toBeVisible();
 });
 
 test("organizer queues operational communication and exports the program", async ({ page, isMobile }) => {

@@ -3,20 +3,24 @@ import {
   Check,
   ChevronDown,
   CircleDot,
+  EyeOff,
   Filter,
   MessageSquareQuote,
   Search,
   ShieldCheck,
+  ShieldOff,
   Star,
   UserRoundCheck,
 } from "lucide-react";
 import { useState } from "react";
-import type { Proposal, ProposalStatus, ReviewAssignment } from "../../shared/domain";
+import type { Proposal, ProposalStatus, ReviewAssignment, ReviewResponseValue } from "../../shared/domain";
 import { evaluateReviewScores, ReviewRubricError } from "../../shared/review-rubric";
 import { Avatar, EmptyState, Field, InlineAlert, PageHeader, SectionHeading, StatusPill } from "../components";
 import { FormResponseList } from "../FormResponseList";
 import { reviewerAssignmentQueue } from "../reviewer-queue";
 import { useWorkspace } from "../workspace";
+import { AbstractReviewControl } from "../AbstractReviewControl";
+import { abstractReviewApi } from "../abstract-review-api";
 
 const statusOptions: Array<{ label: string; value: "all" | ProposalStatus }> = [
   { label: "All states", value: "all" },
@@ -92,7 +96,7 @@ function ProposalDetail({ proposal }: { proposal: Proposal }) {
   return (
     <aside className="proposal-detail" aria-label={`Details for ${proposal.title}`}>
       <div className="proposal-detail__head"><div><p className="eyebrow">{proposal.id.toUpperCase()}</p><h2>{proposal.title}</h2></div><StatusPill status={proposal.status} /></div>
-      <div className="speaker-line">{proposal.speakers.map((speaker) => <span key={speaker.id}><Avatar name={speaker.name} size="sm" /><span><strong>{speaker.name}</strong><small>{speaker.title} · {speaker.company}</small></span></span>)}</div>
+      <div className="speaker-line">{proposal.speakers.map((speaker) => <span key={speaker.id}><Avatar name={speaker.name} size="sm" /><span><strong>{speaker.name}</strong><small>{speaker.participantRole ?? "Presenter"} · {speaker.title} · {speaker.company}</small></span></span>)}</div>
       <p className="proposal-summary">{proposal.summary}</p>
       <div className="tag-list">{proposal.tags.map((tag) => <span key={tag}>{tag}</span>)}<span>{proposal.category}</span></div>
       <FormResponseList responses={proposal.customResponses} />
@@ -203,7 +207,8 @@ export function ProposalBoard() {
 
   return (
     <>
-      <PageHeader eyebrow="Program intake · Decision authority" title="Build a queue you can reason about." description="Search the promise, compare the evidence, then leave a decision another organizer can audit." actions={<button type="button" className="button button--quiet" disabled title="Assignment management is not available yet; reviewer groups assign new submissions automatically."><UserRoundCheck size={16} /> Assignments managed by groups</button>} />
+      <PageHeader eyebrow="Program intake · Decision authority" title="Build a queue you can reason about." description="Search the promise, compare the evidence, then leave a decision another organizer can audit." actions={<div className="calibration-chip"><UserRoundCheck size={16} /> Exact assignments · live progress</div>} />
+      <AbstractReviewControl />
       <div className="queue-toolbar">
         <label className="search-control"><Search size={16} /><input aria-label="Search proposals" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, speaker, or tag…" /></label>
         <label className="select-control"><Filter size={15} /><select aria-label="Filter proposals by status" value={status} onChange={(event) => setStatus(event.target.value as "all" | ProposalStatus)}>{statusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
@@ -233,12 +238,12 @@ export function ProposalBoard() {
 }
 
 interface RubricState {
-  scores: Record<string, number>;
+  scores: Record<string, ReviewResponseValue>;
   recommendation: "strong_yes" | "yes" | "maybe" | "no";
   notes: string;
 }
 
-function scorePreview(assignment: ReviewAssignment, scores: Record<string, number>) {
+function scorePreview(assignment: ReviewAssignment, scores: Record<string, ReviewResponseValue>) {
   try {
     return evaluateReviewScores(assignment.rubric, scores, false).totalScore;
   } catch {
@@ -262,13 +267,15 @@ function ReviewEditor({
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const { saveReview } = useWorkspace();
+  const [recusalOpen, setRecusalOpen] = useState(false);
+  const [recusalReason, setRecusalReason] = useState("");
+  const [recused, setRecused] = useState(Boolean(existing.recusedAt));
+  const { saveReview, workspace, setNotice } = useWorkspace();
   const preview = scorePreview(existing, rubric.scores);
   const locked = existing.status === "submitted";
 
   const submit = async (final: boolean) => {
     if (locked) return;
-    if (rubric.notes.trim().length < 10) { setError("Add at least 10 characters of evidence so the committee can use this review."); return; }
     try {
       evaluateReviewScores(existing.rubric, rubric.scores, final);
     } catch (reviewError) {
@@ -284,6 +291,17 @@ function ReviewEditor({
     }
   };
 
+  const recuse = async () => {
+    if (recusalReason.trim().length < 3) return;
+    setSaving(true); setError("");
+    try {
+      await abstractReviewApi.recuse(workspace.actor.id, workspace.event.id, proposal.id, recusalReason.trim());
+      setRecused(true); setRecusalOpen(false);
+      setNotice(`Conflict recorded for “${proposal.title}”. This assignment is removed from your actionable queue.`);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "The conflict could not be recorded."); }
+    finally { setSaving(false); }
+  };
+
   return (
     <div className="review-canvas">
           <article className="review-brief">
@@ -292,34 +310,24 @@ function ReviewEditor({
             <p>{proposal.summary}</p>
             <div className="tag-list">{proposal.tags.map((tag) => <span key={tag}>{tag}</span>)}</div>
             <FormResponseList responses={proposal.customResponses} />
-            <details><summary>Speaker context <ChevronDown size={15} /></summary>{proposal.speakers.map((speaker) => <div className="speaker-context" key={speaker.id}><Avatar name={speaker.name} /><div><strong>{speaker.name}</strong><span>{speaker.title} · {speaker.company}</span><p>{speaker.bio}</p></div></div>)}</details>
+            {existing.anonymized ? <InlineAlert tone="info"><EyeOff size={16} /> <strong>Blind review enabled.</strong> Presenter names, companies, bios, and other reviewers' responses are hidden for this round.</InlineAlert> : <details><summary>Presenter context <ChevronDown size={15} /></summary>{proposal.speakers.map((speaker) => <div className="speaker-context" key={speaker.id}><Avatar name={speaker.name} /><div><strong>{speaker.name}</strong><span>{speaker.participantRole ?? "Presenter"} · {speaker.title} · {speaker.company}</span><p>{speaker.bio}</p></div></div>)}</details>}
           </article>
           <form className="rubric" onSubmit={(event) => { event.preventDefault(); if (!locked) void submit(true); }}>
             <div className="rubric__head"><div><p className="eyebrow">{existing.roundName} · Round {existing.round}</p><h2>Your recommendation</h2></div><div className="rubric__score"><strong>{preview === undefined ? "—" : preview.toFixed(1)}</strong><span>/ 5</span></div></div>
             {locked && <InlineAlert tone="info">This review is submitted and read-only, so its evidence can no longer change.</InlineAlert>}
+            {recused && <InlineAlert tone="warning"><strong>Conflict declared.</strong> This proposal is no longer actionable in your queue.</InlineAlert>}
             {existing.rubric.length ? existing.rubric.map((criterion) => (
               <label className="rubric-row" key={criterion.id}>
                 <span><strong>{criterion.label}</strong><small>{criterion.description ?? `Weight ${criterion.weight}`}</small></span>
-                <select
-                  aria-label={`${criterion.label} score`}
-                  disabled={locked}
-                  value={rubric.scores[criterion.id] ?? ""}
-                  onChange={(event) => {
-                    const scores = { ...rubric.scores };
-                    if (event.target.value) scores[criterion.id] = Number(event.target.value);
-                    else delete scores[criterion.id];
-                    setRubric({ ...rubric, scores });
-                    setError("");
-                  }}
-                >
-                  <option value="">Choose…</option>
-                  {Array.from({ length: criterion.maxScore }, (_, index) => index + 1).map((score) => <option key={score} value={score}>{score} / {criterion.maxScore}</option>)}
-                </select>
+                {(criterion.type ?? "numeric") === "numeric" && <select aria-label={`${criterion.label} score`} disabled={locked || recused} value={rubric.scores[criterion.id] ?? ""} onChange={(event) => { const scores = { ...rubric.scores }; if (event.target.value) scores[criterion.id] = Number(event.target.value); else delete scores[criterion.id]; setRubric({ ...rubric, scores }); setError(""); }}><option value="">Choose…</option>{Array.from({ length: criterion.maxScore }, (_, index) => index + 1).map((score) => <option key={score} value={score}>{score} / {criterion.maxScore}</option>)}</select>}
+                {criterion.type === "dropdown" && <select aria-label={`${criterion.label} response`} disabled={locked || recused} value={rubric.scores[criterion.id] ?? ""} onChange={(event) => { const scores = { ...rubric.scores }; if (event.target.value) scores[criterion.id] = event.target.value; else delete scores[criterion.id]; setRubric({ ...rubric, scores }); setError(""); }}><option value="">Choose…</option>{criterion.options?.map((option) => <option key={option}>{option}</option>)}</select>}
+                {criterion.type === "text" && <textarea aria-label={`${criterion.label} response`} rows={4} readOnly={locked || recused} value={String(rubric.scores[criterion.id] ?? "")} onChange={(event) => { const scores = { ...rubric.scores, [criterion.id]: event.target.value }; setRubric({ ...rubric, scores }); setError(""); }} placeholder="Add specific evidence…" />}
               </label>
             )) : <InlineAlert tone="warning">This review round has no valid rubric. Ask an organizer to repair the round configuration before scoring.</InlineAlert>}
-            <Field label="Recommendation"><select disabled={locked} value={rubric.recommendation} onChange={(event) => setRubric({ ...rubric, recommendation: event.target.value as RubricState["recommendation"] })}><option value="strong_yes">Strong approve</option><option value="yes">Approve</option><option value="maybe">Maybe</option><option value="no">Deny</option></select></Field>
-            <Field label="Evidence note" error={error} hint="Private to the review committee"><textarea rows={6} readOnly={locked} value={rubric.notes} onChange={(event) => { setRubric({ ...rubric, notes: event.target.value }); setError(""); }} placeholder="Point to the specific promise, risk, or missing proof that shaped your score." /></Field>
-            <div className="rubric__actions"><button type="button" className="button button--quiet" disabled={locked || saving || !existing.rubric.length} onClick={() => void submit(false)}>Save draft</button><button type="submit" className="button button--primary" disabled={locked || saving || !existing.rubric.length}><CircleDot size={15} /> {locked ? "Review submitted" : saving ? "Submitting…" : "Submit review"}</button></div>
+            <Field label="Recommendation"><select disabled={locked || recused} value={rubric.recommendation} onChange={(event) => setRubric({ ...rubric, recommendation: event.target.value as RubricState["recommendation"] })}><option value="strong_yes">Strong approve</option><option value="yes">Approve</option><option value="maybe">Maybe</option><option value="no">Deny</option></select></Field>
+            <Field label="Private committee note" error={error} hint="Optional; typed scorecard comments are stored above"><textarea rows={4} readOnly={locked || recused} value={rubric.notes} onChange={(event) => { setRubric({ ...rubric, notes: event.target.value }); setError(""); }} placeholder="Additional private context…" /></Field>
+            {!locked && !recused && <div className="recusal-control"><button type="button" className="button button--quiet" aria-expanded={recusalOpen} onClick={() => setRecusalOpen(!recusalOpen)}><ShieldOff size={15} /> Declare conflict / recuse</button>{recusalOpen && <div><Field label="Conflict reason"><input value={recusalReason} onChange={(event) => setRecusalReason(event.target.value)} placeholder="Why you cannot independently review this submission" /></Field><button type="button" className="button button--danger" disabled={saving || recusalReason.trim().length < 3} onClick={() => void recuse()}>Confirm recusal for this submission</button></div>}</div>}
+            <div className="rubric__actions"><button type="button" className="button button--quiet" disabled={locked || recused || saving || !existing.rubric.length} onClick={() => void submit(false)}>Save draft</button><button type="submit" className="button button--primary" disabled={locked || recused || saving || !existing.rubric.length}><CircleDot size={15} /> {locked ? "Review submitted" : saving ? "Submitting…" : "Submit review"}</button></div>
           </form>
     </div>
   );

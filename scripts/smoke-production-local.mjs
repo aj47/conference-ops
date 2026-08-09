@@ -126,7 +126,7 @@ async function main() {
       binding: "ASSETS",
       directory: path.join(projectDirectory, "dist/client"),
       not_found_handling: "single-page-application",
-      run_worker_first: ["/api/*", "/events/*/embed/agenda"],
+      run_worker_first: ["/api/*", "/events/*/embed/*"],
     },
     vars: {
       ENVIRONMENT: "local",

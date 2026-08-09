@@ -13,12 +13,14 @@ import {
   Radio,
   Settings2,
   ShieldAlert,
+  Sparkles,
   UserRound,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import type { ProgramSession, Room, ScheduleConflict, Track } from "../../shared/domain";
+import type { ProgramSession, Proposal, Room, ScheduleConflict, Track } from "../../shared/domain";
+import { buildAutoSchedulePlan, type AutoSchedulePlan } from "../auto-schedule";
 import { EmptyState, Field, InlineAlert, PageHeader, SectionHeading, StatusPill } from "../components";
 import { useDialogA11y } from "../dialog-a11y";
 import {
@@ -65,7 +67,7 @@ function sessionLocation(session: ProgramSession, rooms: Room[], tracks: Track[]
   };
 }
 
-function sessionDayLabel(session: ProgramSession, timezone: string) {
+function sessionDayLabel(session: Pick<ProgramSession, "startsAt">, timezone: string) {
   if (!session.startsAt) return "Unscheduled";
   return new Intl.DateTimeFormat("en-US", {
     weekday: "short",
@@ -73,6 +75,14 @@ function sessionDayLabel(session: ProgramSession, timezone: string) {
     day: "numeric",
     timeZone: timezone,
   }).format(new Date(session.startsAt));
+}
+
+function durationMinutesForSession(session: ProgramSession | undefined, proposals: Proposal[]) {
+  if (!session) return 30;
+  if (session.startsAt && session.endsAt) {
+    return Math.max(5, Math.round((new Date(session.endsAt).getTime() - new Date(session.startsAt).getTime()) / 60_000));
+  }
+  return proposals.find((proposal) => proposal.id === session.proposalId)?.durationMinutes ?? 30;
 }
 
 function ScheduleViewSwitcher({
@@ -270,6 +280,8 @@ export function ScheduleBoard() {
   const [directOpen, setDirectOpen] = useState(false);
   const [venueOpen, setVenueOpen] = useState(false);
   const [directSaving, setDirectSaving] = useState(false);
+  const [autoPlan, setAutoPlan] = useState<AutoSchedulePlan | null>(null);
+  const [autoApplying, setAutoApplying] = useState(false);
   const [direct, setDirect] = useState({
     title: "",
     description: "",
@@ -280,6 +292,9 @@ export function ScheduleBoard() {
   const placementDialogRef = useDialogA11y<HTMLFormElement>(() => setPlacingId(null), Boolean(placingId));
   const conflictDialogRef = useDialogA11y<HTMLDivElement>(() => setPending(null), Boolean(pending));
   const directDialogRef = useDialogA11y<HTMLFormElement>(() => setDirectOpen(false), directOpen);
+  const autoDialogRef = useDialogA11y<HTMLElement>(() => {
+    if (!autoApplying) setAutoPlan(null);
+  }, Boolean(autoPlan));
 
   const unscheduled = workspace.sessions.filter((session) => session.status === "unscheduled");
   const visibleSessions = workspace.sessions.filter((session) => trackFilter === "all" || session.trackId === trackFilter);
@@ -295,6 +310,12 @@ export function ScheduleBoard() {
   const conflictCount = conflictDocket.length;
   const speakers = [...new Map(workspace.proposals.flatMap((proposal) => proposal.speakers).map((speaker) => [speaker.id, speaker])).values()];
   const directSpeakerOptional = direct.format === "break" || direct.format === "networking";
+  const autoScheduleSlots = useMemo(() => dayOptions.flatMap((day) => {
+    const starts = scheduleSlotStarts(workspace.event, day, workspace.sessions);
+    if (!starts.length) return [];
+    const dayEndsAt = addMinutes(starts.at(-1)!, 30);
+    return starts.map((startsAt) => ({ startsAt, dayEndsAt }));
+  }), [dayOptions, workspace.event, workspace.sessions]);
 
   const updateScheduleQuery = (updates: Partial<Record<"view" | "day" | "track" | "session", string | null>>) => {
     const next = new URLSearchParams(searchParams);
@@ -348,9 +369,58 @@ export function ScheduleBoard() {
 
   const durationFor = (sessionId: string) => {
     const session = workspace.sessions.find((item) => item.id === sessionId);
-    const proposal = workspace.proposals.find((item) => item.id === session?.proposalId);
-    if (session?.startsAt && session.endsAt) return Math.round((new Date(session.endsAt).getTime() - new Date(session.startsAt).getTime()) / 60_000);
-    return proposal?.durationMinutes ?? 30;
+    return durationMinutesForSession(session, workspace.proposals);
+  };
+
+  const previewAutoSchedule = () => {
+    if (!unscheduled.length) {
+      setNotice("Every session is already placed. Move an existing card when the run of show changes.");
+      return;
+    }
+    if (!workspace.rooms.length || !workspace.tracks.length) {
+      setNotice("Add at least one room and one track before using assisted placement.");
+      setVenueOpen(true);
+      return;
+    }
+    const durationMinutes = Object.fromEntries(unscheduled.map((session) => [session.id, durationMinutesForSession(session, workspace.proposals)]));
+    const preferredTrackIds = Object.fromEntries(unscheduled.map((session) => {
+      const proposal = workspace.proposals.find((item) => item.id === session.proposalId);
+      const categories = proposal?.category.split(",").map((value) => value.trim().toLowerCase()) ?? [];
+      const matched = workspace.tracks.find((track) => categories.includes(track.name.trim().toLowerCase()));
+      return [session.id, session.trackId ?? matched?.id];
+    }));
+    setAutoPlan(buildAutoSchedulePlan({
+      sessions: workspace.sessions,
+      rooms: workspace.rooms,
+      tracks: workspace.tracks,
+      slots: autoScheduleSlots,
+      durationMinutes,
+      preferredTrackIds,
+    }));
+  };
+
+  const applyAutoSchedule = async () => {
+    if (!autoPlan?.placements.length || autoApplying) return;
+    setAutoApplying(true);
+    let applied = 0;
+    try {
+      for (const placement of autoPlan.placements) {
+        await scheduleSession(placement.sessionId, {
+          roomId: placement.roomId,
+          trackId: placement.trackId,
+          startsAt: placement.startsAt,
+          endsAt: placement.endsAt,
+        });
+        applied += 1;
+      }
+      setAutoPlan(null);
+      changeView("board");
+      setNotice(`Assisted placement scheduled ${applied} conflict-free ${applied === 1 ? "session" : "sessions"}.${autoPlan.unplaced.length ? ` ${autoPlan.unplaced.length} still need a manual decision.` : ""}`);
+    } catch {
+      setNotice(`${applied} placements were saved before the schedule changed. Refresh the preview and apply the remaining sessions.`);
+    } finally {
+      setAutoApplying(false);
+    }
   };
 
   const openPlacement = (sessionId: string) => {
@@ -431,7 +501,7 @@ export function ScheduleBoard() {
         eyebrow={`Stage call sheet · ${activeDay?.label ?? "Event day"}`}
         title="Every room, track, and speaker gets one place."
         description="Scan the run of show in List or Week, place sessions by room, and keep every active overlap visible in the conflict docket."
-        actions={<><button type="button" className="button button--quiet" onClick={() => setVenueOpen(true)}><Settings2 size={16} /> Rooms & tracks</button><button type="button" className="button button--quiet" onClick={() => setDirectOpen(true)}><Plus size={16} /> Add direct session</button>{view === "board" && <label className="select-control"><CalendarDays size={16} /><span className="sr-only">Schedule day</span><select value={activeDay?.key ?? ""} onChange={(event) => changeDay(event.target.value)}>{dayOptions.map((day, index) => <option key={day.key} value={day.key}>Day {index + 1} · {day.label}</option>)}</select></label>}<Link to={privateEventPath("/publish", eventId)} className="button button--primary"><Radio size={16} /> Review & publish</Link></>}
+        actions={<><button type="button" className="button button--quiet" onClick={previewAutoSchedule}><Sparkles size={16} /> Auto-place safe sessions</button><button type="button" className="button button--quiet" onClick={() => setVenueOpen(true)}><Settings2 size={16} /> Rooms & tracks</button><button type="button" className="button button--quiet" onClick={() => setDirectOpen(true)}><Plus size={16} /> Add direct session</button>{view === "board" && <label className="select-control"><CalendarDays size={16} /><span className="sr-only">Schedule day</span><select value={activeDay?.key ?? ""} onChange={(event) => changeDay(event.target.value)}>{dayOptions.map((day, index) => <option key={day.key} value={day.key}>Day {index + 1} · {day.label}</option>)}</select></label>}<Link to={privateEventPath("/publish", eventId)} className="button button--primary"><Radio size={16} /> Review & publish</Link></>}
       />
 
       <ScheduleViewSwitcher active={view} conflictCount={conflictCount} onChange={changeView} />
@@ -516,6 +586,26 @@ export function ScheduleBoard() {
           </div> : <EmptyState title="Set the stage before placing sessions" detail="Add at least one room and one program track. They become the columns and color lanes used throughout this schedule." action={<button type="button" className="button button--primary" onClick={() => setVenueOpen(true)}><Settings2 size={16} /> Configure rooms & tracks</button>} />}
         </section>
       </div>}
+
+      {autoPlan && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!autoApplying) setAutoPlan(null); }}>
+          <aside ref={autoDialogRef} className="drawer drawer--wide auto-schedule-dialog" role="dialog" aria-modal="true" aria-labelledby="auto-schedule-title" aria-busy={autoApplying} tabIndex={-1} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="drawer__head"><div><p className="eyebrow">Deterministic schedule assist</p><h2 id="auto-schedule-title">Preview safe placements</h2></div><button type="button" className="icon-button" disabled={autoApplying} onClick={() => setAutoPlan(null)} aria-label="Close assisted placement preview"><X size={18} /></button></div>
+            <div className="drawer__body auto-schedule-dialog__body">
+              <InlineAlert tone="info"><Sparkles size={16} /><span><strong>No black box and no silent overrides.</strong> Longer sessions are placed first. Every suggestion is checked against room, track, and speaker conflicts before anything is saved.</span></InlineAlert>
+              <dl className="auto-schedule-summary"><div><dt>Safe to place</dt><dd>{autoPlan.placements.length}</dd></div><div><dt>Needs judgment</dt><dd>{autoPlan.unplaced.length}</dd></div></dl>
+              {autoPlan.placements.length ? <ol className="auto-schedule-plan" aria-label="Proposed session placements">{autoPlan.placements.map((placement) => {
+                const session = workspace.sessions.find((item) => item.id === placement.sessionId);
+                const room = workspace.rooms.find((item) => item.id === placement.roomId);
+                const track = workspace.tracks.find((item) => item.id === placement.trackId);
+                return <li key={placement.sessionId}><span><strong>{session?.title ?? "Session"}</strong><small>{sessionDayLabel({ startsAt: placement.startsAt }, workspace.event.timezone)} · {formatEventTime(placement.startsAt, workspace.event.timezone)}–{formatEventTime(placement.endsAt, workspace.event.timezone)}</small></span><span><strong>{room?.name ?? "Room"}</strong><small>{track?.name ?? "Track"}</small></span></li>;
+              })}</ol> : <EmptyState title="No complete conflict-free plan" detail="Add schedule capacity or place the remaining sessions manually. The assistant never creates an override." />}
+              {autoPlan.unplaced.length > 0 && <InlineAlert tone="warning"><AlertTriangle size={16} /><span><strong>{autoPlan.unplaced.length} {autoPlan.unplaced.length === 1 ? "session still needs" : "sessions still need"} organizer judgment.</strong> Keep them in Ready to place, add another room or track, or adjust the run window.</span></InlineAlert>}
+            </div>
+            <div className="drawer__foot"><button type="button" className="button button--quiet" disabled={autoApplying} onClick={() => setAutoPlan(null)}>{autoPlan.placements.length ? "Cancel" : "Close"}</button>{autoPlan.placements.length > 0 && <button type="button" data-dialog-initial-focus className="button button--primary" disabled={autoApplying} onClick={() => void applyAutoSchedule()}><Sparkles size={15} /> {autoApplying ? "Applying safe plan…" : `Apply ${autoPlan.placements.length} ${autoPlan.placements.length === 1 ? "placement" : "placements"}`}</button>}</div>
+          </aside>
+        </div>
+      )}
 
       {placingId && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => setPlacingId(null)}>

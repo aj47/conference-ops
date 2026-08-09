@@ -12,9 +12,7 @@ export function actorRoleOptionValue(
   actor: Pick<Actor, "id" | "role">,
   actors: Array<Pick<Actor, "id" | "role">> = [actor],
 ) {
-  const duplicateIdentity = actors.some(
-    (candidate) => candidate !== actor && candidate.id === actor.id,
-  );
+  const duplicateIdentity = actors.filter((candidate) => candidate.id === actor.id).length > 1;
   return duplicateIdentity ? `${encodeURIComponent(actor.id)}:${actor.role}` : actor.id;
 }
 

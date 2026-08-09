@@ -45,6 +45,14 @@ export interface PublicSessionSpeakerRow {
   speakerName: string;
 }
 
+const publicSessionFormats = ["keynote", "talk", "workshop", "panel", "lightning", "break", "networking"] as const;
+
+function publicSessionFormat(value: unknown): ProgramSession["format"] {
+  return typeof value === "string" && publicSessionFormats.includes(value as (typeof publicSessionFormats)[number])
+    ? value as ProgramSession["format"]
+    : "talk";
+}
+
 export function publicSessionsFromRows(
   rows: Array<Record<string, unknown>>,
   speakerRows: PublicSessionSpeakerRow[],
@@ -69,6 +77,7 @@ export function publicSessionsFromRows(
       ...(row.proposalId ? { proposalId: String(row.proposalId) } : {}),
       title: String(row.title),
       description: String(row.description ?? ""),
+      format: publicSessionFormat(row.format),
       speakerIds: sessionSpeakers.ids,
       speakerNames: sessionSpeakers.names,
       ...(row.trackId ? { trackId: String(row.trackId) } : {}),

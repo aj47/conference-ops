@@ -34,6 +34,16 @@ describe("multi-role actor selection", () => {
     expect(actorForRoleOption(uniqueActors, "organizer-user")?.role).toBe("organizer");
   });
 
+  it("keeps a deserialized active actor aligned with its unique persona option", () => {
+    const uniqueActors = [
+      { ...actors[0], id: "applicant-user" },
+      { ...actors[1], id: "organizer-user" },
+    ];
+    const deserializedActiveActor = { ...uniqueActors[1] };
+
+    expect(actorRoleOptionValue(deserializedActiveActor, uniqueActors)).toBe("organizer-user");
+  });
+
   it("resolves the exact selected membership instead of the first matching user", () => {
     expect(actorForRoleOption(actors, "same-user:organizer")?.role).toBe("organizer");
     expect(actorWithRole(actors, "same-user", "organizer")?.role).toBe("organizer");

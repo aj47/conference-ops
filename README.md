@@ -8,7 +8,7 @@ The staging walkthrough starts in demo mode and includes an in-product persona s
 
 Organizers can also start from a clean account instead of seed data. Creating an event grants organizer access and initializes a private CFP draft, a routed review round, a Main room and General track, hotel-stay and flight-reimbursement forms, profile/slides/calendar tasks, decision and reminder templates, scheduled reminder rules, and public agenda/gallery embeds. The **Program setup** workspace lets organizers map every CFP track to one or more reviewers, configure the active scoring plan, edit persistent onboarding tasks, publish participant resources, write the messages the workflow actually sends, tune reminder timing, and ask a read-only readiness assistant what needs attention next. Rooms and tracks remain fully organizer-managed as the venue plan changes.
 
-The current product boundary and the evidence-backed comparison with Sessionboard's participant and organizer workflows are documented in [docs/SESSIONBOARD-PARITY.md](docs/SESSIONBOARD-PARITY.md).
+The current product boundary and the evidence-backed comparison with Sessionboard's participant and organizer workflows are documented in [docs/SESSIONBOARD-PARITY.md](docs/SESSIONBOARD-PARITY.md). The v0.3 assessment package includes the [KillMySaaS evidence map](docs/KILLMYSAAS-EVALUATION.md) and [release audit](docs/RELEASE-AUDIT-0.3.0.md).
 
 ## Prospective-client pilot
 
