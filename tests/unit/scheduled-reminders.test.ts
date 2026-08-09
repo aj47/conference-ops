@@ -47,7 +47,7 @@ function database() {
       id TEXT PRIMARY KEY, event_id TEXT NOT NULL, kind TEXT NOT NULL,
       subject TEXT NOT NULL, text TEXT NOT NULL, html TEXT NOT NULL, updated_at INTEGER NOT NULL
     );
-    CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL);
+    CREATE TABLE "user" (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL);
     CREATE TABLE submission_forms (
       id TEXT PRIMARY KEY, event_id TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, closes_at INTEGER
     );
@@ -84,7 +84,7 @@ describe("scheduled communication rules", () => {
         '<p>Hi {{speaker.name}}, finish {{task.count}} task(s): <a href="{{speaker.portal_url}}">portal</a></p>',
         1
       );
-      INSERT INTO users VALUES ('applicant-a', 'Applicant A', 'applicant@example.test');
+      INSERT INTO "user" VALUES ('applicant-a', 'Applicant A', 'applicant@example.test');
       INSERT INTO submission_forms VALUES ('form-a', 'event-a', 'cfp', 'published', ${now + day});
       INSERT INTO form_versions VALUES ('version-a', 'form-a');
       INSERT INTO proposals VALUES ('proposal-a', 'event-a', 'applicant-a', 'version-a', 'A useful draft', 'draft');

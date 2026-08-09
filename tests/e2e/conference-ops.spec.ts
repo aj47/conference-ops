@@ -210,15 +210,20 @@ test("mobile navigation is inert while closed and behaves as a modal when open",
   const sidebar = page.locator("aside.sidebar");
   await expect(sidebar).toHaveAttribute("inert", "");
   await expect(sidebar).toHaveAttribute("aria-hidden", "true");
+  await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(0.5);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
   const opener = page.getByRole("button", { name: "Open navigation" });
   await opener.click();
   const navigationDialog = page.getByRole("dialog", { name: "Primary navigation" });
+  await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().left)).toBeGreaterThanOrEqual(-0.5);
   await expect(navigationDialog.getByRole("button", { name: "Close navigation" })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(navigationDialog.getByRole("combobox", { name: "Viewing as" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(sidebar).toHaveAttribute("inert", "");
+  await expect.poll(() => sidebar.evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(0.5);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await expect(opener).toBeFocused();
 });
 

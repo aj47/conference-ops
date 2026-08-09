@@ -77,7 +77,7 @@ export async function prepareScheduledReminders(env: Bindings, now = Date.now())
     } else {
       const drafts = await env.DB.prepare(`SELECT p.id, p.title, u.name, u.email, sf.closes_at AS closesAt
         FROM proposals p
-        JOIN users u ON u.id = p.owner_user_id
+        JOIN "user" u ON u.id = p.owner_user_id
         JOIN form_versions fv ON fv.id = p.form_version_id
         JOIN submission_forms sf ON sf.id = fv.form_id AND sf.event_id = p.event_id
         WHERE p.event_id = ? AND p.status = 'draft' AND sf.kind = 'cfp' AND sf.status = 'published'

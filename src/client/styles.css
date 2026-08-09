@@ -1020,8 +1020,8 @@ h3 { font-size: 1.06rem; line-height: 1.2; }
 
 @media (max-width: 900px) {
   .product-shell { display: block; }
-  .sidebar { position: fixed; left: 0; top: 0; width: 278px; transform: translateX(-105%); transition: transform .2s ease; box-shadow: var(--shadow); }
-  .sidebar--open { transform: translateX(0); }
+  .sidebar { position: fixed; left: 0; top: 0; width: 278px; transform: translateX(-100%); transition: transform .2s ease; box-shadow: none; }
+  .sidebar--open { transform: translateX(0); box-shadow: var(--shadow); }
   .sidebar__close, .mobile-menu { display: inline-grid; }
   .sidebar-scrim { display: block; position: fixed; inset: 0; z-index: 55; border: 0; background: rgb(10 10 8 / .5); }
   .topbar { padding-inline: 12px; }
