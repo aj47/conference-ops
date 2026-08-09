@@ -33,7 +33,7 @@ test("organizer can assign, remind, compare, and explicitly override bounded AI 
     const triage = page.locator(".ai-triage");
     expect(await triage.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     const proposalField = triage.locator(".field");
-    expect(await proposalField.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await proposalField.evaluate((element) => getComputedStyle(element).overflowX)).toBe("hidden");
   }
 });
 
