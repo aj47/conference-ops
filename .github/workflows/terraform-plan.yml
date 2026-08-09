@@ -57,8 +57,8 @@ jobs:
           terraform_version: 1.8.5
       - name: Render representative desired state
         env:
-          CLOUDFLARE_ACCOUNT_ID: 00000000000000000000000000000000
-          CLOUDFLARE_ZONE_ID: 00000000000000000000000000000000
+          CLOUDFLARE_ACCOUNT_ID: "00000000000000000000000000000000"
+          CLOUDFLARE_ZONE_ID: "00000000000000000000000000000000"
           ENABLE_PREVIEW_ACCESS: "true"
           PREVIEW_ACCESS_HOSTNAME: preview.example.com
           PREVIEW_ACCESS_ALLOWED_EMAILS_JSON: '["reviewer@example.com"]'

@@ -71,6 +71,13 @@ function readinessBindings(overrides: Partial<Bindings> = {}): Bindings {
 }
 
 describe("deployment preflight", () => {
+  it("keeps secretless Terraform account placeholders as 32-character strings", () => {
+    const workflow = readFileSync(".github/workflows/terraform-plan.yml", "utf8");
+
+    expect(workflow).toContain('CLOUDFLARE_ACCOUNT_ID: "00000000000000000000000000000000"');
+    expect(workflow).toContain('CLOUDFLARE_ZONE_ID: "00000000000000000000000000000000"');
+  });
+
   it("does not duplicate the reusable verification run while deployment is disabled", () => {
     const workflow = readFileSync(".github/workflows/deploy.yml", "utf8");
 
