@@ -576,7 +576,27 @@ test("organizer requests a controlled proposal revision with an auditable note",
   if ((page.viewportSize()?.width ?? 0) <= 680) {
     expect(await page.getByLabel("Proposal queue").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   }
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  const overflow = await page.evaluate(() => {
+    const root = document.documentElement;
+    const offenders = [...document.querySelectorAll<HTMLElement>("body *")]
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return {
+          element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${[...element.classList].map((name) => `.${name}`).join("")}`,
+          left: Math.round(rect.left * 100) / 100,
+          right: Math.round(rect.right * 100) / 100,
+          width: Math.round(rect.width * 100) / 100,
+          position: style.position,
+          overflowX: style.overflowX,
+          text: (element.innerText ?? element.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 100),
+        };
+      })
+      .filter((entry) => entry.width > 0 && (entry.right > root.clientWidth + 0.5 || entry.left < -0.5))
+      .slice(0, 12);
+    return { clientWidth: root.clientWidth, scrollWidth: root.scrollWidth, offenders };
+  });
+  expect(overflow.scrollWidth, JSON.stringify(overflow)).toBeLessThanOrEqual(overflow.clientWidth);
 });
 
 test("public agenda favorites survive a reload and stay scoped to the event", async ({ page }) => {
