@@ -7,7 +7,7 @@ import {
   validateAirtableRemoteValue,
   type AirtableEntityDefinition,
 } from "../shared/airtable-schema";
-import { AirtableClient, AirtableHttpError, AirtableRateLimitError, airtableRequestsPerSecond, type AirtableFields, type AirtableRecord } from "./airtable-client";
+import { AirtableClient, AirtableHttpError, AirtableRateLimitError, airtableRequestsPerSecond, type AirtableFields, type AirtableRecord, type AirtableWebhookPayloadPage } from "./airtable-client";
 
 const MAX_CHANGE_ATTEMPTS = 5;
 const CHANGE_LEASE_MS = 10 * 60 * 1_000;
@@ -683,6 +683,17 @@ function collectAirtableRecordIds(value: unknown, result = new Set<string>()) {
   return result;
 }
 
+function collectAirtableRecordIdsForTable(page: AirtableWebhookPayloadPage, tableId: string, result = new Set<string>()) {
+  const scopes: unknown[] = [page, ...(Array.isArray(page.payloads) ? page.payloads : [])];
+  for (const scope of scopes) {
+    if (!scope || typeof scope !== "object" || Array.isArray(scope)) continue;
+    const changedTables = (scope as Record<string, unknown>).changedTablesById;
+    if (!changedTables || typeof changedTables !== "object" || Array.isArray(changedTables)) continue;
+    collectAirtableRecordIds((changedTables as Record<string, unknown>)[tableId], result);
+  }
+  return result;
+}
+
 async function processWorkflowCommands(env: Bindings, connection: ConnectionRow, client: AirtableClient, now: number) {
   const statusField = AIRTABLE_COMMAND_FIELDS.status;
   const commands = await client.listRecords(connection.commands_table_id, { filterByFormula: `{${statusField}}='Pending'` });
@@ -788,7 +799,7 @@ export async function pullAirtableChanges(env: Bindings, connectionId: string, n
   do {
     const previousCursor = cursor;
     const page = await client.listWebhookPayloads(connection.webhook_id, cursor);
-    collectAirtableRecordIds(page, recordIds);
+    collectAirtableRecordIdsForTable(page, connection.records_table_id, recordIds);
     const nextCursor = Number(page.cursor);
     if (Number.isFinite(nextCursor)) cursor = nextCursor;
     mightHaveMore = page.mightHaveMore === true;

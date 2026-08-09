@@ -222,6 +222,36 @@ function inboundRecordFetcher(recordId: string, fields: Record<string, unknown>)
 }
 
 describe("Airtable synchronization", () => {
+  it("does not import Workflow Command record IDs as canonical business records", async () => {
+    const d1 = fixture();
+    const requests: string[] = [];
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      requests.push(url);
+      if (url.includes("/webhooks/achWebhook123/payloads")) {
+        return Response.json({
+          cursor: 1,
+          mightHaveMore: false,
+          payloads: [{
+            changedTablesById: {
+              tblCommands123: { createdRecordsById: { recCommand123: {} } },
+            },
+          }],
+        });
+      }
+      if (url.includes("/tblCommands123?")) return Response.json({ records: [] });
+      throw new Error(`Unexpected Airtable request: ${url}`);
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetcher as typeof fetch;
+    try {
+      expect(await pullAirtableChanges(bindings(d1), "connection-a", 100)).toEqual({ records: 0, commands: 0 });
+      expect(requests.some((url) => url.includes("/tblRecords123/recCommand123"))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("pushes canonical records idempotently and suppresses a subsequent echo", async () => {
     const d1 = fixture();
     insertTrackChange(d1, "change-a");
