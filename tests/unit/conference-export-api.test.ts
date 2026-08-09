@@ -206,6 +206,26 @@ describe("safe conference export projection", () => {
     expect(`${speakersCsv}\n${sessionsCsv}\n${JSON.stringify(program)}`).not.toContain("SECRET_");
   });
 
+  it("neutralizes spreadsheet formulas in every applicant-controlled CSV cell", async () => {
+    const formulaWorkspace = mixedWorkspace();
+    const acceptedSpeaker = formulaWorkspace.proposals[0].speakers[0];
+    acceptedSpeaker.name = "  =HYPERLINK(\"https://example.test\")";
+    acceptedSpeaker.title = "+SUM(1,1)";
+    acceptedSpeaker.company = "-2+3";
+    acceptedSpeaker.bio = "@IMPORTXML(\"https://example.test\")";
+    formulaWorkspace.sessions[0].title = "\t=CMD()";
+    workspaceState.current = formulaWorkspace;
+
+    const speakersCsv = await (await request("/api/v1/events/event-a/exports/speakers.csv")).text();
+    const sessionsCsv = await (await request("/api/v1/events/event-a/exports/sessions.csv")).text();
+
+    expect(speakersCsv).toContain(`"'  =HYPERLINK(""https://example.test"")"`);
+    expect(speakersCsv).toContain(`"'+SUM(1,1)"`);
+    expect(speakersCsv).toContain(`"'-2+3"`);
+    expect(speakersCsv).toContain(`"'@IMPORTXML(""https://example.test"")"`);
+    expect(sessionsCsv).toContain(`"'\t=CMD()"`);
+  });
+
   it("returns manual Accelevents fallback URLs for the protected CSV endpoints", async () => {
     const response = await request("/api/v1/events/event-a/integrations/accelevents/publish", { method: "POST" });
 

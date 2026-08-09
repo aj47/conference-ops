@@ -20,6 +20,13 @@ import {
   type StoredOutboxRow,
 } from "./outbox";
 import { prepareScheduledReminders } from "./reminders";
+import {
+  drainAirtableChanges,
+  enabledAirtableConnections,
+  enqueueFullAirtableReconciliation,
+  pullAirtableChanges,
+  refreshAirtableWebhook,
+} from "./airtable-sync";
 
 async function ensureOutbox(env: Bindings, job: JobBody) {
   const now = Date.now();
@@ -105,6 +112,21 @@ async function sendCommunicationEmail(env: Bindings, payload: Record<string, unk
   await env.EMAIL.send(new EmailMessage(env.MAIL_FROM, recipient, raw));
 }
 
+async function processAirtableJob(env: Bindings, payload: Record<string, unknown>) {
+  if (env.AIRTABLE_ENABLED !== "true") throw new NonRetryableJobError("Airtable synchronization is disabled");
+  const connectionId = String(payload.connectionId ?? "");
+  if (!connectionId) throw new NonRetryableJobError("Airtable job is missing a connection ID");
+  const action = String(payload.action ?? "drain");
+  if (action === "pull") return pullAirtableChanges(env, connectionId);
+  if (action === "reconcile") {
+    await enqueueFullAirtableReconciliation(env.DB, connectionId);
+    return drainAirtableChanges(env, { connectionId });
+  }
+  if (action === "refresh_webhook") return refreshAirtableWebhook(env, connectionId);
+  if (action === "drain") return drainAirtableChanges(env, { connectionId });
+  throw new NonRetryableJobError(`Unsupported Airtable job action: ${action}`);
+}
+
 export async function processJob(env: Bindings, job: JobBody) {
   const row = await ensureOutbox(env, job);
   if (!row || row.status === "sent") return;
@@ -131,7 +153,9 @@ export async function processJob(env: Bindings, job: JobBody) {
     // Once an idempotency key exists, the D1 row is canonical. Never deliver a
     // conflicting queue body's payload under an existing key.
     const payload = parseStoredPayload(row.payload);
-    if (row.kind === "accelevents") {
+    if (row.kind === "airtable") {
+      await processAirtableJob(env, payload);
+    } else if (row.kind === "accelevents") {
       const client = new AcceleventsClient(env);
       await client.preflight();
       throw new NonRetryableJobError("Accelevents entity upserts are not enabled; use the inspectable CSV export.");
@@ -170,8 +194,27 @@ export default {
   },
   async scheduled(_controller: ScheduledController, env: Bindings) {
     if (!env.JOBS_QUEUE) return;
+    const scheduledAt = Date.now();
+    try {
+      await prepareScheduledReminders(env, scheduledAt);
+    } catch (error) {
+      console.error(JSON.stringify({ event: "reminders.scheduled_prepare_failed", error: error instanceof Error ? error.message : String(error) }));
+    }
+    // Reminder preparation updates communication_schedules. Its D1 trigger uses
+    // the database clock, so work queued during a slow or second-boundary run can
+    // be newer than the timestamp captured when this scheduled invocation began.
     const now = Date.now();
-    await prepareScheduledReminders(env, now);
+    if (env.AIRTABLE_ENABLED === "true") {
+      const connections = await enabledAirtableConnections(env.DB);
+      for (const connection of connections) {
+        try {
+          await drainAirtableChanges(env, { connectionId: connection.id, now });
+          await refreshAirtableWebhook(env, connection.id, now);
+        } catch (error) {
+          console.error(JSON.stringify({ event: "airtable.scheduled_sync_failed", connectionId: connection.id, error: error instanceof Error ? error.message : String(error) }));
+        }
+      }
+    }
     // A worker may terminate after claiming a row but before its catch block can
     // record the final attempt. Close those stale leases before selecting due
     // work so Cron cannot create a fresh, unbounded retry cycle.

@@ -78,7 +78,8 @@ function createDatabase() {
       owner_user_id TEXT NOT NULL,
       status TEXT NOT NULL,
       version INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      review_cycle INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, user_id TEXT);
     CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
@@ -100,24 +101,25 @@ function createDatabase() {
       recommendation TEXT,
       notes TEXT,
       submitted_at INTEGER,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      review_cycle INTEGER NOT NULL DEFAULT 1
     );
 
     INSERT INTO events VALUES ('event-a');
     INSERT INTO event_memberships VALUES ('event-a', 'reviewer-a', 'reviewer');
     INSERT INTO proposals VALUES
-      ('proposal-reviewable', 'event-a', 'applicant-a', 'submitted', 1, 1),
-      ('proposal-final', 'event-a', 'applicant-b', 'accepted', 2, 2),
-      ('proposal-self-owned', 'event-a', 'reviewer-a', 'submitted', 1, 1),
-      ('proposal-self-speaking', 'event-a', 'applicant-c', 'submitted', 1, 1);
+      ('proposal-reviewable', 'event-a', 'applicant-a', 'submitted', 1, 1, 1),
+      ('proposal-final', 'event-a', 'applicant-b', 'accepted', 2, 2, 1),
+      ('proposal-self-owned', 'event-a', 'reviewer-a', 'submitted', 1, 1, 1),
+      ('proposal-self-speaking', 'event-a', 'applicant-c', 'submitted', 1, 1, 1);
     INSERT INTO speaker_profiles VALUES ('speaker-reviewer-a', 'event-a', 'reviewer-a');
     INSERT INTO proposal_speakers VALUES ('proposal-self-speaking', 'speaker-reviewer-a');
     INSERT INTO review_rounds VALUES ('round-a', 'event-a', 1, '[{"id":"fit","label":"Program fit","weight":1,"maxScore":5}]', 'active');
     INSERT INTO review_assignments VALUES
-      ('review-reviewable', 'proposal-reviewable', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1),
-      ('review-final', 'proposal-final', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1),
-      ('review-self-owned', 'proposal-self-owned', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1),
-      ('review-self-speaking', 'proposal-self-speaking', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1);
+      ('review-reviewable', 'proposal-reviewable', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1),
+      ('review-final', 'proposal-final', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1),
+      ('review-self-owned', 'proposal-self-owned', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1),
+      ('review-self-speaking', 'proposal-self-speaking', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1);
   `);
   return d1;
 }

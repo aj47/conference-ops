@@ -12,6 +12,11 @@ const proposal: Proposal = {
   durationMinutes: 30,
   level: "intermediate",
   status: "under_review",
+  revisionRequest: {
+    note: "Clarify the benchmark and move this proposal to the evaluation track.",
+    requestedAt: "2026-08-04T12:00:00.000Z",
+    requestedBy: "organizer",
+  },
   speakers: [],
   submittedAt: "2026-08-01T00:00:00.000Z",
   score: 4.75,
@@ -35,6 +40,12 @@ describe("production workspace proposal role projection", () => {
 
   it.each(["organizer", "reviewer"] as const)("keeps review signal in the serialized %s snapshot", (role) => {
     expect(serializedProjection(role)).toMatchObject({ score: 4.75, reviewerGroup: "Security committee" });
+  });
+
+  it("shows the latest revision note to the owning applicant but not a later reviewer", () => {
+    expect(serializedProjection("applicant")).toMatchObject({ revisionRequest: { note: expect.stringContaining("benchmark") } });
+    expect(serializedProjection("reviewer")).not.toHaveProperty("revisionRequest");
+    expect(serializedProjection("organizer")).toMatchObject({ revisionRequest: { requestedAt: "2026-08-04T12:00:00.000Z", requestedBy: "organizer" } });
   });
 
   it("does not mutate the organizer projection reused in the same request", () => {

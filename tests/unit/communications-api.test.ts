@@ -66,7 +66,7 @@ function fixture() {
     CREATE TABLE outbox (
       id TEXT PRIMARY KEY, event_id TEXT, kind TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE,
       payload TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL, available_at INTEGER NOT NULL,
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      last_error TEXT, sent_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
 
     INSERT INTO event_memberships VALUES ('event-a', 'organizer-a', 'organizer');
@@ -108,6 +108,12 @@ async function send(d1: TestD1, sent: OutboxJob[], kind: "acceptance" | "calenda
   }, bindings(d1, sent));
 }
 
+async function history(d1: TestD1, sent: OutboxJob[], role = "organizer", eventId = "event-a") {
+  return app.request(`http://localhost/api/v1/events/${eventId}/communications/history`, {
+    headers: { "x-event-role": role },
+  }, bindings(d1, sent));
+}
+
 describe("MVP communication delivery API", () => {
   it("persists and dispatches rendered acceptance and RFC-calendar jobs", async () => {
     const d1 = fixture();
@@ -137,5 +143,71 @@ describe("MVP communication delivery API", () => {
       { kind: "email", status: "queued" },
       { kind: "calendar", status: "queued" },
     ]);
+  });
+
+  it("returns only sanitized, event-scoped communication delivery evidence to organizers", async () => {
+    const d1 = fixture();
+    const sent: OutboxJob[] = [];
+    await send(d1, sent, "acceptance");
+    d1.sqlite.prepare("UPDATE outbox SET status = 'failed', attempts = 2, last_error = ?, updated_at = ?")
+      .run("Provider 503; Bearer private-token", 20);
+    d1.sqlite.prepare(`INSERT INTO outbox
+      (id, event_id, kind, idempotency_key, payload, status, attempts, available_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "job-airtable",
+      "event-a",
+      "email",
+      "not-a-communication",
+      JSON.stringify({ kind: "airtable", eventId: "event-a", recipient: "hidden@example.test", subject: "Do not show" }),
+      "queued",
+      0,
+      10,
+      10,
+      10,
+    );
+    d1.sqlite.prepare(`INSERT INTO outbox
+      (id, event_id, kind, idempotency_key, payload, status, attempts, available_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "job-other-event",
+      "event-b",
+      "email",
+      "submission-confirmation:proposal-b",
+      JSON.stringify({ kind: "communication", eventId: "event-b", recipient: "other@example.test", subject: "Other event", text: "Other body" }),
+      "sent",
+      1,
+      10,
+      10,
+      10,
+    );
+
+    const response = await history(d1, sent);
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { data: { deliveries: Array<Record<string, unknown>> } };
+    expect(payload.data.deliveries).toHaveLength(1);
+    expect(payload.data.deliveries[0]).toMatchObject({
+      kind: "acceptance",
+      transport: "email",
+      recipient: "speaker@example.test",
+      subject: "Accepted: Operational agents · Conference A",
+      status: "failed",
+      attempts: 2,
+      lastError: "Provider 503; Bearer [redacted]",
+    });
+    expect(payload.data.deliveries[0]).not.toHaveProperty("text");
+    expect(payload.data.deliveries[0]).not.toHaveProperty("html");
+    expect(payload.data.deliveries[0]).not.toHaveProperty("payload");
+    expect(payload.data.deliveries[0]).not.toHaveProperty("idempotencyKey");
+    expect(JSON.stringify(payload)).not.toContain("private-token");
+    expect(JSON.stringify(payload)).not.toContain("hidden@example.test");
+    expect(JSON.stringify(payload)).not.toContain("other@example.test");
+  });
+
+  it("rejects delivery-history access for a non-organizer event role", async () => {
+    const d1 = fixture();
+    d1.sqlite.prepare("INSERT INTO event_memberships VALUES ('event-a', 'organizer-a', 'reviewer')").run();
+
+    const response = await history(d1, [], "reviewer");
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "ROLE_REQUIRED" } });
   });
 });

@@ -11,6 +11,7 @@ import {
   Info,
   LockKeyhole,
   Mail,
+  MessageSquareQuote,
   Plus,
   Save,
   ShieldCheck,
@@ -243,7 +244,20 @@ function CustomField({ field, value, error, onChange }: { field: FormField; valu
 }
 
 function applicantMayWithdraw(status: Proposal["status"]) {
-  return ["submitted", "under_review", "accept_queue", "decline_queue", "waitlisted"].includes(status);
+  return ["changes_requested", "revision_open", "submitted", "under_review", "accept_queue", "decline_queue", "waitlisted"].includes(status);
+}
+
+function applicantMayEdit(status: Proposal["status"]) {
+  return status === "draft" || applicantRevisionOpen(status);
+}
+
+function applicantRevisionOpen(status: Proposal["status"]) {
+  return status === "changes_requested" || status === "revision_open";
+}
+
+function proposalRevisionWindowOpen(proposal: Proposal, eventClosesAt: string) {
+  const deadline = proposal.form?.closesAt ?? eventClosesAt;
+  return proposal.form?.status !== "closed" && Date.now() < new Date(deadline).getTime();
 }
 
 function proposalDate(value: string) {
@@ -328,7 +342,7 @@ export function PublicSubmissionWizard() {
 }
 
 function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft }: { builder: BuilderConfig; previewingDraft: boolean }) {
-  const { workspace, publicBuilder, source, saveProposalDraft, submitProposal, withdrawProposal } = useWorkspace();
+  const { workspace, publicBuilder, source, saveProposalDraft, submitProposal, withdrawProposal, reopenProposal } = useWorkspace();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const session = authClient.useSession();
@@ -342,7 +356,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
     ? accountProposals.find((proposal) => proposal.id === requestedEditId)
     : undefined;
   const builder = useMemo(() => {
-    const pinnedForm = editingProposal?.status === "draft" && editingProposal.form?.eventId === workspace.event.id
+    const pinnedForm = editingProposal && applicantMayEdit(editingProposal.status) && editingProposal.form?.eventId === workspace.event.id
       ? editingProposal.form
       : undefined;
     return pinnedForm ? builderConfigFromForm(pinnedForm, workspace.event) : publishedBuilder;
@@ -360,6 +374,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [submittedId, setSubmittedId] = useState<string | null>(null);
+  const [submittedRevision, setSubmittedRevision] = useState(false);
   const [countdown, setCountdown] = useState(10);
   const [permissionConfirmed, setPermissionConfirmed] = useState(false);
   const [submitError, setSubmitError] = useState("");
@@ -369,6 +384,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
   const [withdrawTarget, setWithdrawTarget] = useState<Proposal | null>(null);
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawError, setWithdrawError] = useState("");
+  const [reopeningId, setReopeningId] = useState<string | null>(null);
   const stepHeadingRef = useRef<HTMLHeadingElement>(null);
   const stepperRef = useRef<HTMLElement>(null);
   const previousStep = useRef(step);
@@ -420,7 +436,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
   const portalPath = privateEventPath("/portal/home", workspace.event.id, "applicant");
   const formContract = editingProposal?.form ?? workspace.forms.find((form) => form.id === builder.formId);
   const cfpDeadline = publishedSubmissionDeadline(formContract ?? {}, workspace.event);
-  const cfpClosed = Date.now() > new Date(cfpDeadline).getTime();
+  const cfpClosed = formContract?.status === "closed" || Date.now() > new Date(cfpDeadline).getTime();
 
   useEffect(() => {
     if (!submittedId || !builder.autoRedirect) return;
@@ -525,7 +541,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
   }, [accountState, primarySpeaker.email]);
 
   useEffect(() => {
-    if (!editingProposal || editingProposal.status !== "draft") return;
+    if (!editingProposal || !applicantMayEdit(editingProposal.status)) return;
     const hydrationKey = `${editingProposal.id}:${editingProposal.version ?? 1}`;
     if (hydratedProposalRef.current === hydrationKey) return;
     hydratedProposalRef.current = hydrationKey;
@@ -533,7 +549,9 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
     setPermissionConfirmed(false);
     setSubmitError("");
     setErrors({});
-    setDraftSyncMessage(`Account draft restored · version ${editingProposal.version ?? 1}`);
+    setDraftSyncMessage(applicantRevisionOpen(editingProposal.status)
+      ? `Requested revision restored · version ${editingProposal.version ?? 1}`
+      : `Account draft restored · version ${editingProposal.version ?? 1}`);
     setStep(Math.max(0, visibleSteps.findIndex((item) => item.id === "submission")));
   }, [builder, editingProposal, visibleSteps]);
 
@@ -564,11 +582,11 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
       setSubmitError("This account draft is unavailable. Return to Your conference account and choose a saved draft before syncing.");
       return;
     }
-    if (cfpClosed && !editingProposal) {
+    if (cfpClosed && (!editingProposal || applicantRevisionOpen(editingProposal.status))) {
       setSubmitError("The call for speakers is closed, so a new account draft can no longer be created. Your browser copy remains available on this device.");
       return;
     }
-    if (editingProposal && editingProposal.status !== "draft") {
+    if (editingProposal && !applicantMayEdit(editingProposal.status)) {
       setSubmitError("This proposal is already in review and can no longer be edited.");
       return;
     }
@@ -617,6 +635,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
 
   const startNewProposal = () => {
     setSubmittedId(null);
+    setSubmittedRevision(false);
     const empty = blankSubmission(builder.proposalFields, builder.participantMin);
     const verifiedEmail = accountState.kind === "verified" ? accountState.email : "";
     setSubmission({
@@ -650,6 +669,32 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
       setWithdrawError(error instanceof Error ? error.message : "The proposal could not be withdrawn.");
     } finally {
       setWithdrawing(false);
+    }
+  };
+
+  const openSubmittedProposalForEditing = async (proposal: Proposal) => {
+    setReopeningId(proposal.id);
+    setSubmitError("");
+    try {
+      const reopened = await reopenProposal(proposal.id);
+      const revisionRequest = {
+        note: "Applicant reopened this proposal for editing before the CFP deadline.",
+        requestedAt: reopened.revisionRequestedAt,
+        requestedBy: "applicant" as const,
+      };
+      setAccountProposals((current) => current.map((item) => item.id === proposal.id ? {
+        ...item,
+        status: "revision_open",
+        version: reopened.version,
+        revisionRequest,
+      } : item));
+      const nextSearch = new URLSearchParams(searchParams);
+      nextSearch.set("edit", proposal.id);
+      setSearchParams(nextSearch, { replace: false });
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "The submission could not be opened for editing.");
+    } finally {
+      setReopeningId(null);
     }
   };
 
@@ -749,7 +794,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
   const stepIndex = (id: "submission" | "participant") => Math.max(0, visibleSteps.findIndex((item) => item.id === id));
 
   const submitCurrentProposal = async () => {
-    if (requestedEditId && (!editingProposal || editingProposal.status !== "draft")) {
+    if (requestedEditId && (!editingProposal || !applicantMayEdit(editingProposal.status))) {
       setSubmitError("This saved proposal is no longer editable. Start a new proposal or return to your account list.");
       return;
     }
@@ -789,6 +834,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
 
     setSubmitting(true);
     try {
+      const resubmittingRevision = Boolean(editingProposal && applicantRevisionOpen(editingProposal.status));
       const persistenceSubmission = submissionForPersistence(
         submission,
         builder.collectParticipants,
@@ -797,11 +843,12 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
       const proposal = await submitProposal(
         persistenceSubmission,
         builder,
-        editingProposal?.status === "draft" ? editingProposal : undefined,
+        editingProposal && applicantMayEdit(editingProposal.status) ? editingProposal : undefined,
       );
       mergeAccountProposal(proposal);
       try { removeSubmissionBrowserDraft(window.localStorage, draftScope); } catch { /* The submitted server copy is authoritative. */ }
       setSubmittedId(proposal.id);
+      setSubmittedRevision(resubmittingRevision);
     } catch (error) {
       if (source === "api" && error instanceof ApiClientError && error.status === 401) {
         if (saveDraft()) window.location.assign(authPath);
@@ -819,10 +866,10 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
         <PublicHeader active="cfp" />
         <main className="success-page">
           <span className="success-page__mark"><Check size={38} /></span>
-          <p className="eyebrow">Submission {submittedId.slice(-8).toUpperCase()} received</p>
-          <h1 ref={stepHeadingRef} tabIndex={-1}>You’re in the review queue.</h1>
-          <p>{builder.successMessage}</p>
-          <div className="success-receipt"><span><Mail size={18} /><span><strong>Confirmation queued</strong><small>{primarySpeaker.email}</small></span></span><span><ShieldCheck size={18} /><span><strong>Submission locked to V{builder.version}</strong><small>Your speaker profile stays editable. Contact the organizer to revise proposal answers.</small></span></span></div>
+          <p className="eyebrow">{submittedRevision ? "Revision" : "Submission"} {submittedId.slice(-8).toUpperCase()} received</p>
+          <h1 ref={stepHeadingRef} tabIndex={-1}>{submittedRevision ? "Your revision is back in review." : "You’re in the review queue."}</h1>
+          <p>{submittedRevision ? "The requested changes are saved. Open reviewer work was rebuilt from the proposal’s current tracks; earlier final reviews remain in the organizer’s audit record." : builder.successMessage}</p>
+          <div className="success-receipt"><span><Mail size={18} /><span><strong>{submittedRevision ? "Program team notified" : "Confirmation queued"}</strong><small>{primarySpeaker.email}</small></span></span><span><ShieldCheck size={18} /><span><strong>Submission locked to V{builder.version}</strong><small>Your speaker profile stays editable. The organizer can open another controlled revision if needed.</small></span></span></div>
           <div className="success-actions"><a className="button button--primary button--large" href={portalPath}>Continue to speaker portal <ArrowRight size={16} /></a><button type="button" className="button button--quiet" onClick={startNewProposal}>Submit another session</button></div>
           {builder.autoRedirect && <p className="countdown">Continuing automatically in <strong>{Math.max(0, countdown)}</strong> seconds.</p>}
         </main>
@@ -837,6 +884,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
       <main className="submission-shell">
         {previewingDraft && <InlineAlert tone="warning"><strong>Private draft preview.</strong> {publicBuilder ? `Applicants on the public link still see published version ${publicBuilder.publishedVersion}.` : "No public form is published yet."}</InlineAlert>}
         {editingProposal?.status === "draft" && <InlineAlert tone="info"><Cloud size={15} /><span><strong>Editing account draft.</strong> Changes are not synced until you choose Save to account. Draft revision {editingProposal.version ?? 1} uses immutable form version {builder.version}{builder.version !== publishedBuilder.version ? `; new proposals use version ${publishedBuilder.version}` : ""}.</span></InlineAlert>}
+        {editingProposal && applicantRevisionOpen(editingProposal.status) && <InlineAlert tone={cfpClosed ? "danger" : "warning"}><MessageSquareQuote size={15} /><span><strong>{cfpClosed ? "Revision window closed." : editingProposal.status === "revision_open" ? "You opened this submission for editing." : "The program team requested changes."}</strong> {editingProposal.status === "changes_requested" ? editingProposal.revisionRequest?.note ?? "Review the organizer’s email, update the pinned form, and resubmit." : "Update the pinned form version, then save progress or resubmit."}{!cfpClosed && <> Save progress to your account or resubmit before <strong>{formatDeadline(cfpDeadline, workspace.event.timezone)}</strong>.</>}</span></InlineAlert>}
         {requestedEditId && !editingProposal && !accountProposalsLoading && accountState.kind === "verified" && <InlineAlert tone="danger">That proposal draft was not found in this verified account. Choose one of your saved proposals below or start a new draft.</InlineAlert>}
         <header className="submission-head">
           <div><p className="eyebrow">{workspace.event.name} · Call for speakers</p><h1>{builder.externalTitle}</h1></div>
@@ -867,10 +915,13 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
                   <div className="account-submissions__list">
                     {accountProposals.map((proposal) => (
                       <article key={proposal.id} className={proposal.id === editingProposal?.id ? "active" : ""}>
-                        <div className="account-submissions__identity"><span>{proposal.id.slice(-7).toUpperCase()}</span><div><strong>{proposal.title || "Untitled proposal"}</strong><small>{proposal.status === "draft" ? `Saved ${proposalDate(proposal.submittedAt)} · version ${proposal.version ?? 1}` : `${proposal.format} · ${proposal.category}`}</small></div></div>
+                        <div className="account-submissions__identity"><span>{proposal.id.slice(-7).toUpperCase()}</span><div><strong>{proposal.title || "Untitled proposal"}</strong><small>{proposal.status === "draft" ? `Saved ${proposalDate(proposal.submittedAt)} · version ${proposal.version ?? 1}` : applicantRevisionOpen(proposal.status) ? `${proposal.status === "revision_open" ? "Editing since" : "Requested"} ${proposalDate(proposal.revisionRequest?.requestedAt ?? proposal.submittedAt)} · version ${proposal.version ?? 1}` : `${proposal.format} · ${proposal.category}`}</small></div></div>
                         <StatusPill status={proposal.status} />
+                        {applicantRevisionOpen(proposal.status) && <p className="account-submissions__revision-note"><MessageSquareQuote size={14} /> <span>{proposal.status === "revision_open" ? "This submission is editable until the pinned CFP deadline." : proposal.revisionRequest?.note ?? "The program team sent revision instructions by email."}</span></p>}
                         <div className="account-submissions__actions">
                           {proposal.status === "draft" && <Link className="button button--quiet" to={`${location.pathname}?edit=${encodeURIComponent(proposal.id)}`}>Resume draft <ArrowRight size={14} /></Link>}
+                          {applicantRevisionOpen(proposal.status) && proposalRevisionWindowOpen(proposal, workspace.event.cfpClosesAt) && <Link className="button button--primary" to={`${location.pathname}?edit=${encodeURIComponent(proposal.id)}`}>Revise &amp; resubmit <ArrowRight size={14} /></Link>}
+                          {["submitted", "under_review", "accept_queue", "decline_queue", "waitlisted"].includes(proposal.status) && proposalRevisionWindowOpen(proposal, workspace.event.cfpClosesAt) && proposal.speakers[0]?.email.toLowerCase() === accountState.email.toLowerCase() && <button type="button" className="button button--quiet" disabled={Boolean(reopeningId)} onClick={() => void openSubmittedProposalForEditing(proposal)}><FileText size={14} /> {reopeningId === proposal.id ? "Opening…" : "Edit submission"}</button>}
                           {applicantMayWithdraw(proposal.status) && <button type="button" className="text-link text-link--danger" onClick={(event) => { withdrawReturnFocusRef.current = event.currentTarget; setWithdrawError(""); setWithdrawTarget(proposal); }}>Withdraw</button>}
                         </div>
                       </article>
@@ -995,7 +1046,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
               <section className="form-page review-submit">
                 <p className="eyebrow">05 / Review</p>
                 <h2 ref={stepHeadingRef} tabIndex={-1}>One final read before it leaves your desk.</h2>
-                <p>Submitting locks this proposal for review. Your speaker profile remains editable; contact the organizer if the proposal itself needs a revision.</p>
+                <p>{editingProposal && applicantRevisionOpen(editingProposal.status) ? "Resubmitting closes this revision window and rebuilds open reviewer work from the current tracks. Final reviews already submitted remain preserved as historical evidence." : "Submitting locks this proposal for review. You can reopen it from your account until the CFP closes; the organizer can also request a controlled revision."}</p>
                 <div className="review-sheet">
                   <div><span>TITLE</span><strong>{submission.title || "Not supplied"}</strong><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
                   <div><span>FORMAT</span><strong>{submission.format} · {submission.level}</strong><button type="button" onClick={() => setStep(stepIndex("submission"))}>Edit</button></div>
@@ -1014,7 +1065,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
               <div><Save size={17} /><span><strong>{draftSyncMessage ? "Account draft saved" : savedAt ? "Browser draft saved" : "Draft protection"}</strong><small aria-live="polite">{draftSyncMessage || (savedAt ? `Browser copy · ${savedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "Keep a browser copy or sync to your account")}</small></span></div>
               <div className="draft-card__actions">
                 <button type="button" onClick={saveDraft}>Save browser copy</button>
-                {source === "api" && accountState.kind === "verified" && <button type="button" className="draft-card__account" disabled={savingAccountDraft || accountProposalsLoading || (cfpClosed && !editingProposal) || Boolean(editingProposal && editingProposal.status !== "draft")} onClick={() => void saveDraftToAccount()}><Cloud size={13} /> {savingAccountDraft ? "Saving…" : editingProposal ? "Update account draft" : "Save to account"}</button>}
+                {source === "api" && accountState.kind === "verified" && <button type="button" className="draft-card__account" disabled={savingAccountDraft || accountProposalsLoading || (cfpClosed && (!editingProposal || applicantRevisionOpen(editingProposal.status))) || Boolean(editingProposal && !applicantMayEdit(editingProposal.status))} onClick={() => void saveDraftToAccount()}><Cloud size={13} /> {savingAccountDraft ? "Saving…" : editingProposal && applicantRevisionOpen(editingProposal.status) ? "Save revision progress" : editingProposal ? "Update account draft" : "Save to account"}</button>}
                 {source === "api" && accountState.kind !== "verified" && <Link className="draft-card__sign-in" to={authPath} onClick={saveDraft}><LockKeyhole size={13} /> Sign in to sync</Link>}
               </div>
             </div>
@@ -1026,7 +1077,7 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
         <footer className="submission-footer">
           <button type="button" className="button button--quiet" disabled={step === 0} onClick={() => setStep((value) => Math.max(0, value - 1))}><ArrowLeft size={15} /> Back</button>
           <span>Step {step + 1} of {visibleSteps.length}</span>
-          {currentStep.id === "review" ? <button type="button" className="button button--primary button--large" disabled={!permissionConfirmed || submitting || cfpClosed} onClick={() => void submitCurrentProposal()}><CheckCircle2 size={16} /> {submitting ? "Submitting…" : cfpClosed ? "CFP closed" : editingProposal ? "Submit saved draft" : "Submit proposal"}</button> : <button type="button" className="button button--primary" onClick={goNext}>Continue <ArrowRight size={15} /></button>}
+          {currentStep.id === "review" ? <button type="button" className="button button--primary button--large" disabled={!permissionConfirmed || submitting || cfpClosed} onClick={() => void submitCurrentProposal()}><CheckCircle2 size={16} /> {submitting ? "Submitting…" : cfpClosed ? "CFP closed" : editingProposal && applicantRevisionOpen(editingProposal.status) ? "Resubmit revision" : editingProposal ? "Submit saved draft" : "Submit proposal"}</button> : <button type="button" className="button button--primary" onClick={goNext}>Continue <ArrowRight size={15} /></button>}
         </footer>
       </main>
       <NoticeRegion />

@@ -1,6 +1,10 @@
 import type { Bindings } from "./env";
+import {
+  airtableAuthorityPromotionBlockersForRow,
+  type AirtableAuthorityReadinessRow,
+} from "../jobs/airtable-sync";
 
-export type ReadinessCheck = "configuration" | "database" | "realtime";
+export type ReadinessCheck = "configuration" | "database" | "airtable" | "realtime";
 
 export interface ReadinessResult {
   ready: boolean;
@@ -43,7 +47,7 @@ export function hasReadinessAuthorization(header: string | undefined, token: str
 }
 
 export async function probeReadiness(env: Bindings): Promise<ReadinessResult> {
-  const checks: ReadinessResult["checks"] = { configuration: "failed", database: "skipped", realtime: "skipped" };
+  const checks: ReadinessResult["checks"] = { configuration: "failed", database: "skipped", airtable: "skipped", realtime: "skipped" };
   const issues = configurationIssues(env);
   if (issues.length) return { ready: false, checks, failedCheck: "configuration", detail: issues.join("; ") };
   checks.configuration = "ok";
@@ -54,6 +58,27 @@ export async function probeReadiness(env: Bindings): Promise<ReadinessResult> {
     checks.database = "ok";
   } catch (error) {
     return { ready: false, checks, failedCheck: "database", detail: error instanceof Error ? error.message : String(error) };
+  }
+
+  try {
+    const authoritative = await env.DB.prepare(`SELECT event_id, enabled, status, webhook_id, webhook_expires_at,
+        last_reconciled_at, reconciliation_started_at,
+        (SELECT COUNT(*) FROM airtable_change_queue WHERE connection_id = airtable_connections.id AND status IN ('queued', 'processing', 'failed')) AS pending_changes,
+        (SELECT COUNT(*) FROM airtable_change_queue WHERE connection_id = airtable_connections.id AND status = 'dead') AS dead_changes,
+        (SELECT COUNT(*) FROM airtable_conflicts WHERE connection_id = airtable_connections.id AND status = 'open') AS open_conflicts
+      FROM airtable_connections WHERE authority = 'airtable'`)
+      .all<AirtableAuthorityReadinessRow>();
+    const integrationExpected = env.AIRTABLE_ENABLED === "true" || env.AIRTABLE_AUTHORITY_DEFAULT === "airtable" || authoritative.results.length > 0;
+    if (integrationExpected) {
+      const blockers = authoritative.results.flatMap((row) => airtableAuthorityPromotionBlockersForRow(row));
+      if (authoritative.results.length && env.AIRTABLE_ENABLED !== "true") blockers.unshift("Airtable is authoritative while synchronization is disabled");
+      if (env.AIRTABLE_AUTHORITY_DEFAULT === "airtable" && authoritative.results.length === 0) blockers.push("Airtable is configured as the default authority but no authoritative connection exists");
+      if (blockers.length) throw new Error(blockers.join("; "));
+      checks.airtable = "ok";
+    }
+  } catch (error) {
+    checks.airtable = "failed";
+    return { ready: false, checks, failedCheck: "airtable", detail: error instanceof Error ? error.message : String(error) };
   }
 
   try {

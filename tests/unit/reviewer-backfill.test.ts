@@ -8,7 +8,7 @@ describe("reviewer invitation backlog", () => {
   beforeEach(() => {
     db = new DatabaseSync(":memory:");
     db.exec(`
-      CREATE TABLE proposals (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, reviewer_group_id TEXT, status TEXT NOT NULL, updated_at INTEGER NOT NULL, owner_user_id TEXT NOT NULL);
+      CREATE TABLE proposals (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, reviewer_group_id TEXT, status TEXT NOT NULL, updated_at INTEGER NOT NULL, owner_user_id TEXT NOT NULL, review_cycle INTEGER NOT NULL DEFAULT 1);
       CREATE TABLE proposal_reviewer_groups (proposal_id TEXT NOT NULL, reviewer_group_id TEXT NOT NULL, PRIMARY KEY (proposal_id, reviewer_group_id));
       CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, user_id TEXT);
       CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
@@ -24,21 +24,22 @@ describe("reviewer invitation backlog", () => {
         scores TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        UNIQUE (proposal_id, round_id, reviewer_user_id)
+        review_cycle INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (proposal_id, round_id, reviewer_user_id, review_cycle)
       );
 
       INSERT INTO reviewer_groups VALUES ('group-a', 'event-a'), ('group-b', 'event-a'), ('group-other', 'event-b');
       INSERT INTO reviewer_group_members VALUES ('group-a', 'reviewer-new');
       INSERT INTO review_rounds VALUES ('round-a', 'event-a', 1, 'active'), ('round-old', 'event-a', 0, 'closed'), ('round-other', 'event-b', 1, 'active');
       INSERT INTO proposals VALUES
-        ('proposal-a', 'event-a', 'group-a', 'submitted', 1, 'applicant-a'),
-        ('proposal-already-reviewing', 'event-a', 'group-a', 'under_review', 1, 'applicant-b'),
-        ('proposal-owned', 'event-a', 'group-a', 'submitted', 1, 'reviewer-new'),
-        ('proposal-co-speaker', 'event-a', 'group-a', 'submitted', 1, 'applicant-c'),
-        ('proposal-other-group', 'event-a', 'group-b', 'submitted', 1, 'applicant-d'),
-        ('proposal-draft', 'event-a', 'group-a', 'draft', 1, 'applicant-e'),
-        ('proposal-withdrawn', 'event-a', 'group-a', 'withdrawn', 1, 'applicant-f'),
-        ('proposal-other-event', 'event-b', 'group-other', 'submitted', 1, 'applicant-g');
+        ('proposal-a', 'event-a', 'group-a', 'submitted', 1, 'applicant-a', 1),
+        ('proposal-already-reviewing', 'event-a', 'group-a', 'under_review', 1, 'applicant-b', 1),
+        ('proposal-owned', 'event-a', 'group-a', 'submitted', 1, 'reviewer-new', 1),
+        ('proposal-co-speaker', 'event-a', 'group-a', 'submitted', 1, 'applicant-c', 1),
+        ('proposal-other-group', 'event-a', 'group-b', 'submitted', 1, 'applicant-d', 1),
+        ('proposal-draft', 'event-a', 'group-a', 'draft', 1, 'applicant-e', 1),
+        ('proposal-withdrawn', 'event-a', 'group-a', 'withdrawn', 1, 'applicant-f', 1),
+        ('proposal-other-event', 'event-b', 'group-other', 'submitted', 1, 'applicant-g', 1);
       INSERT INTO proposal_reviewer_groups VALUES
         ('proposal-a', 'group-a'),
         ('proposal-already-reviewing', 'group-a'),

@@ -50,6 +50,41 @@
       "when": 1786225124510,
       "tag": "0006_careless_domino",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1786254687940,
+      "tag": "0007_oval_sleeper",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786255525936,
+      "tag": "0008_premium_living_tribunal",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786256605245,
+      "tag": "0009_nebulous_raider",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786256706866,
+      "tag": "0010_right_talos",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786259261228,
+      "tag": "0011_review_cycle_assignments",
+      "breakpoints": true
     }
   ]
 }

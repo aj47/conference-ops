@@ -1,4 +1,6 @@
 import type {
+  AirtableOperatorStatus,
+  CommunicationDelivery,
   EventRecord,
   FormDefinition,
   FormField,
@@ -7,17 +9,20 @@ import type {
   ProgramSession,
   ReadinessInsight,
   ReminderRule,
+  ReviewPlanDefinition,
   ResourcePage,
   ReviewerGroupConfig,
   Room,
   SpeakerProfile,
+  TaskComment,
   TaskTemplateDefinition,
   Track,
   WorkspaceSnapshot,
 } from "../shared/domain";
 
-export function publicEventApiPath(slug: string) {
-  return `/api/v1/public/events/${encodeURIComponent(slug)}`;
+export function publicEventApiPath(slug: string, form?: string) {
+  const path = `/api/v1/public/events/${encodeURIComponent(slug)}`;
+  return form ? `${path}?${new URLSearchParams({ form })}` : path;
 }
 
 export interface PublicEventData {
@@ -82,6 +87,30 @@ export interface CreateEventPayload {
   websiteUrl: string;
   accent: string;
 }
+
+export interface FormDraftPayload {
+  expectedVersion: number;
+  name: string;
+  publicTitle: string;
+  pageHeading: string;
+  submissionType: "abstract" | "session";
+  collectsParticipants: boolean;
+  welcomeTitle: string;
+  welcomeCopy: string;
+  confirmationCopy: string;
+  maxSpeakers: number;
+  maxSubmissionsPerUser?: number;
+  closesAt?: string;
+  allowMultipleDrafts: boolean;
+  redirectToPortal: boolean;
+  confirmationEmailEnabled: boolean;
+  settings: FormVersionSettings;
+  fields: FormField[];
+}
+
+export type ResourcePageDraft = Pick<ResourcePage, "title" | "slug" | "summary" | "body" | "status"> & {
+  linkUrl?: string;
+};
 
 export interface SubmissionMutationPayload {
   title: string;
@@ -220,8 +249,8 @@ async function downloadRequest(
 }
 
 export const conferenceApi = {
-  publicEvent(slug: string) {
-    return request<PublicEventData>(publicEventApiPath(slug), "", { cache: "no-store" });
+  publicEvent(slug: string, form?: string) {
+    return request<PublicEventData>(publicEventApiPath(slug, form), "", { cache: "no-store" });
   },
 
   async bootstrap(actorId: string, eventId?: string, role?: EventRole) {
@@ -313,6 +342,23 @@ export const conferenceApi = {
     );
   },
 
+  requestProposalChanges(actorId: string, eventId: string, proposalId: string, note: string) {
+    return request<{
+      proposalId: string;
+      status: "changes_requested";
+      note: string;
+      revisionRequestedAt: string;
+      revokedAssignments: number;
+      submittedReviewsPreserved: number;
+      messagesQueued: number;
+      messagesDispatched: number;
+    }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/proposals/${encodeURIComponent(proposalId)}/request-changes`,
+      actorId,
+      { method: "POST", body: JSON.stringify({ note }) },
+    );
+  },
+
   review(
     actorId: string,
     eventId: string,
@@ -363,6 +409,26 @@ export const conferenceApi = {
       `/api/v1/events/${eventId}/forms/${formId}/publish`,
       actorId,
       { method: "POST", body: JSON.stringify({ version }) },
+    );
+  },
+
+  createForm(
+    actorId: string,
+    eventId: string,
+    payload: Omit<FormDraftPayload, "expectedVersion">,
+  ) {
+    return request<FormDefinition>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/forms`,
+      actorId,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+  },
+
+  closeForm(actorId: string, eventId: string, formId: string) {
+    return request<{ formId: string; status: "closed"; closedAt: string }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/forms/${encodeURIComponent(formId)}/close`,
+      actorId,
+      { method: "POST" },
     );
   },
 
@@ -435,6 +501,29 @@ export const conferenceApi = {
     );
   },
 
+  createResourcePage(actorId: string, eventId: string, payload: ResourcePageDraft) {
+    return request<ResourcePage>(`/api/v1/events/${encodeURIComponent(eventId)}/resources`, actorId, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateResourcePage(actorId: string, eventId: string, resourceId: string, payload: ResourcePageDraft) {
+    return request<ResourcePage>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/resources/${encodeURIComponent(resourceId)}`,
+      actorId,
+      { method: "PUT", body: JSON.stringify(payload) },
+    );
+  },
+
+  deleteResourcePage(actorId: string, eventId: string, resourceId: string) {
+    return request<{ id: string; deleted: true }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/resources/${encodeURIComponent(resourceId)}`,
+      actorId,
+      { method: "DELETE" },
+    );
+  },
+
   saveReviewerRouting(
     actorId: string,
     eventId: string,
@@ -444,6 +533,33 @@ export const conferenceApi = {
       `/api/v1/events/${encodeURIComponent(eventId)}/reviewer-routing`,
       actorId,
       { method: "PUT", body: JSON.stringify({ groups }) },
+    );
+  },
+
+  reviewPlans(actorId: string, eventId: string) {
+    return request<{ plans: ReviewPlanDefinition[] }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/review-plans`,
+      actorId,
+    );
+  },
+
+  airtableStatus(actorId: string, eventId: string) {
+    return request<AirtableOperatorStatus>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/integrations/airtable/status`,
+      actorId,
+    );
+  },
+
+  updateReviewPlan(
+    actorId: string,
+    eventId: string,
+    planId: string,
+    payload: Pick<ReviewPlanDefinition, "name" | "status" | "rubric">,
+  ) {
+    return request<ReviewPlanDefinition>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/review-plans/${encodeURIComponent(planId)}`,
+      actorId,
+      { method: "PUT", body: JSON.stringify(payload) },
     );
   },
 
@@ -517,25 +633,7 @@ export const conferenceApi = {
     actorId: string,
     eventId: string,
     formId: string,
-    payload: {
-      expectedVersion: number;
-      name: string;
-      publicTitle: string;
-      pageHeading: string;
-      submissionType: "abstract" | "session";
-      collectsParticipants: boolean;
-      welcomeTitle: string;
-      welcomeCopy: string;
-      confirmationCopy: string;
-      maxSpeakers: number;
-      maxSubmissionsPerUser?: number;
-      closesAt?: string;
-      allowMultipleDrafts: boolean;
-      redirectToPortal: boolean;
-      confirmationEmailEnabled: boolean;
-      settings: FormVersionSettings;
-      fields: FormField[];
-    },
+    payload: FormDraftPayload,
   ) {
     return request<{ id: string; version: number; status: "draft" }>(
       `/api/v1/events/${eventId}/forms/${formId}`,
@@ -572,6 +670,21 @@ export const conferenceApi = {
   withdrawSubmission(actorId: string, eventId: string, proposalId: string) {
     return request<{ id: string; status: "withdrawn"; withdrawnAt: string }>(
       `/api/v1/events/${eventId}/submissions/${encodeURIComponent(proposalId)}/withdraw`,
+      actorId,
+      { method: "POST" },
+    );
+  },
+
+  reopenSubmission(actorId: string, eventId: string, proposalId: string) {
+    return request<{
+      id: string;
+      status: "revision_open";
+      version: number;
+      revisionRequestedAt: string;
+      revokedAssignments: number;
+      submittedReviewsPreserved: number;
+    }>(
+      `/api/v1/events/${eventId}/submissions/${encodeURIComponent(proposalId)}/reopen`,
       actorId,
       { method: "POST" },
     );
@@ -626,6 +739,13 @@ export const conferenceApi = {
         body: JSON.stringify(body),
         ...(idempotencyKey ? { headers: { "idempotency-key": idempotencyKey } } : {}),
       },
+    );
+  },
+
+  communicationHistory(actorId: string, eventId: string) {
+    return request<{ deliveries: CommunicationDelivery[]; generatedAt: string }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/communications/history`,
+      actorId,
     );
   },
 
@@ -705,6 +825,28 @@ export const conferenceApi = {
       `/api/v1/events/${eventId}/tasks/${taskId}/artifact`,
       actorId,
       { method: "POST", body: JSON.stringify({ uploadId }) },
+    );
+  },
+
+  downloadTaskArtifact(
+    actorId: string,
+    eventId: string,
+    taskId: string,
+    uploadId: string,
+    fallbackFileName = "submitted-file",
+  ) {
+    return downloadRequest(
+      `/api/v1/events/${encodeURIComponent(eventId)}/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(uploadId)}`,
+      actorId,
+      safeDownloadFileName(fallbackFileName, "submitted-file"),
+    );
+  },
+
+  addTaskComment(actorId: string, eventId: string, taskId: string, body: string) {
+    return request<TaskComment>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/tasks/${encodeURIComponent(taskId)}/comments`,
+      actorId,
+      { method: "POST", body: JSON.stringify({ body }) },
     );
   },
 

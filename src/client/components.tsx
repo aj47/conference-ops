@@ -78,7 +78,7 @@ export function PersonaSwitcher({ compact = false }: { compact?: boolean }) {
 export function StatusPill({ status }: { status: ProposalStatus | TaskStatus | string }) {
   const normalized = status.toLowerCase().replaceAll(" ", "_");
   const positive = ["accepted", "complete", "published", "open", "cfp_open", "scheduled", "session"].includes(normalized);
-  const warning = ["waitlisted", "pending", "in_progress", "under_review", "overdue", "review"].includes(normalized);
+  const warning = ["changes_requested", "revision_open", "waitlisted", "pending", "in_progress", "under_review", "overdue", "review"].includes(normalized);
   const negative = ["rejected", "closed", "blocked"].includes(normalized);
   return (
     <span className={`status-pill status-pill--${positive ? "positive" : negative ? "negative" : warning ? "warning" : "neutral"}`}>

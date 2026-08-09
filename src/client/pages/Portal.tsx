@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  BookOpen,
   BriefcaseBusiness,
   CalendarDays,
   Check,
@@ -12,15 +13,19 @@ import {
   UserRound,
 } from "lucide-react";
 import { useId, useMemo, useState } from "react";
-import { NavLink, useParams } from "react-router-dom";
+import { NavLink, useNavigate, useParams } from "react-router-dom";
 import type { SpeakerProfile } from "../../shared/domain";
 import { isOutstandingTaskStatus, isResolvedTaskStatus } from "../../shared/task-status";
 import { Avatar, EmptyState, Field, InlineAlert, NoticeRegion, ProgressBar, SectionHeading, StatusPill } from "../components";
 import { FormResponseList } from "../FormResponseList";
 import { portalSpeakerForActor } from "../portal-model";
 import { privateEventPath } from "../private-routes";
+import { publishedResources } from "../resource-pages";
+import { ResourceContent } from "../ResourceContent";
 import { PublicHeader } from "../Shell";
 import { TaskArtifactEvidence } from "../TaskArtifactEvidence";
+import { TaskDiscussion } from "../TaskDiscussion";
+import { TaskExternalAction } from "../TaskExternalAction";
 import { TaskResponseForm } from "../TaskResponseForm";
 import { useWorkspace } from "../workspace";
 
@@ -28,6 +33,7 @@ const portalTabs = [
   { id: "home", label: "Home", icon: Home },
   { id: "submissions", label: "Submissions", icon: FileText },
   { id: "tasks", label: "Tasks", icon: ListChecks },
+  { id: "resources", label: "Resources", icon: BookOpen },
   { id: "profile", label: "Profile", icon: UserRound },
 ] as const;
 
@@ -51,7 +57,7 @@ function SpeakerPortrait({ speaker, size = "lg" }: { speaker: SpeakerProfile; si
 }
 
 export function SpeakerPortal() {
-  const { workspace, toggleTask, updateProfile, uploadHeadshot, uploadTaskArtifact, downloadTaskArtifact, submitTaskForm, privateWorkspaceEventId } = useWorkspace();
+  const { workspace, toggleTask, updateProfile, uploadHeadshot, uploadTaskArtifact, downloadTaskArtifact, addTaskComment, submitTaskForm, reopenProposal, privateWorkspaceEventId } = useWorkspace();
   const eventId = privateWorkspaceEventId ?? workspace.event.id;
   const params = useParams();
   const active = portalTabs.some((tab) => tab.id === params.section) ? params.section! : "home";
@@ -63,6 +69,7 @@ export function SpeakerPortal() {
   const speaker = portalSpeakerForActor(allSpeakers, workspace.actor.email);
   const proposals = workspace.proposals.filter((proposal) => proposal.speakers.some((candidate) => candidate.id === speaker?.id));
   const tasks = workspace.tasks.filter((task) => task.speakerId === speaker?.id);
+  const resources = publishedResources(workspace.resources);
   const completeTasks = tasks.filter((task) => isResolvedTaskStatus(task.status)).length;
 
   return (
@@ -74,7 +81,7 @@ export function SpeakerPortal() {
       </header>
       <nav className="portal-tabs" aria-label="Speaker portal"><div>{portalTabs.map((tab) => { const Icon = tab.icon; return <NavLink key={tab.id} to={privateEventPath(`/portal/${tab.id}`, eventId)} className={active === tab.id ? "active" : ""}><Icon size={16} />{tab.label}{tab.id === "tasks" && tasks.some((task) => isOutstandingTaskStatus(task.status)) && <span>{tasks.filter((task) => isOutstandingTaskStatus(task.status)).length}</span>}</NavLink>; })}</div></nav>
       <main className="portal-canvas">
-        {!speaker ? (
+        {active === "resources" ? <PortalResources resources={resources} /> : !speaker ? (
           <EmptyState
             title={workspace.actor.role === "organizer" ? "No speaker selected for preview" : "No claimed speaker profile"}
             detail={workspace.actor.role === "organizer"
@@ -83,8 +90,8 @@ export function SpeakerPortal() {
           />
         ) : <>
           {active === "home" && <PortalHome speaker={speaker} proposals={proposals} tasks={tasks} completeTasks={completeTasks} eventId={eventId} />}
-          {active === "submissions" && <PortalSubmissions proposals={proposals} />}
-          {active === "tasks" && <PortalTasks tasks={tasks} onToggle={toggleTask} onUpload={uploadTaskArtifact} onDownload={downloadTaskArtifact} onSubmitForm={submitTaskForm} eventId={eventId} />}
+          {active === "submissions" && <PortalSubmissions proposals={proposals} onReopen={reopenProposal} />}
+          {active === "tasks" && <PortalTasks tasks={tasks} onToggle={toggleTask} onUpload={uploadTaskArtifact} onDownload={downloadTaskArtifact} onComment={addTaskComment} onSubmitForm={submitTaskForm} eventId={eventId} />}
           {active === "profile" && <PortalProfile speaker={speaker} onSave={(patch) => updateProfile(speaker.id, patch)} onUpload={(file) => uploadHeadshot(speaker.id, file)} />}
         </>}
       </main>
@@ -105,12 +112,38 @@ function PortalHome({ speaker, proposals, tasks, completeTasks, eventId }: { spe
   );
 }
 
-function PortalSubmissions({ proposals }: { proposals: ReturnType<typeof useWorkspace>["workspace"]["proposals"] }) {
+function PortalSubmissions({
+  proposals,
+  onReopen,
+}: {
+  proposals: ReturnType<typeof useWorkspace>["workspace"]["proposals"];
+  onReopen: ReturnType<typeof useWorkspace>["reopenProposal"];
+}) {
   const { workspace } = useWorkspace();
+  const navigate = useNavigate();
+  const [reopeningId, setReopeningId] = useState<string | null>(null);
+  const [reopenError, setReopenError] = useState("");
   const submissionPath = `/submit/${encodeURIComponent(workspace.event.slug)}`;
+  const revisionWindowOpen = (proposal: (typeof proposals)[number]) => {
+    const deadline = proposal.form?.closesAt ?? workspace.event.cfpClosesAt;
+    return proposal.form?.status !== "closed" && Date.now() < new Date(deadline).getTime();
+  };
+  const reopen = async (proposalId: string) => {
+    setReopeningId(proposalId);
+    setReopenError("");
+    try {
+      await onReopen(proposalId);
+      navigate(`${submissionPath}?edit=${encodeURIComponent(proposalId)}`);
+    } catch (error) {
+      setReopenError(error instanceof Error ? error.message : "The submission could not be opened for editing.");
+    } finally {
+      setReopeningId(null);
+    }
+  };
   return (
     <section className="portal-panel portal-panel--wide">
       <SectionHeading title="My submissions" description="Current decisions and the exact version sent to reviewers." action={<NavLink to={submissionPath} className="button button--quiet">Submit another</NavLink>} />
+      {reopenError && <InlineAlert tone="danger">{reopenError}</InlineAlert>}
       <div className="portal-submission-list">
         {proposals.map((proposal) => (
           <article key={proposal.id}>
@@ -125,10 +158,31 @@ function PortalSubmissions({ proposals }: { proposals: ReturnType<typeof useWork
               <div><dt>Review activity</dt><dd>{proposal.reviewCount ? `${proposal.reviewCount} committee reviews` : "Not started"}</dd></div>
             </dl>
             <FormResponseList responses={proposal.customResponses} title="Your additional responses" />
+            <div className="portal-submission-list__actions">
+              {(["changes_requested", "revision_open"].includes(proposal.status)) && revisionWindowOpen(proposal) && <NavLink className="button button--primary" to={`${submissionPath}?edit=${encodeURIComponent(proposal.id)}`}>Continue editing <ArrowRight size={14} /></NavLink>}
+              {(["submitted", "under_review", "accept_queue", "decline_queue", "waitlisted"].includes(proposal.status)) && revisionWindowOpen(proposal) && proposal.speakers[0]?.email.toLowerCase() === workspace.actor.email.toLowerCase() && <button type="button" className="button button--quiet" disabled={Boolean(reopeningId)} onClick={() => void reopen(proposal.id)}><FileText size={14} /> {reopeningId === proposal.id ? "Opening…" : "Edit submission"}</button>}
+            </div>
           </article>
         ))}
       </div>
       {!proposals.length && <EmptyState title="No submissions yet" detail="Start with a practical story, concrete evidence, and a clear attendee promise." action={<NavLink to={submissionPath} className="button button--primary">Start a proposal</NavLink>} />}
+    </section>
+  );
+}
+
+function PortalResources({ resources }: { resources: ReturnType<typeof useWorkspace>["workspace"]["resources"] }) {
+  return (
+    <section className="portal-panel portal-panel--wide portal-resources">
+      <SectionHeading title="Participant resources" description="Organizer-published guides, policies, and day-of references for this event." />
+      <div className="portal-resource-list">
+        {resources.map((resource, index) => (
+          <details key={resource.id} id={`resource-${resource.slug}`} open={index === 0}>
+            <summary><span><BookOpen size={17} /><span><strong>{resource.title}</strong><small>{resource.summary}</small></span></span><ChevronDown size={17} /></summary>
+            <ResourceContent resource={resource} />
+          </details>
+        ))}
+      </div>
+      {!resources.length && <EmptyState title="No resources published yet" detail="The event team will add travel, production, and day-of guidance here when it is ready." />}
     </section>
   );
 }
@@ -138,13 +192,15 @@ function PortalTasks({
   onToggle,
   onUpload,
   onDownload,
+  onComment,
   onSubmitForm,
   eventId,
 }: {
   tasks: ReturnType<typeof useWorkspace>["workspace"]["tasks"];
   onToggle: (id: string, complete: boolean) => Promise<void>;
   onUpload: (id: string, file: File) => Promise<void>;
-  onDownload: (id: string) => Promise<void>;
+  onDownload: (id: string, uploadId?: string) => Promise<void>;
+  onComment: (id: string, body: string) => Promise<void>;
   onSubmitForm: (id: string, responses: Record<string, unknown>) => Promise<void>;
   eventId: string;
 }) {
@@ -185,9 +241,11 @@ function PortalTasks({
               <p>{task.description}</p>
               <small>{task.status === "waived" ? "Waived · no action required" : `Due ${dueDate(task.dueAt)}`}</small>
               {mode === "file_request" && outstanding && <label className="button button--quiet upload-button"><FileUp size={14} /> {busy ? "Uploading…" : "Upload required file"}<input type="file" disabled={busy} accept=".pdf,.ppt,.pptx,.doc,.docx,.txt" onChange={(event) => { const input = event.currentTarget; const file = input.files?.[0]; input.value = ""; if (file) void runTaskAction(task.id, async () => { await onUpload(task.id, file); setFilter("all"); }, "The file could not be uploaded."); }} /></label>}
-              {mode === "file_request" && task.status === "complete" && <TaskArtifactEvidence task={task} busy={busy} onDownload={() => void runTaskAction(task.id, () => onDownload(task.id), "The file could not be downloaded.")} onReplace={(file) => void runTaskAction(task.id, () => onUpload(task.id, file), "The replacement file could not be uploaded.")} />}
+              {mode === "file_request" && task.status === "complete" && <TaskArtifactEvidence task={task} busy={busy} onDownload={(uploadId) => void runTaskAction(task.id, () => onDownload(task.id, uploadId), "The file could not be downloaded.")} onReplace={(file) => void runTaskAction(task.id, () => onUpload(task.id, file), "The replacement file could not be uploaded.")} />}
               {mode === "form" && outstanding && <button type="button" className="button button--quiet" onClick={() => { setFormTaskId(task.id); setError(""); }}><FileText size={14} /> Open required form</button>}
+              <TaskExternalAction task={task} />
               {task.type === "profile" && outstanding && mode !== "manual" && <NavLink to={privateEventPath("/portal/profile", eventId)} className="button button--quiet"><UserRound size={14} /> Update profile</NavLink>}
+              <TaskDiscussion task={task} onAdd={(body) => onComment(task.id, body)} />
             </div>
             <StatusPill status={task.status} />
           </article>

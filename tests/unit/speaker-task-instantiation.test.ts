@@ -23,7 +23,8 @@ describe("accepted proposal speaker-task instantiation", () => {
         description TEXT NOT NULL,
         type TEXT NOT NULL,
         target_type TEXT NOT NULL,
-        relative_due_days INTEGER NOT NULL
+        relative_due_days INTEGER NOT NULL,
+        external_url TEXT
       );
       CREATE TABLE speaker_tasks (
         id TEXT PRIMARY KEY,
@@ -35,6 +36,7 @@ describe("accepted proposal speaker-task instantiation", () => {
         description TEXT NOT NULL,
         type TEXT NOT NULL,
         status TEXT NOT NULL,
+        external_url TEXT,
         due_at INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -57,10 +59,10 @@ describe("accepted proposal speaker-task instantiation", () => {
         ('proposal-a-2', 'speaker-a'),
         ('proposal-pending', 'speaker-a');
       INSERT INTO task_templates VALUES
-        ('template-contact', 'event-a', 'Complete profile', 'Add your public details.', 'profile', 'contact', 2),
-        ('template-submission', 'event-a', 'Upload slides', 'Provide the final deck.', 'upload', 'submission', 7),
-        ('template-group', 'event-a', 'Group logistics', 'Unsupported group task.', 'form', 'group', 1),
-        ('template-other-event', 'event-b', 'Other event task', 'Must remain scoped.', 'profile', 'contact', 2);
+        ('template-contact', 'event-a', 'Complete profile', 'Add your public details.', 'profile', 'contact', 2, 'https://conference.example.test/profile'),
+        ('template-submission', 'event-a', 'Upload slides', 'Provide the final deck.', 'upload', 'submission', 7, NULL),
+        ('template-group', 'event-a', 'Group logistics', 'Unsupported group task.', 'form', 'group', 1, NULL),
+        ('template-other-event', 'event-b', 'Other event task', 'Must remain scoped.', 'profile', 'contact', 2, NULL);
     `);
   });
 
@@ -72,13 +74,13 @@ describe("accepted proposal speaker-task instantiation", () => {
   it("creates each supported event template for every proposal speaker with computed status and due date", () => {
     expect(instantiate().changes).toBe(4);
 
-    const tasks = db.prepare(`SELECT template_id, speaker_profile_id, proposal_id, status, due_at
+    const tasks = db.prepare(`SELECT template_id, speaker_profile_id, proposal_id, status, external_url, due_at
       FROM speaker_tasks ORDER BY template_id, speaker_profile_id`).all();
     expect(tasks).toEqual([
-      { template_id: "template-contact", speaker_profile_id: "speaker-a", proposal_id: null, status: "not_started", due_at: EVENT_START - (2 * DAY) },
-      { template_id: "template-contact", speaker_profile_id: "speaker-b", proposal_id: null, status: "not_started", due_at: EVENT_START - (2 * DAY) },
-      { template_id: "template-submission", speaker_profile_id: "speaker-a", proposal_id: "proposal-a", status: "overdue", due_at: EVENT_START - (7 * DAY) },
-      { template_id: "template-submission", speaker_profile_id: "speaker-b", proposal_id: "proposal-a", status: "overdue", due_at: EVENT_START - (7 * DAY) },
+      { template_id: "template-contact", speaker_profile_id: "speaker-a", proposal_id: null, status: "not_started", external_url: "https://conference.example.test/profile", due_at: EVENT_START - (2 * DAY) },
+      { template_id: "template-contact", speaker_profile_id: "speaker-b", proposal_id: null, status: "not_started", external_url: "https://conference.example.test/profile", due_at: EVENT_START - (2 * DAY) },
+      { template_id: "template-submission", speaker_profile_id: "speaker-a", proposal_id: "proposal-a", status: "overdue", external_url: null, due_at: EVENT_START - (7 * DAY) },
+      { template_id: "template-submission", speaker_profile_id: "speaker-b", proposal_id: "proposal-a", status: "overdue", external_url: null, due_at: EVENT_START - (7 * DAY) },
     ]);
   });
 
@@ -102,5 +104,14 @@ describe("accepted proposal speaker-task instantiation", () => {
     expect(instantiate("proposal-a", "event-b").changes).toBe(0);
     expect(instantiate("proposal-pending", "event-a").changes).toBe(0);
     expect(db.prepare("SELECT COUNT(*) AS count FROM speaker_tasks").get()).toEqual({ count: 0 });
+  });
+
+  it("snapshots an external action URL so later template edits do not redirect assigned work", () => {
+    expect(instantiate().changes).toBe(4);
+    db.prepare("UPDATE task_templates SET external_url = 'https://malicious.example.test/changed' WHERE id = 'template-contact'").run();
+
+    expect(db.prepare("SELECT DISTINCT external_url FROM speaker_tasks WHERE template_id = 'template-contact'").all()).toEqual([
+      { external_url: "https://conference.example.test/profile" },
+    ]);
   });
 });

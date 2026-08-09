@@ -6,12 +6,13 @@
  * co-speakers are never assigned to evaluate their own submission.
  */
 export const backfillReviewerAssignmentsSql = `INSERT OR IGNORE INTO review_assignments
-  (id, proposal_id, round_id, reviewer_user_id, status, scores, created_at, updated_at)
+  (id, proposal_id, round_id, reviewer_user_id, review_cycle, status, scores, created_at, updated_at)
   SELECT
     'review-' || lower(hex(randomblob(16))),
     p.id,
     rr.id,
     ?,
+    p.review_cycle,
     'pending',
     '{}',
     ?,
@@ -59,4 +60,5 @@ export const promoteAssignedBacklogSql = `UPDATE proposals
         AND rr.event_id = proposals.event_id
         AND rr.status = 'active'
       WHERE ra.proposal_id = proposals.id
+        AND ra.review_cycle = proposals.review_cycle
     )`;

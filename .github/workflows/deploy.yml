@@ -46,6 +46,10 @@ jobs:
       MAIL_REPLY_TO: ${{ vars.MAIL_REPLY_TO }}
       ACCELEVENTS_EVENT_URL: ${{ vars.ACCELEVENTS_EVENT_URL }}
       ACCELEVENTS_ENABLED: ${{ vars.ACCELEVENTS_ENABLED }}
+      AIRTABLE_ENABLED: ${{ vars.AIRTABLE_ENABLED }}
+      AIRTABLE_BASE_ID: ${{ vars.AIRTABLE_BASE_ID }}
+      AIRTABLE_AUTHORITY_DEFAULT: ${{ vars.AIRTABLE_AUTHORITY_DEFAULT }}
+      AIRTABLE_MAX_REQUESTS_PER_SECOND: ${{ vars.AIRTABLE_MAX_REQUESTS_PER_SECOND }}
       ENABLE_CLOUDFLARE_EMAIL: ${{ vars.ENABLE_CLOUDFLARE_EMAIL }}
       ENABLE_PREVIEW_ACCESS: ${{ vars.ENABLE_PREVIEW_ACCESS }}
       PREVIEW_ACCESS_HOSTNAME: ${{ vars.PREVIEW_ACCESS_HOSTNAME }}
@@ -72,6 +76,8 @@ jobs:
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
           REALTIME_TOKEN: ${{ secrets.REALTIME_TOKEN }}
           ACCELEVENTS_API_KEY: ${{ secrets.ACCELEVENTS_API_KEY }}
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          AIRTABLE_WEBHOOK_MAC_SECRET: ${{ secrets.AIRTABLE_WEBHOOK_MAC_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
       - name: Render non-secret Terraform desired state
@@ -121,6 +127,8 @@ jobs:
           BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
           REALTIME_TOKEN: ${{ secrets.REALTIME_TOKEN }}
           ACCELEVENTS_API_KEY: ${{ secrets.ACCELEVENTS_API_KEY }}
+          AIRTABLE_TOKEN: ${{ secrets.AIRTABLE_TOKEN }}
+          AIRTABLE_WEBHOOK_MAC_SECRET: ${{ secrets.AIRTABLE_WEBHOOK_MAC_SECRET }}
         run: |
           node scripts/write-worker-secrets.mjs --worker app --out-file artifacts/secrets/app.json --cleanup-out-file artifacts/secrets/app-cleanup.json
           node scripts/write-worker-secrets.mjs --worker jobs --out-file artifacts/secrets/jobs.json --cleanup-out-file artifacts/secrets/jobs-cleanup.json

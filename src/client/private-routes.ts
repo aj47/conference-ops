@@ -11,6 +11,7 @@ const privateWorkspaceRoutes = new Set([
   "/portal/home",
   "/portal/submissions",
   "/portal/tasks",
+  "/portal/resources",
   "/portal/profile",
 ]);
 

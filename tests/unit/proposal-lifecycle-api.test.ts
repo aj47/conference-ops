@@ -79,17 +79,20 @@ class TestD1Database {
 function createDatabase() {
   const d1 = new TestD1Database();
   d1.database.exec(`
-    CREATE TABLE events (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE events (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, slug TEXT NOT NULL);
     CREATE TABLE event_memberships (event_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL);
     CREATE TABLE submission_forms (
       id TEXT PRIMARY KEY,
       event_id TEXT NOT NULL,
+      slug TEXT NOT NULL,
       status TEXT NOT NULL,
       published_version INTEGER NOT NULL,
+      submission_type TEXT NOT NULL,
       collects_participants INTEGER NOT NULL,
       closes_at INTEGER,
       max_submissions_per_user INTEGER,
-      confirmation_email_enabled INTEGER NOT NULL
+      confirmation_email_enabled INTEGER NOT NULL,
+      redirect_to_portal INTEGER NOT NULL
     );
     CREATE TABLE form_versions (
       id TEXT PRIMARY KEY,
@@ -115,10 +118,15 @@ function createDatabase() {
       level TEXT NOT NULL,
       responses TEXT NOT NULL,
       status TEXT NOT NULL,
+      revision_note TEXT,
+      revision_requested_at INTEGER,
+      revision_requested_by TEXT,
       submitted_at INTEGER,
+      decided_at INTEGER,
       version INTEGER NOT NULL,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      review_cycle INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE reviewer_groups (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, category TEXT NOT NULL, created_at INTEGER NOT NULL);
     CREATE TABLE reviewer_group_members (reviewer_group_id TEXT NOT NULL, user_id TEXT NOT NULL);
@@ -156,7 +164,8 @@ function createDatabase() {
       submitted_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
-      UNIQUE (proposal_id, round_id, reviewer_user_id)
+      review_cycle INTEGER NOT NULL DEFAULT 1,
+      UNIQUE (proposal_id, round_id, reviewer_user_id, review_cycle)
     );
     CREATE TABLE outbox (
       id TEXT PRIMARY KEY,
@@ -179,14 +188,28 @@ function createDatabase() {
       text TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE TABLE audit_logs (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      event_id TEXT,
+      actor_user_id TEXT,
+      action TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      metadata TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
 
-    INSERT INTO events VALUES ('event-a', 'Conference A');
+    INSERT INTO events VALUES ('event-a', 'org-a', 'Conference A', 'conference-a');
     INSERT INTO event_memberships VALUES
       ('event-a', 'applicant-a', 'applicant'),
+      ('event-a', 'organizer-a', 'organizer'),
       ('event-a', 'reviewer-a', 'reviewer'),
       ('event-a', 'reviewer-b', 'reviewer'),
       ('event-a', 'reviewer-history', 'reviewer');
-    INSERT INTO submission_forms VALUES ('form-a', 'event-a', 'published', 1, 1, 4102444800000, 3, 1);
+    INSERT INTO submission_forms VALUES ('form-a', 'event-a', 'main-cfp', 'published', 1, 'abstract', 1, 4102444800000, 3, 1, 1);
     INSERT INTO form_versions VALUES (
       'form-version-a',
       'form-a',
@@ -200,7 +223,7 @@ function createDatabase() {
     INSERT INTO proposals VALUES (
       'proposal-a', 'event-a', 'form-version-a', 'applicant-a', NULL,
       'Old draft title', 'An old summary long enough to be valid.', 'Build', 'talk', 30, 'intermediate', '{}',
-      'draft', NULL, 1, 1, 1
+      'draft', NULL, NULL, NULL, NULL, NULL, 1, 1, 1, 1
     );
     INSERT INTO reviewer_groups VALUES ('group-build', 'event-a', 'Build', 1);
     INSERT INTO proposal_reviewer_groups VALUES ('proposal-a', 'group-build');
@@ -581,14 +604,290 @@ describe("production proposal lifecycle API", () => {
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM outbox").get()).toEqual({ count: 0 });
   });
 
+  it("lets the owning applicant safely reopen and resubmit before the pinned CFP closes", async () => {
+    const d1 = createDatabase();
+    d1.database.exec(`
+      UPDATE proposals SET status = 'under_review', submitted_at = 2, version = 2 WHERE id = 'proposal-a';
+      INSERT INTO review_assignments VALUES
+        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-a', 'submitted', '{"fit":5}', 5, 'strong_yes', 'Preserved first-version evidence.', 2, 1, 2, 1),
+        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":3}', 3, 'maybe', 'Mutable draft evidence.', NULL, 1, 1, 1);
+    `);
+
+    const reopened = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a/reopen", { method: "POST" });
+    expect(reopened.status).toBe(200);
+    expect(await reopened.json()).toMatchObject({ data: {
+      id: "proposal-a",
+      status: "revision_open",
+      version: 3,
+      revokedAssignments: 1,
+      submittedReviewsPreserved: 1,
+    } });
+    expect(d1.database.prepare("SELECT status, revision_requested_by, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({
+      status: "revision_open",
+      revision_requested_by: "applicant",
+      version: 3,
+    });
+    expect(d1.database.prepare("SELECT id, status, notes FROM review_assignments").all()).toEqual([
+      { id: "review-submitted", status: "submitted", notes: "Preserved first-version evidence." },
+    ]);
+    expect(d1.database.prepare("SELECT actor_user_id, action FROM audit_logs").get()).toEqual({
+      actor_user_id: "applicant-a",
+      action: "proposal.revision_opened",
+    });
+
+    const saved = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...submissionBody, expectedVersion: 3, submit: false, title: "Applicant-opened revision" }),
+    });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ data: { status: "revision_open", version: 4, assignments: 0 } });
+
+    const resubmitted = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...submissionBody, expectedVersion: 4, title: "Applicant-opened revision" }),
+    });
+    expect(resubmitted.status).toBe(200);
+    expect(await resubmitted.json()).toMatchObject({ data: { status: "under_review", version: 5, assignments: 2 } });
+    expect(d1.database.prepare("SELECT reviewer_user_id, review_cycle, status, notes FROM review_assignments ORDER BY review_cycle, reviewer_user_id").all()).toEqual([
+      { reviewer_user_id: "reviewer-a", review_cycle: 1, status: "submitted", notes: "Preserved first-version evidence." },
+      { reviewer_user_id: "reviewer-a", review_cycle: 2, status: "pending", notes: null },
+      { reviewer_user_id: "reviewer-b", review_cycle: 2, status: "pending", notes: null },
+    ]);
+  });
+
+  it("reassigns every routed reviewer when all prior-cycle reviews were already submitted", async () => {
+    const d1 = createDatabase();
+    d1.database.exec(`
+      UPDATE proposals SET status = 'under_review', submitted_at = 2, version = 2 WHERE id = 'proposal-a';
+      INSERT INTO review_assignments VALUES
+        ('review-a-cycle-1', 'proposal-a', 'round-a', 'reviewer-a', 'submitted', '{"fit":5}', 5, 'strong_yes', 'Reviewer A first-cycle evidence.', 2, 1, 2, 1),
+        ('review-b-cycle-1', 'proposal-a', 'round-a', 'reviewer-b', 'submitted', '{"fit":4}', 4, 'yes', 'Reviewer B first-cycle evidence.', 2, 1, 2, 1);
+    `);
+
+    const reopened = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a/reopen", { method: "POST" });
+    expect(reopened.status).toBe(200);
+    expect(d1.database.prepare("SELECT status, version, review_cycle FROM proposals WHERE id = 'proposal-a'").get()).toEqual({
+      status: "revision_open",
+      version: 3,
+      review_cycle: 2,
+    });
+
+    const resubmitted = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...submissionBody, expectedVersion: 3, title: "All-reviewer revision" }),
+    });
+    expect(resubmitted.status).toBe(200);
+    expect(await resubmitted.json()).toMatchObject({ data: { status: "under_review", assignments: 2, version: 4 } });
+    expect(d1.database.prepare("SELECT reviewer_user_id, review_cycle, status FROM review_assignments ORDER BY review_cycle, reviewer_user_id").all()).toEqual([
+      { reviewer_user_id: "reviewer-a", review_cycle: 1, status: "submitted" },
+      { reviewer_user_id: "reviewer-b", review_cycle: 1, status: "submitted" },
+      { reviewer_user_id: "reviewer-a", review_cycle: 2, status: "pending" },
+      { reviewer_user_id: "reviewer-b", review_cycle: 2, status: "pending" },
+    ]);
+
+    authUser.id = "reviewer-a";
+    authUser.name = "Reviewer A";
+    authUser.email = "reviewer-a@example.com";
+    const currentReview = await apiRequest(d1, "/api/v1/events/event-a/proposals/proposal-a/review", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scores: { fit: 3 }, recommendation: "maybe", notes: "Current-cycle evidence after revision.", submit: true }),
+    });
+    expect(currentReview.status).toBe(200);
+    expect(d1.database.prepare("SELECT review_cycle, status, notes FROM review_assignments WHERE reviewer_user_id = 'reviewer-a' ORDER BY review_cycle").all()).toEqual([
+      { review_cycle: 1, status: "submitted", notes: "Reviewer A first-cycle evidence." },
+      { review_cycle: 2, status: "submitted", notes: "Current-cycle evidence after revision." },
+    ]);
+  });
+
+  it.each(["accept_queue", "decline_queue", "waitlisted"] as const)("lets the owner reopen the non-final %s state before close", async (status) => {
+    const d1 = createDatabase();
+    d1.database.prepare("UPDATE proposals SET status = ?, submitted_at = 2, version = 2 WHERE id = 'proposal-a'").run(status);
+
+    const reopened = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a/reopen", { method: "POST" });
+
+    expect(reopened.status).toBe(200);
+    expect(await reopened.json()).toMatchObject({ data: { id: "proposal-a", status: "revision_open", version: 3 } });
+    expect(d1.database.prepare("SELECT status, revision_requested_by, decided_at FROM proposals WHERE id = 'proposal-a'").get()).toEqual({
+      status: "revision_open",
+      revision_requested_by: "applicant",
+      decided_at: null,
+    });
+  });
+
+  it.each(["accepted", "rejected", "session"] as const)("keeps the final %s state locked", async (status) => {
+    const d1 = createDatabase();
+    d1.database.prepare("UPDATE proposals SET status = ?, submitted_at = 2, version = 2 WHERE id = 'proposal-a'").run(status);
+
+    const reopened = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a/reopen", { method: "POST" });
+
+    expect(reopened.status).toBe(409);
+    expect(await reopened.json()).toMatchObject({ error: { code: "SUBMISSION_REVISION_INVALID" } });
+    expect(d1.database.prepare("SELECT status, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status, version: 2 });
+  });
+
+  it("rejects applicant-initiated edits after the pinned CFP closes", async () => {
+    const d1 = createDatabase();
+    d1.database.exec("UPDATE proposals SET status = 'under_review', version = 2 WHERE id = 'proposal-a'");
+    const settings = JSON.parse((d1.database.prepare("SELECT settings FROM form_versions WHERE id = 'form-version-a'").get() as { settings: string }).settings) as Record<string, unknown>;
+    d1.database.prepare("UPDATE form_versions SET settings = ? WHERE id = 'form-version-a'").run(JSON.stringify({
+      ...settings,
+      submissionControls: { ...(settings.submissionControls as Record<string, unknown>), closesAt: "2020-01-01T00:00:00.000Z" },
+    }));
+
+    const reopened = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a/reopen", { method: "POST" });
+    expect(reopened.status).toBe(409);
+    expect(await reopened.json()).toMatchObject({ error: { code: "FORM_CLOSED" } });
+    expect(d1.database.prepare("SELECT status, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status: "under_review", version: 2 });
+    expect(d1.database.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 0 });
+  });
+
+  it("opens an audited revision, pauses open reviews, then rebuilds only mutable reviewer work on resubmit", async () => {
+    const d1 = createDatabase();
+    d1.database.exec(`
+      UPDATE proposals SET status = 'under_review', submitted_at = 2, version = 2 WHERE id = 'proposal-a';
+      INSERT INTO review_assignments VALUES
+        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-a', 'submitted', '{"fit":5}', 5, 'strong_yes', 'Immutable first-version evidence.', 2, 1, 2, 1),
+        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":4}', 4, 'yes', 'Mutable draft evidence.', NULL, 1, 1, 1),
+        ('review-pending', 'proposal-a', 'round-a', 'reviewer-history', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1, 1);
+    `);
+    authUser.id = "organizer-a";
+    authUser.name = "Organizer A";
+    authUser.email = "organizer@example.com";
+
+    const requested = await apiRequest(d1, "/api/v1/events/event-a/proposals/proposal-a/request-changes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "Clarify the benchmark, select the evaluation track, and name the artifact reviewers can inspect." }),
+    });
+
+    expect(requested.status).toBe(200);
+    expect(await requested.json()).toMatchObject({
+      data: {
+        proposalId: "proposal-a",
+        status: "changes_requested",
+        revokedAssignments: 2,
+        submittedReviewsPreserved: 1,
+        messagesQueued: 2,
+        messagesDispatched: 2,
+      },
+    });
+    expect(d1.database.prepare("SELECT status, revision_note, revision_requested_at, version FROM proposals WHERE id = 'proposal-a'").get()).toMatchObject({
+      status: "changes_requested",
+      revision_note: expect.stringContaining("benchmark"),
+      revision_requested_at: expect.any(Number),
+      version: 3,
+    });
+    expect(d1.database.prepare("SELECT id, status, notes FROM review_assignments ORDER BY id").all()).toEqual([
+      { id: "review-submitted", status: "submitted", notes: "Immutable first-version evidence." },
+    ]);
+    expect(d1.database.prepare("SELECT action, metadata FROM audit_logs").get()).toMatchObject({
+      action: "proposal.changes_requested",
+      metadata: expect.stringContaining("evaluation track"),
+    });
+    const revisionMessages = d1.database.prepare("SELECT payload FROM outbox ORDER BY idempotency_key").all() as Array<{ payload: string }>;
+    expect(revisionMessages).toHaveLength(2);
+    expect(revisionMessages.every(({ payload }) => JSON.parse(payload).text.includes("https://conference.example.test/submit/conference-a?form=main-cfp&edit=proposal-a"))).toBe(true);
+
+    authUser.id = "applicant-a";
+    authUser.name = "Applicant A";
+    authUser.email = "applicant@example.com";
+    const saved = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...submissionBody, expectedVersion: 3, submit: false, title: "Revised benchmark proposal" }),
+    });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ data: { status: "changes_requested", version: 4, assignments: 0 } });
+    expect(d1.database.prepare("SELECT status, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status: "changes_requested", version: 4 });
+
+    const resubmitted = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...submissionBody, expectedVersion: 4, title: "Revised benchmark proposal" }),
+    });
+    expect(resubmitted.status).toBe(200);
+    expect(await resubmitted.json()).toMatchObject({ data: { status: "under_review", version: 5, assignments: 2 } });
+    expect(d1.database.prepare("SELECT status, version, title FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status: "under_review", version: 5, title: "Revised benchmark proposal" });
+    expect(d1.database.prepare("SELECT reviewer_user_id, review_cycle, status, notes FROM review_assignments ORDER BY review_cycle, reviewer_user_id").all()).toEqual([
+      { reviewer_user_id: "reviewer-a", review_cycle: 1, status: "submitted", notes: "Immutable first-version evidence." },
+      { reviewer_user_id: "reviewer-a", review_cycle: 2, status: "pending", notes: null },
+      { reviewer_user_id: "reviewer-b", review_cycle: 2, status: "pending", notes: null },
+    ]);
+  });
+
+  it("rejects revision requests from applicants and after the pinned CFP closes", async () => {
+    const d1 = createDatabase();
+    d1.database.exec("UPDATE proposals SET status = 'under_review' WHERE id = 'proposal-a'");
+    const applicantRequest = await apiRequest(d1, "/api/v1/events/event-a/proposals/proposal-a/request-changes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "This applicant must not reopen their own proposal." }),
+    });
+    expect(applicantRequest.status).toBe(403);
+
+    const settings = JSON.parse((d1.database.prepare("SELECT settings FROM form_versions WHERE id = 'form-version-a'").get() as { settings: string }).settings) as Record<string, unknown>;
+    d1.database.prepare("UPDATE form_versions SET settings = ? WHERE id = 'form-version-a'").run(JSON.stringify({
+      ...settings,
+      submissionControls: { ...(settings.submissionControls as Record<string, unknown>), closesAt: "2020-01-01T00:00:00.000Z" },
+    }));
+    authUser.id = "organizer-a";
+    authUser.name = "Organizer A";
+    authUser.email = "organizer@example.com";
+    const closedRequest = await apiRequest(d1, "/api/v1/events/event-a/proposals/proposal-a/request-changes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "This request is too late for the published form." }),
+    });
+    expect(closedRequest.status).toBe(409);
+    expect(await closedRequest.json()).toMatchObject({ error: { code: "FORM_CLOSED" } });
+    expect(d1.database.prepare("SELECT status, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status: "under_review", version: 1 });
+    expect(d1.database.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 0 });
+    expect(d1.database.prepare("SELECT COUNT(*) AS count FROM outbox").get()).toEqual({ count: 0 });
+  });
+
+  it("does not accept revision saves after a previously open pinned CFP closes", async () => {
+    const d1 = createDatabase();
+    d1.database.exec("UPDATE proposals SET status = 'under_review' WHERE id = 'proposal-a'");
+    authUser.id = "organizer-a";
+    authUser.name = "Organizer A";
+    authUser.email = "organizer@example.com";
+    const requested = await apiRequest(d1, "/api/v1/events/event-a/proposals/proposal-a/request-changes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: "Clarify the benchmark before the published deadline." }),
+    });
+    expect(requested.status).toBe(200);
+
+    const settings = JSON.parse((d1.database.prepare("SELECT settings FROM form_versions WHERE id = 'form-version-a'").get() as { settings: string }).settings) as Record<string, unknown>;
+    d1.database.prepare("UPDATE form_versions SET settings = ? WHERE id = 'form-version-a'").run(JSON.stringify({
+      ...settings,
+      submissionControls: { ...(settings.submissionControls as Record<string, unknown>), closesAt: "2020-01-01T00:00:00.000Z" },
+    }));
+    authUser.id = "applicant-a";
+    authUser.name = "Applicant A";
+    authUser.email = "applicant@example.com";
+    const save = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...submissionBody, expectedVersion: 2, submit: false }),
+    });
+    expect(save.status).toBe(409);
+    expect(await save.json()).toMatchObject({ error: { code: "FORM_CLOSED" } });
+    expect(d1.database.prepare("SELECT status, version FROM proposals WHERE id = 'proposal-a'").get()).toEqual({ status: "changes_requested", version: 2 });
+  });
+
   it("withdraws atomically, revokes open work, preserves submitted history, and rejects later reviewer writes", async () => {
     const d1 = createDatabase();
     d1.database.exec(`
       UPDATE proposals SET status = 'under_review' WHERE id = 'proposal-a';
       INSERT INTO review_assignments VALUES
-        ('review-pending', 'proposal-a', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1),
-        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":4}', 4, 'yes', 'A useful draft note.', NULL, 1, 1),
-        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-history', 'submitted', '{"fit":5}', 5, 'strong_yes', 'A complete submitted review.', 2, 1, 2);
+        ('review-pending', 'proposal-a', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1, 1),
+        ('review-progress', 'proposal-a', 'round-a', 'reviewer-b', 'in_progress', '{"fit":4}', 4, 'yes', 'A useful draft note.', NULL, 1, 1, 1),
+        ('review-submitted', 'proposal-a', 'round-a', 'reviewer-history', 'submitted', '{"fit":5}', 5, 'strong_yes', 'A complete submitted review.', 2, 1, 2, 1);
     `);
 
     const withdrawn = await apiRequest(d1, "/api/v1/events/event-a/submissions/proposal-a/withdraw", { method: "POST" });

@@ -117,7 +117,8 @@ async function createDatabase(role: "reviewer" | "organizer" = "reviewer") {
       reviewer_group_id TEXT,
       status TEXT NOT NULL,
       updated_at INTEGER NOT NULL,
-      owner_user_id TEXT NOT NULL
+      owner_user_id TEXT NOT NULL,
+      review_cycle INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE proposal_reviewer_groups (
       proposal_id TEXT NOT NULL,
@@ -135,7 +136,8 @@ async function createDatabase(role: "reviewer" | "organizer" = "reviewer") {
       scores TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
-      UNIQUE (proposal_id, round_id, reviewer_user_id)
+      review_cycle INTEGER NOT NULL DEFAULT 1,
+      UNIQUE (proposal_id, round_id, reviewer_user_id, review_cycle)
     );
 
     INSERT INTO event_invitations VALUES (
@@ -146,12 +148,12 @@ async function createDatabase(role: "reviewer" | "organizer" = "reviewer") {
     INSERT INTO reviewer_groups VALUES ('group-build', 'event-a'), ('group-evaluate', 'event-a'), ('group-other', 'event-b');
     INSERT INTO review_rounds VALUES ('round-a', 'event-a', 1, 'active'), ('round-other', 'event-b', 1, 'active');
     INSERT INTO proposals VALUES
-      ('proposal-build', 'event-a', 'group-build', 'submitted', 1, 'applicant-a'),
-      ('proposal-evaluate', 'event-a', 'group-evaluate', 'under_review', 1, 'applicant-b'),
-      ('proposal-owned', 'event-a', 'group-build', 'submitted', 1, 'reviewer-new'),
-      ('proposal-co-speaker', 'event-a', 'group-build', 'submitted', 1, 'applicant-c'),
-      ('proposal-draft', 'event-a', 'group-build', 'draft', 1, 'applicant-d'),
-      ('proposal-other', 'event-b', 'group-other', 'submitted', 1, 'applicant-e');
+      ('proposal-build', 'event-a', 'group-build', 'submitted', 1, 'applicant-a', 1),
+      ('proposal-evaluate', 'event-a', 'group-evaluate', 'under_review', 1, 'applicant-b', 1),
+      ('proposal-owned', 'event-a', 'group-build', 'submitted', 1, 'reviewer-new', 1),
+      ('proposal-co-speaker', 'event-a', 'group-build', 'submitted', 1, 'applicant-c', 1),
+      ('proposal-draft', 'event-a', 'group-build', 'draft', 1, 'applicant-d', 1),
+      ('proposal-other', 'event-b', 'group-other', 'submitted', 1, 'applicant-e', 1);
     INSERT INTO proposal_reviewer_groups VALUES
       ('proposal-build', 'group-build'),
       ('proposal-evaluate', 'group-evaluate'),
@@ -194,22 +196,20 @@ describe("reviewer invitation acceptance API", () => {
     authUser.email = "reviewer@example.com";
   });
 
-  it("atomically joins reviewer groups, materializes the routed backlog, and promotes submitted proposals", async () => {
+  it("accepts reviewer membership without silently broadening track coverage", async () => {
     const { d1, token } = await createDatabase();
 
     const response = await accept(d1, token);
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ data: { accepted: true, eventId: "event-a", role: "reviewer" } });
-    expect(d1.database.prepare("SELECT reviewer_group_id FROM reviewer_group_members WHERE user_id = ? ORDER BY reviewer_group_id").all(authUser.id)).toEqual([
-      { reviewer_group_id: "group-build" },
-      { reviewer_group_id: "group-evaluate" },
+    expect(d1.database.prepare("SELECT role FROM event_memberships WHERE user_id = ? ORDER BY role").all(authUser.id)).toEqual([
+      { role: "applicant" },
+      { role: "reviewer" },
     ]);
-    expect(d1.database.prepare("SELECT proposal_id, reviewer_user_id FROM review_assignments ORDER BY proposal_id").all()).toEqual([
-      { proposal_id: "proposal-build", reviewer_user_id: "reviewer-new" },
-      { proposal_id: "proposal-evaluate", reviewer_user_id: "reviewer-new" },
-    ]);
-    expect(d1.database.prepare("SELECT status FROM proposals WHERE id = 'proposal-build'").get()).toEqual({ status: "under_review" });
+    expect(d1.database.prepare("SELECT reviewer_group_id FROM reviewer_group_members WHERE user_id = ?").all(authUser.id)).toEqual([]);
+    expect(d1.database.prepare("SELECT proposal_id, reviewer_user_id FROM review_assignments").all()).toEqual([]);
+    expect(d1.database.prepare("SELECT status FROM proposals WHERE id = 'proposal-build'").get()).toEqual({ status: "submitted" });
     expect(d1.database.prepare("SELECT status FROM proposals WHERE id = 'proposal-owned'").get()).toEqual({ status: "submitted" });
     expect(d1.database.prepare("SELECT status FROM proposals WHERE id = 'proposal-co-speaker'").get()).toEqual({ status: "submitted" });
     expect(d1.database.prepare("SELECT accepted_at IS NOT NULL AS accepted FROM event_invitations WHERE id = 'invitation-a'").get()).toEqual({ accepted: 1 });
@@ -227,9 +227,9 @@ describe("reviewer invitation acceptance API", () => {
     expect(d1.database.prepare("SELECT status FROM proposals WHERE id = 'proposal-build'").get()).toEqual({ status: "submitted" });
   });
 
-  it("rolls back membership and invitation acceptance when backlog materialization fails", async () => {
+  it("rolls back membership when invitation acceptance persistence fails", async () => {
     const { d1, token } = await createDatabase();
-    d1.failRunMatching = /INSERT OR IGNORE INTO review_assignments/;
+    d1.failRunMatching = /UPDATE event_invitations SET accepted_at/;
     const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     const response = await accept(d1, token);

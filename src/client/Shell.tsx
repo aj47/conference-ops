@@ -20,7 +20,7 @@ import { LogoMark, NoticeRegion, PersonaSwitcher, StatusPill } from "./component
 import { useDialogA11y } from "./dialog-a11y";
 import { formatEventTicket } from "./event-time";
 import { privateEventPath } from "./private-routes";
-import { publicAgendaPath, publicSpeakersPath, publicSubmissionPath } from "./public-routes";
+import { publicAgendaPath, publicResourcesPath, publicSpeakersPath, publicSubmissionPath } from "./public-routes";
 import { useWorkspace } from "./workspace";
 
 const navSections = [
@@ -237,11 +237,12 @@ export function ProductShell({ children }: PropsWithChildren) {
   );
 }
 
-export function PublicHeader({ active }: { active?: "agenda" | "speakers" | "cfp" | "portal" }) {
+export function PublicHeader({ active }: { active?: "agenda" | "speakers" | "resources" | "cfp" | "portal" }) {
   const { workspace, source, privateWorkspaceEventId } = useWorkspace();
   const submissionPath = publicSubmissionPath(workspace.event.slug);
   const agendaPath = publicAgendaPath(workspace.event.slug);
   const speakersPath = publicSpeakersPath(workspace.event.slug);
+  const resourcesPath = publicResourcesPath(workspace.event.slug);
   const portalPath = privateEventPath("/portal/home", privateWorkspaceEventId ?? workspace.event.id);
   return (
     <header className="public-header">
@@ -249,6 +250,7 @@ export function PublicHeader({ active }: { active?: "agenda" | "speakers" | "cfp
       <nav aria-label="Public event navigation">
         <NavLink className={active === "agenda" ? "active" : ""} to={agendaPath}>Agenda</NavLink>
         <NavLink className={active === "speakers" ? "active" : ""} to={speakersPath}>Speakers</NavLink>
+        <NavLink className={active === "resources" ? "active" : ""} to={resourcesPath}>Resources</NavLink>
         <NavLink className={active === "cfp" ? "active" : ""} to={submissionPath}>Submit a talk</NavLink>
         <a className={active === "portal" ? "active" : ""} href={portalPath}>Portal</a>
       </nav>

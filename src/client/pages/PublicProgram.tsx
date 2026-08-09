@@ -1,5 +1,6 @@
 import {
   ArrowRight,
+  BookOpen,
   Clock3,
   Code2,
   ExternalLink,
@@ -24,15 +25,23 @@ import {
 } from "../event-time";
 import { PublicHeader } from "../Shell";
 import { publicAgendaEmbedPath, publicAgendaPath } from "../public-routes";
+import { publishedResources } from "../resource-pages";
+import { ResourceContent } from "../ResourceContent";
 import { useWorkspace } from "../workspace";
 
-function PublicEventHero({ section }: { section: "agenda" | "speakers" }) {
+function PublicEventHero({ section }: { section: "agenda" | "speakers" | "resources" }) {
   const { workspace } = useWorkspace();
   const timezone = timeZoneAbbreviation(workspace.event.startsAt, workspace.event.timezone);
+  const title = section === "agenda"
+    ? "A program for people who operate the systems."
+    : section === "speakers"
+      ? "Meet the people behind the field notes."
+      : "Everything you need before you arrive.";
+  const indexLabel = section === "agenda" ? "PUBLISHED FIELD PROGRAM" : section === "speakers" ? `SPEAKER INDEX / ${formatEventYear(workspace.event.startsAt, workspace.event.timezone)}` : "PARTICIPANT FIELD GUIDE";
   return (
     <section className="public-event-hero">
-      <div><p className="eyebrow">{formatEventDateRange(workspace.event)} · {workspace.event.venue}</p><h1>{section === "agenda" ? "A program for people who operate the systems." : "Meet the people behind the field notes."}</h1><p>{workspace.event.description}</p></div>
-      <aside><span>{workspace.event.shortName}</span><strong>{section === "agenda" ? "PUBLISHED FIELD PROGRAM" : `SPEAKER INDEX / ${formatEventYear(workspace.event.startsAt, workspace.event.timezone)}`}</strong><small>Times shown in {timezone}</small></aside>
+      <div><p className="eyebrow">{formatEventDateRange(workspace.event)} · {workspace.event.venue}</p><h1>{title}</h1><p>{workspace.event.description}</p></div>
+      <aside><span>{workspace.event.shortName}</span><strong>{indexLabel}</strong><small>{section === "resources" ? "Published by the event team" : `Times shown in ${timezone}`}</small></aside>
     </section>
   );
 }
@@ -106,6 +115,31 @@ export function SpeakerGallery() {
             return <article className="speaker-card" key={speaker.id}><div className="speaker-card__portrait"><span className="speaker-card__number">{String(index + 1).padStart(2, "0")}</span>{showHeadshot ? <img className="speaker-portrait" src={speaker.headshotUrl} alt={`Portrait of ${speaker.name}`} loading="lazy" decoding="async" onError={() => setFailedHeadshots((current) => new Set(current).add(speaker.id))} style={{ width: "min(96px, calc(100% - 18px))", aspectRatio: "1", zIndex: 1, border: "2px solid var(--ink)" }} /> : <Avatar name={speaker.name} size="lg" />}<i /></div><div className="speaker-card__copy"><p className="eyebrow">{speaker.title} · {speaker.company}</p><h2>{speaker.name}</h2><p>{speaker.bio}</p><div><Sparkles size={14} /><span>{session?.title ?? "Confirmed program speaker"}</span></div>{session ? <Link to={`${publicAgendaPath(workspace.event.slug)}#session-${session.id}`}>View on agenda <ArrowRight size={13} /></Link> : <span className="muted">Public profile</span>}</div></article>;
           })}
           {!filtered.length && <EmptyState title="No speaker matches" detail="Try a broader company, title, or topic search." />}
+        </section>
+      </main>
+    </div>
+  );
+}
+
+export function PublicResources() {
+  const { workspace } = useWorkspace();
+  const resources = publishedResources(workspace.resources);
+  return (
+    <div className="public-page program-page">
+      <PublicHeader active="resources" />
+      <main>
+        <PublicEventHero section="resources" />
+        <section className="public-resources" aria-labelledby="public-resources-title">
+          <header><div><p className="eyebrow">Organizer-published references</p><h2 id="public-resources-title">Event guides & policies</h2></div><span><BookOpen size={15} /> {resources.length} published {resources.length === 1 ? "page" : "pages"}</span></header>
+          <div>
+            {resources.map((resource, index) => (
+              <article key={resource.id} id={`resource-${resource.slug}`}>
+                <aside><span>{String(index + 1).padStart(2, "0")}</span><BookOpen size={20} /></aside>
+                <div><p className="eyebrow">/{resource.slug}</p><h3>{resource.title}</h3><p className="public-resource__summary">{resource.summary}</p><ResourceContent resource={resource} /></div>
+              </article>
+            ))}
+            {!resources.length && <EmptyState title="No resources published yet" detail="The event team is still preparing participant guidance. Check back before the event." />}
+          </div>
         </section>
       </main>
     </div>

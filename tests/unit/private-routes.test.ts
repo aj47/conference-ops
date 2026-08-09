@@ -7,6 +7,7 @@ describe("privateEventPath", () => {
     expect(privateEventPath("/program-settings", "event-secondary")).toBe("/program-settings?eventId=event-secondary");
     expect(privateEventPath("/reviews?round=2#queue", "event secondary")).toBe("/reviews?round=2&eventId=event+secondary#queue");
     expect(privateEventPath("/portal/tasks", "event-secondary")).toBe("/portal/tasks?eventId=event-secondary");
+    expect(privateEventPath("/portal/resources", "event-secondary")).toBe("/portal/resources?eventId=event-secondary");
   });
 
   it("replaces a stale event selection without dropping other route state", () => {

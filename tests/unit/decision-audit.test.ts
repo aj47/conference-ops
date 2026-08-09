@@ -11,7 +11,7 @@ import {
 } from "../../src/server/mutations";
 
 const targets: ProposalDecisionStatus[] = ["accept_queue", "accepted", "decline_queue", "rejected", "waitlisted"];
-const sources: ProposalStatus[] = ["draft", "submitted", "under_review", "accept_queue", "waitlisted", "accepted", "decline_queue", "rejected", "withdrawn", "session"];
+const sources: ProposalStatus[] = ["draft", "changes_requested", "revision_open", "submitted", "under_review", "accept_queue", "waitlisted", "accepted", "decline_queue", "rejected", "withdrawn", "session"];
 
 const allowed: Record<ProposalDecisionStatus, ProposalStatus[]> = {
   accept_queue: ["submitted", "under_review", "waitlisted", "decline_queue"],

@@ -26,6 +26,7 @@ import type {
   Room,
   ScheduleConflict,
   SpeakerProfile,
+  TaskComment,
   Track,
   WorkspaceSnapshot,
 } from "../shared/domain";
@@ -37,7 +38,7 @@ import { activateDemoAcceptance } from "./demo-acceptance";
 import { dateTimeLocalToInstant, instantToDateTimeLocal } from "./event-time";
 import { isPrivateWorkspaceRole } from "./private-routes";
 import { actorWithRole } from "./role-selection";
-import { privateDraftPreviewEventId, publicEventRouteFromPath } from "./public-routes";
+import { privateDraftPreviewEventId, publicEventRouteFromPath, publicSubmissionFormKey } from "./public-routes";
 import type { ApplicantSpeaker } from "./submission-speakers";
 import { taskUploadPurpose } from "./upload-purpose";
 import {
@@ -132,7 +133,7 @@ interface WorkspaceContextValue {
   publicEventState: PublicEventLoadState;
   privateWorkspaceEventId: string | null;
   publicSpeakers: Array<Omit<SpeakerProfile, "email">>;
-  updateProgramConfiguration: (patch: Partial<Pick<WorkspaceSnapshot, "reviewerGroups" | "taskTemplates" | "messageTemplates" | "reminderRules">>) => void;
+  updateProgramConfiguration: (patch: Partial<Pick<WorkspaceSnapshot, "reviewerGroups" | "taskTemplates" | "messageTemplates" | "reminderRules" | "resources">>) => void;
   setNotice: (notice: string | null) => void;
   switchActor: (actorId: string, role?: Role) => void;
   createEvent: (payload: CreateEventPayload) => Promise<void>;
@@ -143,6 +144,9 @@ interface WorkspaceContextValue {
   createTrack: (payload: Pick<Track, "name" | "color">) => Promise<Track>;
   updateTrack: (trackId: string, payload: Pick<Track, "name" | "color">) => Promise<Track>;
   deleteTrack: (trackId: string) => Promise<void>;
+  selectBuilderForm: (formId: string) => void;
+  createBuilderForm: (name: string) => Promise<FormDefinition>;
+  closeBuilderForm: () => Promise<void>;
   updateBuilder: (patch: Partial<BuilderConfig>) => void;
   replaceBuilderFields: (kind: "proposal" | "participant", fields: FormField[]) => void;
   saveBuilder: () => Promise<void>;
@@ -150,6 +154,8 @@ interface WorkspaceContextValue {
   saveProposalDraft: (payload: ApplicantSubmission, activeBuilder: BuilderConfig, draft?: Proposal) => Promise<Proposal>;
   submitProposal: (payload: ApplicantSubmission, activeBuilder: BuilderConfig, draft?: Proposal) => Promise<Proposal>;
   withdrawProposal: (proposalId: string) => Promise<void>;
+  reopenProposal: (proposalId: string) => ReturnType<typeof conferenceApi.reopenSubmission>;
+  requestProposalChanges: (proposalId: string, note: string) => Promise<void>;
   decideProposal: (
     proposalId: string,
     status: Extract<
@@ -172,7 +178,8 @@ interface WorkspaceContextValue {
   convertProposalToSession: (proposalId: string) => Promise<void>;
   addDirectSession: (payload: DirectSessionPayload) => Promise<void>;
   uploadTaskArtifact: (taskId: string, file: File) => Promise<void>;
-  downloadTaskArtifact: (taskId: string) => Promise<void>;
+  downloadTaskArtifact: (taskId: string, uploadId?: string) => Promise<void>;
+  addTaskComment: (taskId: string, body: string) => Promise<void>;
   submitTaskForm: (taskId: string, responses: Record<string, unknown>) => Promise<void>;
 }
 
@@ -283,8 +290,10 @@ export function builderConfigFromForm(
   };
 }
 
-function workspaceSubmissionForm(forms: FormDefinition[]) {
-  return forms.find((form) => form.kind === "cfp") ?? forms[0];
+function workspaceSubmissionForm(forms: FormDefinition[], preferred?: string) {
+  return forms.find((form) => form.kind === "cfp" && (form.id === preferred || form.slug === preferred))
+    ?? forms.find((form) => form.kind === "cfp")
+    ?? forms[0];
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -417,13 +426,14 @@ function toPublicSpeaker(speaker: SpeakerProfile): Omit<SpeakerProfile, "email">
 
 function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren<{ pathname: string; search: string }>) {
   const publicRoute = publicEventRouteFromPath(pathname);
+  const publicFormKey = publicSubmissionFormKey(publicRoute, search);
   const draftPreviewEventId = privateDraftPreviewEventId(publicRoute, search);
   const publicSlug = draftPreviewEventId ? null : publicRoute?.slug ?? null;
   const requestedEventId = draftPreviewEventId
     ?? (publicSlug ? undefined : new URLSearchParams(search).get("eventId") ?? undefined);
   const requestedRoleValue = publicSlug ? null : new URLSearchParams(search).get("role");
   const requestedRole = isPrivateWorkspaceRole(requestedRoleValue) ? requestedRoleValue : undefined;
-  const bootstrapTarget = publicSlug ? `public:${publicSlug}` : `private:${requestedEventId ?? "default"}:${requestedRole ?? "default"}`;
+  const bootstrapTarget = publicSlug ? `public:${publicSlug}:${publicFormKey ?? "default"}` : `private:${requestedEventId ?? "default"}:${requestedRole ?? "default"}`;
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const [loading, setLoading] = useState(true);
   const [source, setSource] = useState<"api" | "demo">("demo");
@@ -469,7 +479,10 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
     });
 
     if (publicSlug) {
-      conferenceApi.publicEvent(publicSlug)
+      const publicRequest = publicFormKey
+        ? conferenceApi.publicEvent(publicSlug, publicFormKey)
+        : conferenceApi.publicEvent(publicSlug);
+      publicRequest
         .then((data) => {
           if (!active) return;
           const publishedForm = data.form?.status === "published" ? data.form : null;
@@ -499,7 +512,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
             tracks,
             rooms,
             sessions,
-            resources: [],
+            resources: data.resources,
             activity: [],
           }));
           setPublicSpeakers(data.speakers.map((speaker) => toPublicSpeaker({ ...speaker, email: speaker.email ?? "" })));
@@ -547,7 +560,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
           if (!active) return;
           setWorkspace(next);
           setPrivateWorkspaceEventId(next.event.id);
-          const form = workspaceSubmissionForm(next.forms);
+          const form = workspaceSubmissionForm(next.forms, draftPreviewEventId ? publicFormKey : undefined);
           if (form) setBuilder(builderConfigFromForm(form, next.event));
           const publishedForm = next.forms.find((candidate) => candidate.kind === "cfp" && candidate.status === "published");
           setPublicBuilder(publishedForm ? builderConfigFromForm(publishedForm, next.event) : null);
@@ -573,7 +586,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
     return () => {
       active = false;
     };
-  }, [bootstrapTarget, publicSlug, requestedEventId, requestedRole]);
+  }, [bootstrapTarget, draftPreviewEventId, publicFormKey, publicSlug, requestedEventId, requestedRole]);
 
   const refreshAuthenticatedWorkspace = useCallback(async () => {
     const eventId = workspace.event.id;
@@ -593,7 +606,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       || next.actor.role !== role
     ) return;
 
-    const nextForm = workspaceSubmissionForm(next.forms);
+    const nextForm = workspaceSubmissionForm(next.forms, builderAtRequest.formId);
     setWorkspace((current) => current === workspaceAtRequest ? next : current);
     setBuilder((current) => current === builderAtRequest
       ? preserveUnsavedBuilder(
@@ -623,7 +636,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
     setNotice(null);
   }, []);
 
-  const updateProgramConfiguration = useCallback((patch: Partial<Pick<WorkspaceSnapshot, "reviewerGroups" | "taskTemplates" | "messageTemplates" | "reminderRules">>) => {
+  const updateProgramConfiguration = useCallback((patch: Partial<Pick<WorkspaceSnapshot, "reviewerGroups" | "taskTemplates" | "messageTemplates" | "reminderRules" | "resources">>) => {
     setWorkspace((current) => ({ ...current, ...patch }));
   }, []);
 
@@ -802,6 +815,85 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
     },
     [updateBuilder],
   );
+
+  const selectBuilderForm = useCallback((formId: string) => {
+    const form = workspace.forms.find((candidate) => candidate.id === formId && candidate.kind === "cfp");
+    if (!form) throw new Error("Submission form not found.");
+    setBuilder(builderConfigFromForm(form, workspace.event));
+  }, [workspace.event, workspace.forms]);
+
+  const createBuilderForm = useCallback(async (name: string) => {
+    const nextConfig: BuilderConfig = {
+      ...builder,
+      formId: "",
+      version: 1,
+      publishedVersion: 0,
+      status: "draft",
+      internalName: name,
+      externalTitle: name,
+      dirty: false,
+      lastSavedAt: new Date().toISOString(),
+    };
+    const draftPayload = formDraftPayload(nextConfig, workspace.event.timezone);
+    const payload = Object.fromEntries(
+      Object.entries(draftPayload).filter(([key]) => key !== "expectedVersion"),
+    ) as Omit<typeof draftPayload, "expectedVersion">;
+    let created: FormDefinition;
+    try {
+      created = await conferenceApi.createForm(workspace.actor.id, workspace.event.id, payload);
+    } catch (error) {
+      if (!mayUseDemoFallback(error, source)) {
+        setNotice(error instanceof Error ? error.message : "The submission form could not be created.");
+        throw error;
+      }
+      created = {
+        id: `form-${crypto.randomUUID()}`,
+        eventId: workspace.event.id,
+        slug: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")}-${crypto.randomUUID().slice(0, 6)}`,
+        kind: "cfp",
+        name,
+        publicTitle: name,
+        pageHeading: nextConfig.pageHeading,
+        version: 1,
+        status: "draft",
+        submissionType: nextConfig.submissionKind === "abstracts" ? "abstract" : "session",
+        collectsParticipants: nextConfig.collectParticipants,
+        welcomeTitle: name,
+        welcomeCopy: nextConfig.welcomeMessage,
+        confirmationCopy: nextConfig.successMessage,
+        maxSpeakers: nextConfig.participantMax,
+        maxSubmissionsPerUser: nextConfig.submissionLimit,
+        closesAt: nextConfig.closeDate ? dateTimeLocalToInstant(nextConfig.closeDate, workspace.event.timezone) : undefined,
+        redirectToPortal: nextConfig.autoRedirect,
+        confirmationEmailEnabled: nextConfig.confirmationEnabled,
+        allowMultipleDrafts: nextConfig.allowMultipleDrafts,
+        settings: formVersionSettingsFromBuilder(nextConfig),
+        fields: sectionedFormFields(nextConfig.proposalFields, nextConfig.participantFields),
+        submissions: 0,
+        updatedAt: nextConfig.lastSavedAt,
+      };
+    }
+    setWorkspace((current) => ({ ...current, forms: [created, ...current.forms] }));
+    setBuilder(builderConfigFromForm(created, workspace.event));
+    setNotice(`${created.name} created as a private draft.`);
+    return created;
+  }, [builder, source, workspace.actor.id, workspace.event]);
+
+  const closeBuilderForm = useCallback(async () => {
+    if (builder.status !== "published") throw new Error("Only a published form can be closed.");
+    try {
+      await conferenceApi.closeForm(workspace.actor.id, workspace.event.id, builder.formId);
+    } catch (error) {
+      if (!mayUseDemoFallback(error, source)) {
+        setNotice(error instanceof Error ? error.message : "The form could not be closed.");
+        throw error;
+      }
+    }
+    const closedAt = new Date().toISOString();
+    setBuilder((current) => ({ ...current, status: "closed", lastSavedAt: closedAt }));
+    setWorkspace((current) => ({ ...current, forms: current.forms.map((form) => form.id === builder.formId ? { ...form, status: "closed", closesAt: closedAt, updatedAt: closedAt } : form) }));
+    setNotice(`${builder.internalName} closed. Existing submissions remain available; new submissions are blocked.`);
+  }, [builder.formId, builder.internalName, builder.status, source, workspace.actor.id, workspace.event.id]);
 
   const saveBuilder = useCallback(async () => {
     let savedVersion = builder.version;
@@ -994,6 +1086,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
         durationMinutes,
         level: payload.level,
         status: response.status as ProposalStatus,
+        revisionRequest: draft?.revisionRequest,
         speakers: profiles,
         submittedAt: response.submittedAt ?? draft?.submittedAt ?? new Date().toISOString(),
         reviewCount: draft?.reviewCount ?? 0,
@@ -1014,7 +1107,9 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
           }))],
       }));
       setNotice(submit
-        ? "Proposal submitted. Confirmation queued and speaker portal opened."
+        ? draft?.status === "changes_requested" || draft?.status === "revision_open"
+          ? "Revision resubmitted. Open reviewer assignments were rebuilt and historical final reviews were preserved."
+          : "Proposal submitted. Confirmation queued and speaker portal opened."
         : "Draft saved to your verified conference account.");
       return proposal;
     },
@@ -1048,6 +1143,78 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
     }));
     setNotice("Proposal withdrawn. Review activity has stopped.");
   }, [source, workspace.actor.id, workspace.event.id]);
+
+  const reopenProposal = useCallback(async (proposalId: string) => {
+    let result: Awaited<ReturnType<typeof conferenceApi.reopenSubmission>> | undefined;
+    try {
+      result = await conferenceApi.reopenSubmission(workspace.actor.id, workspace.event.id, proposalId);
+    } catch (error) {
+      if (!mayUseDemoFallback(error, source)) {
+        setNotice(error instanceof Error ? error.message : "The submission could not be opened for editing.");
+        throw error;
+      }
+    }
+    const fallback = {
+      id: proposalId,
+      status: "revision_open" as const,
+      version: (workspace.proposals.find((proposal) => proposal.id === proposalId)?.version ?? 1) + 1,
+      revisionRequestedAt: new Date().toISOString(),
+      revokedAssignments: 0,
+      submittedReviewsPreserved: 0,
+    };
+    const reopened = result ?? fallback;
+    if (source === "api") {
+      const next = await conferenceApi.bootstrap(workspace.actor.id, workspace.event.id, workspace.actor.role);
+      setWorkspace(next);
+    } else {
+      setWorkspace((current) => ({
+        ...current,
+        proposals: current.proposals.map((proposal) => proposal.id === proposalId ? {
+          ...proposal,
+          status: "revision_open",
+          version: reopened.version,
+          revisionRequest: {
+            note: "Applicant reopened this proposal for editing before the CFP deadline.",
+            requestedAt: reopened.revisionRequestedAt,
+            requestedBy: "applicant",
+          },
+        } : proposal),
+        reviews: current.reviews.filter((review) => review.proposalId !== proposalId || review.status === "submitted"),
+      }));
+    }
+    setNotice(`Submission opened for editing. ${reopened.revokedAssignments} open reviewer ${reopened.revokedAssignments === 1 ? "assignment was" : "assignments were"} stopped; ${reopened.submittedReviewsPreserved} final ${reopened.submittedReviewsPreserved === 1 ? "review remains" : "reviews remain"} preserved.`);
+    return reopened;
+  }, [source, workspace.actor.id, workspace.actor.role, workspace.event.id, workspace.proposals]);
+
+  const requestProposalChanges = useCallback(async (proposalId: string, note: string) => {
+    let result: Awaited<ReturnType<typeof conferenceApi.requestProposalChanges>> | undefined;
+    try {
+      result = await conferenceApi.requestProposalChanges(workspace.actor.id, workspace.event.id, proposalId, note);
+    } catch (error) {
+      if (!mayUseDemoFallback(error, source)) {
+        setNotice(error instanceof Error ? error.message : "The revision request could not be sent.");
+        throw error;
+      }
+    }
+    if (source === "api") {
+      const next = await conferenceApi.bootstrap(workspace.actor.id, workspace.event.id, workspace.actor.role);
+      setWorkspace(next);
+    } else {
+      setWorkspace((current) => ({
+        ...current,
+        proposals: current.proposals.map((proposal) => proposal.id === proposalId
+          ? {
+              ...proposal,
+              status: "changes_requested",
+              version: (proposal.version ?? 0) + 1,
+              revisionRequest: { note, requestedAt: result?.revisionRequestedAt ?? new Date().toISOString(), requestedBy: "organizer" },
+            }
+          : proposal),
+        reviews: current.reviews.filter((review) => review.proposalId !== proposalId || review.status === "submitted"),
+      }));
+    }
+    setNotice(`Revision requested. ${result?.revokedAssignments ?? "Open"} reviewer assignments stopped, ${result?.submittedReviewsPreserved ?? "submitted"} final reviews preserved, and ${result?.messagesQueued ?? 1} ${result?.messagesQueued === 1 ? "email" : "emails"} queued.`);
+  }, [source, workspace.actor.id, workspace.actor.role, workspace.event.id]);
 
   const decideProposal = useCallback(
     async (
@@ -1503,6 +1670,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       uploadId = `demo-upload-${crypto.randomUUID()}`;
     }
     localTaskArtifacts.current.set(uploadId, file);
+    const uploadedAt = new Date().toISOString();
     setWorkspace((current) => ({
       ...current,
       tasks: current.tasks.map((task): OnboardingTask =>
@@ -1513,6 +1681,15 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
               artifactUploadId: uploadId,
               artifactFileName: fileName,
               artifactContentType: file.type || "application/octet-stream",
+              artifactVersions: [
+                {
+                  uploadId,
+                  fileName,
+                  contentType: file.type || "application/octet-stream",
+                  uploadedAt,
+                },
+                ...(task.artifactVersions ?? []).filter((version) => version.uploadId !== uploadId),
+              ],
             }
           : task,
       ),
@@ -1520,21 +1697,57 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
     setNotice(`${file.name} stored privately; the file task is complete.`);
   }, [source, workspace.actor.id, workspace.event.id]);
 
-  const downloadTaskArtifact = useCallback(async (taskId: string) => {
+  const downloadTaskArtifact = useCallback(async (taskId: string, requestedUploadId?: string) => {
     const task = workspace.tasks.find((candidate) => candidate.id === taskId);
     if (!task?.artifactUploadId) throw new Error("No submitted file is attached to this task.");
-    const localFile = localTaskArtifacts.current.get(task.artifactUploadId);
+    const uploadId = requestedUploadId ?? task.artifactUploadId;
+    const version = task.artifactVersions?.find((candidate) => candidate.uploadId === uploadId);
+    if (requestedUploadId && !version && requestedUploadId !== task.artifactUploadId) {
+      throw new Error("This file version is not part of the task history.");
+    }
+    const localFile = localTaskArtifacts.current.get(uploadId);
     const download = localFile
-      ? { blob: localFile as Blob, fileName: task.artifactFileName || localFile.name }
-      : await conferenceApi.downloadUpload(
+      ? { blob: localFile as Blob, fileName: version?.fileName || task.artifactFileName || localFile.name }
+      : await conferenceApi.downloadTaskArtifact(
           workspace.actor.id,
           workspace.event.id,
-          task.artifactUploadId,
-          task.artifactFileName,
+          task.id,
+          uploadId,
+          version?.fileName || task.artifactFileName,
         );
     saveDownloadedFile(download.blob, download.fileName);
     setNotice(`${download.fileName} downloaded from the private task record.`);
   }, [workspace.actor.id, workspace.event.id, workspace.tasks]);
+
+  const addTaskComment = useCallback(async (taskId: string, body: string) => {
+    const normalized = body.trim();
+    if (!normalized) throw new Error("Write a comment before posting.");
+    let comment: TaskComment;
+    try {
+      comment = await conferenceApi.addTaskComment(
+        workspace.actor.id,
+        workspace.event.id,
+        taskId,
+        normalized,
+      );
+    } catch (error) {
+      if (!mayUseDemoFallback(error, source)) throw error;
+      comment = {
+        id: `demo-comment-${crypto.randomUUID()}`,
+        authorId: workspace.actor.id,
+        authorName: workspace.actor.name,
+        body: normalized,
+        createdAt: new Date().toISOString(),
+      };
+    }
+    setWorkspace((current) => ({
+      ...current,
+      tasks: current.tasks.map((task) => task.id === taskId
+        ? { ...task, comments: [...(task.comments ?? []), comment] }
+        : task),
+    }));
+    setNotice("Comment added to the shared task record.");
+  }, [source, workspace.actor.id, workspace.actor.name, workspace.event.id]);
 
   const submitTaskForm = useCallback(async (taskId: string, responses: Record<string, unknown>) => {
     try {
@@ -1591,6 +1804,9 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       createTrack,
       updateTrack,
       deleteTrack,
+      selectBuilderForm,
+      createBuilderForm,
+      closeBuilderForm,
       updateBuilder,
       replaceBuilderFields,
       saveBuilder,
@@ -1598,6 +1814,8 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       saveProposalDraft,
       submitProposal,
       withdrawProposal,
+      reopenProposal,
+      requestProposalChanges,
       decideProposal,
       saveReview,
       toggleTask,
@@ -1611,6 +1829,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       addDirectSession,
       uploadTaskArtifact,
       downloadTaskArtifact,
+      addTaskComment,
       submitTaskForm,
     }),
     [
@@ -1635,6 +1854,9 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       createTrack,
       updateTrack,
       deleteTrack,
+      selectBuilderForm,
+      createBuilderForm,
+      closeBuilderForm,
       updateBuilder,
       replaceBuilderFields,
       saveBuilder,
@@ -1642,6 +1864,8 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       saveProposalDraft,
       submitProposal,
       withdrawProposal,
+      reopenProposal,
+      requestProposalChanges,
       decideProposal,
       saveReview,
       toggleTask,
@@ -1655,6 +1879,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       addDirectSession,
       uploadTaskArtifact,
       downloadTaskArtifact,
+      addTaskComment,
       submitTaskForm,
     ],
   );

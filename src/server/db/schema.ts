@@ -253,9 +253,13 @@ export const proposals = sqliteTable(
     durationMinutes: integer("duration_minutes").notNull(),
     level: text("level", { enum: ["introductory", "intermediate", "advanced"] }).notNull(),
     responses: text("responses", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
-    status: text("status", { enum: ["draft", "submitted", "under_review", "accept_queue", "waitlisted", "accepted", "decline_queue", "rejected", "withdrawn", "session"] }).notNull().default("draft"),
+    status: text("status", { enum: ["draft", "changes_requested", "revision_open", "submitted", "under_review", "accept_queue", "waitlisted", "accepted", "decline_queue", "rejected", "withdrawn", "session"] }).notNull().default("draft"),
+    revisionNote: text("revision_note"),
+    revisionRequestedAt: integer("revision_requested_at", { mode: "timestamp" }),
+    revisionRequestedBy: text("revision_requested_by", { enum: ["organizer", "applicant"] }),
     submittedAt: integer("submitted_at", { mode: "timestamp" }),
     decidedAt: integer("decided_at", { mode: "timestamp" }),
+    reviewCycle: integer("review_cycle").notNull().default(1),
     version: integer("version").notNull().default(1),
     ...timestamps,
   },
@@ -289,6 +293,7 @@ export const reviewAssignments = sqliteTable(
     proposalId: text("proposal_id").notNull().references(() => proposals.id, { onDelete: "cascade" }),
     roundId: text("round_id").notNull().references(() => reviewRounds.id, { onDelete: "cascade" }),
     reviewerUserId: text("reviewer_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    reviewCycle: integer("review_cycle").notNull().default(1),
     status: text("status", { enum: ["pending", "in_progress", "submitted"] }).notNull().default("pending"),
     scores: text("scores", { mode: "json" }).$type<Record<string, number>>().notNull().default({}),
     totalScore: integer("total_score"),
@@ -297,7 +302,7 @@ export const reviewAssignments = sqliteTable(
     submittedAt: integer("submitted_at", { mode: "timestamp" }),
     ...timestamps,
   },
-  (table) => [uniqueIndex("review_assignment_unique").on(table.proposalId, table.roundId, table.reviewerUserId), index("reviewer_queue_idx").on(table.reviewerUserId, table.status)],
+  (table) => [uniqueIndex("review_assignment_unique").on(table.proposalId, table.roundId, table.reviewerUserId, table.reviewCycle), index("reviewer_queue_idx").on(table.reviewerUserId, table.status)],
 );
 
 export const tracks = sqliteTable("tracks", {
@@ -408,6 +413,7 @@ export const taskTemplates = sqliteTable("task_templates", {
   targetType: text("target_type", { enum: ["contact", "group", "submission"] }).notNull().default("contact"),
   completionMode: text("completion_mode", { enum: ["manual", "form", "file_request"] }).notNull().default("manual"),
   relativeDueDays: integer("relative_due_days").notNull().default(7),
+  externalUrl: text("external_url"),
   formVersionId: text("form_version_id").references(() => formVersions.id),
   fileRequestId: text("file_request_id").references(() => fileRequests.id),
   ...timestamps,
@@ -425,6 +431,7 @@ export const speakerTasks = sqliteTable(
     description: text("description").notNull(),
     type: text("type", { enum: ["profile", "upload", "form", "calendar"] }).notNull(),
     status: text("status", { enum: ["not_started", "in_progress", "complete", "overdue", "waived"] }).notNull().default("not_started"),
+    externalUrl: text("external_url"),
     artifactUploadId: text("artifact_upload_id").references(() => uploads.id),
     dueAt: integer("due_at", { mode: "timestamp" }).notNull(),
     completedAt: integer("completed_at", { mode: "timestamp" }),
@@ -441,6 +448,22 @@ export const speakerTasks = sqliteTable(
     uniqueIndex("task_submission_template_speaker_proposal_unique")
       .on(table.templateId, table.speakerProfileId, table.proposalId)
       .where(sql`${table.proposalId} IS NOT NULL`),
+  ],
+);
+
+export const taskComments = sqliteTable(
+  "task_comments",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    taskId: text("task_id").notNull().references(() => speakerTasks.id, { onDelete: "cascade" }),
+    authorUserId: text("author_user_id").notNull().references(() => users.id),
+    body: text("body").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    index("task_comment_task_time_idx").on(table.taskId, table.createdAt),
+    index("task_comment_event_idx").on(table.eventId),
   ],
 );
 
@@ -519,7 +542,7 @@ export const outbox = sqliteTable(
   {
     id: text("id").primaryKey(),
     eventId: text("event_id").references(() => events.id, { onDelete: "cascade" }),
-    kind: text("kind", { enum: ["email", "calendar", "accelevents"] }).notNull(),
+    kind: text("kind", { enum: ["email", "calendar", "accelevents", "airtable"] }).notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
     payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
     status: text("status", { enum: ["queued", "processing", "sent", "failed", "dead"] }).notNull().default("queued"),
@@ -566,4 +589,121 @@ export const auditLogs = sqliteTable(
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   },
   (table) => [index("audit_event_time_idx").on(table.eventId, table.createdAt), index("audit_entity_idx").on(table.entityType, table.entityId)],
+);
+
+export const airtableConnections = sqliteTable(
+  "airtable_connections",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").references(() => events.id, { onDelete: "cascade" }),
+    baseId: text("base_id").notNull(),
+    recordsTableId: text("records_table_id").notNull(),
+    commandsTableId: text("commands_table_id").notNull(),
+    authority: text("authority", { enum: ["d1", "airtable"] }).notNull().default("d1"),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+    status: text("status", { enum: ["provisioning", "syncing", "healthy", "degraded", "blocked", "disabled"] }).notNull().default("provisioning"),
+    schemaVersion: integer("schema_version").notNull().default(1),
+    webhookId: text("webhook_id"),
+    webhookCursor: integer("webhook_cursor").notNull().default(0),
+    webhookExpiresAt: integer("webhook_expires_at", { mode: "timestamp" }),
+    lastPushAt: integer("last_push_at", { mode: "timestamp" }),
+    lastPullAt: integer("last_pull_at", { mode: "timestamp" }),
+    lastReconciledAt: integer("last_reconciled_at", { mode: "timestamp" }),
+    reconciliationStartedAt: integer("reconciliation_started_at", { mode: "timestamp" }),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("airtable_connection_base_unique").on(table.baseId),
+    uniqueIndex("airtable_connection_event_unique").on(table.eventId),
+    uniqueIndex("airtable_connection_one_global_enabled").on(table.enabled)
+      .where(sql`${table.eventId} IS NULL AND ${table.enabled} = 1`),
+    index("airtable_connection_enabled_idx").on(table.enabled, table.status),
+  ],
+);
+
+export const airtableRecordMaps = sqliteTable(
+  "airtable_record_maps",
+  {
+    connectionId: text("connection_id").notNull().references(() => airtableConnections.id, { onDelete: "cascade" }),
+    entityType: text("entity_type").notNull(),
+    localKey: text("local_key").notNull(),
+    airtableRecordId: text("airtable_record_id").notNull(),
+    lastLocalHash: text("last_local_hash"),
+    lastRemoteHash: text("last_remote_hash"),
+    lastRemoteTransaction: integer("last_remote_transaction"),
+    lastSyncedAt: integer("last_synced_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.connectionId, table.entityType, table.localKey] }),
+    uniqueIndex("airtable_record_remote_unique").on(table.connectionId, table.airtableRecordId),
+  ],
+);
+
+export const airtableChangeQueue = sqliteTable(
+  "airtable_change_queue",
+  {
+    id: text("id").primaryKey(),
+    connectionId: text("connection_id").notNull().references(() => airtableConnections.id, { onDelete: "cascade" }),
+    entityType: text("entity_type").notNull(),
+    localKey: text("local_key").notNull(),
+    operation: text("operation", { enum: ["upsert", "tombstone"] }).notNull(),
+    status: text("status", { enum: ["queued", "processing", "failed", "dead"] }).notNull().default("queued"),
+    attempts: integer("attempts").notNull().default(0),
+    generation: integer("generation").notNull().default(1),
+    availableAt: integer("available_at", { mode: "timestamp" }).notNull(),
+    leaseExpiresAt: integer("lease_expires_at", { mode: "timestamp" }),
+    lastError: text("last_error"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("airtable_change_entity_unique").on(table.connectionId, table.entityType, table.localKey),
+    index("airtable_change_due_idx").on(table.status, table.availableAt),
+  ],
+);
+
+export const airtableConflicts = sqliteTable(
+  "airtable_conflicts",
+  {
+    id: text("id").primaryKey(),
+    connectionId: text("connection_id").notNull().references(() => airtableConnections.id, { onDelete: "cascade" }),
+    entityType: text("entity_type").notNull(),
+    localKey: text("local_key").notNull(),
+    airtableRecordId: text("airtable_record_id"),
+    reason: text("reason").notNull(),
+    localHash: text("local_hash"),
+    remoteHash: text("remote_hash"),
+    remotePayload: text("remote_payload", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+    status: text("status", { enum: ["open", "resolved", "ignored"] }).notNull().default("open"),
+    resolvedAt: integer("resolved_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (table) => [index("airtable_conflict_open_idx").on(table.connectionId, table.status, table.createdAt)],
+);
+
+export const airtableCommands = sqliteTable(
+  "airtable_commands",
+  {
+    id: text("id").primaryKey(),
+    connectionId: text("connection_id").notNull().references(() => airtableConnections.id, { onDelete: "cascade" }),
+    airtableRecordId: text("airtable_record_id").notNull(),
+    commandType: text("command_type").notNull(),
+    targetEntity: text("target_entity").notNull(),
+    targetKey: text("target_key").notNull(),
+    parameters: text("parameters", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+    idempotencyKey: text("idempotency_key").notNull(),
+    status: text("status", { enum: ["pending", "processing", "succeeded", "rejected", "failed"] }).notNull().default("pending"),
+    result: text("result", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+    lastError: text("last_error"),
+    requestedAt: integer("requested_at", { mode: "timestamp" }).notNull(),
+    processedAt: integer("processed_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("airtable_command_remote_unique").on(table.connectionId, table.airtableRecordId),
+    uniqueIndex("airtable_command_idempotency_unique").on(table.connectionId, table.idempotencyKey),
+    index("airtable_command_status_idx").on(table.connectionId, table.status, table.requestedAt),
+  ],
 );

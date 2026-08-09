@@ -14,7 +14,14 @@ export const linkAcceptedProposalSpeakersSql = `INSERT OR IGNORE INTO session_sp
 export const activateAcceptedSpeakersSql = `UPDATE speaker_profiles
   SET published = 1, updated_at = ?
   WHERE event_id = ?
-    AND id IN (SELECT speaker_profile_id FROM proposal_speakers WHERE proposal_id = ?)`;
+    AND id IN (
+      SELECT proposal_speaker.speaker_profile_id
+      FROM proposal_speakers proposal_speaker
+      JOIN proposals proposal
+        ON proposal.id = proposal_speaker.proposal_id
+        AND proposal.event_id = speaker_profiles.event_id
+      WHERE proposal.id = ? AND proposal.status = 'accepted'
+    )`;
 
 export const grantClaimedSpeakerMembershipsSql = `INSERT OR IGNORE INTO event_memberships
   (event_id, user_id, role, accepted_at, created_at)

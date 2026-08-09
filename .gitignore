@@ -16,4 +16,6 @@ test-results/
 terraform.tfvars
 infra/terraform/*.auto.tfvars
 artifacts/
+output/
+videos/
 .DS_Store

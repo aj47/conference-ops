@@ -6,6 +6,7 @@ import type { AppEnv } from "./env";
 import { jsonError, requestContext, requireActor, requireRole } from "./http";
 import { createDemoWorkspace } from "../shared/demo-data";
 import { projectConferenceExport } from "../shared/conference-export";
+import { promoteAssignedBacklogSql } from "./reviewer-backfill";
 import { formFieldSection, submissionCategoryField, submissionCategoryFields } from "../shared/form-fields";
 import { defaultFormVersionSettings, normalizeFormVersionSettings } from "../shared/form-settings";
 import {
@@ -21,12 +22,12 @@ import {
   submissionCombinedCharacterCount,
   validateFormResponses,
 } from "./forms";
-import type { EventRecord, FormField, ProposalStatus } from "../shared/domain";
+import type { EventRecord, FormField, ProposalStatus, ResourcePage } from "../shared/domain";
 import { loadWorkspace } from "./workspace";
 import { verifiedPrimarySpeakerMatches } from "./submissions";
 import { hasReadinessAuthorization, probeReadiness } from "./readiness";
 import { eventAcceptsSelfEnrollment, selfEnrollmentEventSql } from "./enrollment";
-import { applicantMayEditProposal, applicantMayWithdrawProposal } from "./proposal-lifecycle";
+import { applicantMayEditProposal, applicantMayOpenProposalRevision, applicantMayWithdrawProposal } from "./proposal-lifecycle";
 import { instantiateAcceptedSpeakerTasksSql } from "./speaker-task-instantiation";
 import {
   databaseTimestampToIso,
@@ -54,10 +55,10 @@ import {
 import { AgendaPublishError, publishAgendaAtomically, validateAgendaPublishSelection } from "./agenda-publish";
 import { putR2ObjectWithMetadata } from "./r2-persistence";
 import { ineligibleCommunicationRecipientIds, type CommunicationRecipientEvidence } from "./communications";
+import { demoCommunicationDeliveries, projectCommunicationDelivery, type CommunicationOutboxRow } from "./communication-history";
 import { dispatchPersistedJobs, persistOutboxJobs, prepareOutboxJob, type OutboxJob } from "./outbox-producer";
 import { evaluateReviewScores, ReviewRubricError } from "../shared/review-rubric";
 import { createInitialEvent, EventSlugConflictError, isEventSlugConstraintError } from "./event-setup";
-import { backfillReviewerAssignmentsSql, promoteAssignedBacklogSql } from "./reviewer-backfill";
 import { uploadContentTypeAllowed } from "./upload-policy";
 import { agendaEmbedAssetRequest, agendaEmbedContentSecurityPolicyForEnvironment, withAgendaEmbedFramingPolicy } from "./embed-assets";
 import { bumpEventCalendarRevisionsSql, bumpRoomCalendarRevisionsSql, eventInviteFieldsChanged } from "./calendar-revisions";
@@ -68,6 +69,19 @@ import {
   linkAcceptedProposalSpeakersSql,
 } from "./acceptance-activation";
 import { readinessAnswer, readinessInsights } from "./readiness-agent";
+import { dispatchAirtableAfterMutation } from "./airtable-dispatch";
+import { handleAirtableWebhook } from "./airtable-webhook";
+import { loadAirtableOperatorStatus, projectAirtableOperatorStatus } from "./airtable-status";
+import {
+  auditApplicantRevisionOpenSql,
+  auditProposalRevisionRequestBindings,
+  auditProposalRevisionRequestSql,
+  proposalMayRequestRevision,
+  revokeOpenReviewsForRevisionSql,
+  updateProposalForRevisionBindings,
+  updateProposalForApplicantRevisionSql,
+  updateProposalForRevisionSql,
+} from "./proposal-revision";
 
 const app = new Hono<AppEnv>();
 
@@ -148,6 +162,7 @@ function categoryContractError(fields: FormField[]) {
   if (field.condition) return `${field.label} must be visible to every applicant.`;
   const options = (field.options ?? []).map((option) => option.trim()).filter(Boolean);
   if (!options.length) return `${field.label} needs at least one program lane.`;
+  if (options.some((option) => option.includes(","))) return `${field.label} choices cannot contain commas.`;
   if (new Set(options.map((option) => option.toLowerCase())).size !== options.length) return `${field.label} choices must be unique.`;
   return undefined;
 }
@@ -169,7 +184,10 @@ async function reviewerRoutingForCategories(db: D1Database, eventId: string, cat
 
 function csvCell(value: unknown) {
   const text = value === null || value === undefined ? "" : String(value);
-  return `"${text.replace(/"/g, '""')}"`;
+  let markerIndex = 0;
+  while (markerIndex < text.length && text.charCodeAt(markerIndex) <= 0x20) markerIndex += 1;
+  const safeText = "=+-@".includes(text[markerIndex] ?? "") ? `'${text}` : text;
+  return `"${safeText.replace(/"/g, '""')}"`;
 }
 
 function escapeHtml(value: string) {
@@ -228,6 +246,7 @@ async function sha256(value: string) {
 }
 
 app.get("/api/v1/public/events/:slug", async (c) => {
+  const requestedForm = c.req.query("form")?.trim() || undefined;
   if (c.env.DEMO_MODE === "true") {
     const workspace = createDemoWorkspace("user-applicant");
     if (workspace.event.slug !== c.req.param("slug") || !isPublicEventStatus(workspace.event.status)) return jsonError(c, 404, "EVENT_NOT_FOUND", "This public event is not available.");
@@ -246,7 +265,9 @@ app.get("/api/v1/public/events/:slug", async (c) => {
     const publishedSpeakerIds = new Set(sessions.flatMap((session) => session.speakerIds));
     const speakers = [...new Map(workspace.proposals.flatMap((proposal) => proposal.speakers).filter((speaker) => publishedSpeakerIds.has(speaker.id)).map((speaker) => [speaker.id, speaker])).values()]
       .map(publicSpeakerFromProfile);
-    return c.json({ data: { demoMode: true, event: workspace.event, form: workspace.forms.find((form) => form.status === "published"), sessions, speakers, resources: workspace.resources.filter((resource) => resource.status === "published") } });
+    const form = workspace.forms.find((candidate) => candidate.status === "published"
+      && (!requestedForm || candidate.slug === requestedForm || candidate.id === requestedForm));
+    return c.json({ data: { demoMode: true, event: workspace.event, form, sessions, speakers, resources: workspace.resources.filter((resource) => resource.status === "published") } });
   }
   const eventRow = await c.env.DB.prepare("SELECT id, slug, name, short_name AS shortName, description, timezone, starts_at AS startsAt, ends_at AS endsAt, cfp_closes_at AS cfpClosesAt, venue, website_url AS websiteUrl, accent, status FROM events WHERE slug = ? AND deleted_at IS NULL AND status IN ('cfp_open', 'review', 'agenda_published', 'archived')")
     .bind(c.req.param("slug"))
@@ -254,15 +275,15 @@ app.get("/api/v1/public/events/:slug", async (c) => {
   if (!eventRow) return jsonError(c, 404, "EVENT_NOT_FOUND", "This public event is not available.");
   const event = publicEventFromRow(eventRow);
   const [form, sessionResult, sessionSpeakerResult, speakerResult, resourceResult] = await Promise.all([
-    c.env.DB.prepare("SELECT sf.id, sf.name, sf.status, sf.published_version AS version, sf.submission_type AS submissionType, sf.collects_participants AS collectsParticipants, sf.max_submissions_per_user AS maxSubmissionsPerUser, sf.redirect_to_portal AS redirectToPortal, sf.confirmation_email_enabled AS confirmationEmailEnabled, sf.closes_at AS closesAt, sf.updated_at AS updatedAt, fv.public_title AS publicTitle, fv.page_heading AS pageHeading, fv.welcome_title AS welcomeTitle, fv.welcome_copy AS welcomeCopy, fv.confirmation_copy AS confirmationCopy, fv.max_speakers AS maxSpeakers, fv.allow_multiple_drafts AS allowMultipleDrafts, fv.settings, fv.fields FROM submission_forms sf JOIN form_versions fv ON fv.form_id = sf.id AND fv.version = sf.published_version WHERE sf.event_id = ? AND sf.kind = 'cfp' AND sf.status = 'published' ORDER BY sf.created_at LIMIT 1")
-      .bind(event.id).first<Record<string, unknown>>(),
+    c.env.DB.prepare("SELECT sf.id, sf.slug, sf.name, sf.status, sf.published_version AS version, sf.submission_type AS submissionType, sf.collects_participants AS collectsParticipants, sf.max_submissions_per_user AS maxSubmissionsPerUser, sf.redirect_to_portal AS redirectToPortal, sf.confirmation_email_enabled AS confirmationEmailEnabled, sf.closes_at AS closesAt, sf.updated_at AS updatedAt, fv.public_title AS publicTitle, fv.page_heading AS pageHeading, fv.welcome_title AS welcomeTitle, fv.welcome_copy AS welcomeCopy, fv.confirmation_copy AS confirmationCopy, fv.max_speakers AS maxSpeakers, fv.allow_multiple_drafts AS allowMultipleDrafts, fv.settings, fv.fields FROM submission_forms sf JOIN form_versions fv ON fv.form_id = sf.id AND fv.version = sf.published_version WHERE sf.event_id = ? AND sf.kind = 'cfp' AND sf.status = 'published' AND (? IS NULL OR sf.slug = ? OR sf.id = ?) ORDER BY CASE WHEN sf.slug = ? OR sf.id = ? THEN 0 ELSE 1 END, sf.created_at LIMIT 1")
+      .bind(event.id, requestedForm ?? null, requestedForm ?? null, requestedForm ?? null, requestedForm ?? null, requestedForm ?? null).first<Record<string, unknown>>(),
     c.env.DB.prepare("SELECT ps.id, ps.event_id AS eventId, ps.proposal_id AS proposalId, ps.title, ps.description, ps.starts_at AS startsAt, ps.ends_at AS endsAt, t.id AS trackId, t.name AS trackName, t.color AS trackColor, r.id AS roomId, r.name AS roomName FROM program_sessions ps LEFT JOIN tracks t ON t.id = ps.track_id AND t.event_id = ps.event_id LEFT JOIN rooms r ON r.id = ps.room_id AND r.event_id = ps.event_id WHERE ps.event_id = ? AND ps.status = 'published' ORDER BY ps.starts_at")
       .bind(event.id).all<Record<string, unknown>>(),
     c.env.DB.prepare("SELECT ss.session_id AS sessionId, sp.id AS speakerId, sp.name AS speakerName FROM session_speakers ss JOIN program_sessions ps ON ps.id = ss.session_id JOIN speaker_profiles sp ON sp.id = ss.speaker_profile_id AND sp.event_id = ps.event_id WHERE ps.event_id = ? AND ps.status = 'published' ORDER BY ps.starts_at, sp.name")
       .bind(event.id).all<PublicSessionSpeakerRow>(),
     c.env.DB.prepare("SELECT DISTINCT sp.id, sp.name, sp.title, sp.company, sp.bio, sp.pronouns, sp.city, sp.profile_complete AS profileComplete, CASE WHEN up.id IS NULL THEN 0 ELSE 1 END AS hasHeadshot FROM speaker_profiles sp JOIN session_speakers ss ON ss.speaker_profile_id = sp.id JOIN program_sessions ps ON ps.id = ss.session_id AND ps.event_id = sp.event_id LEFT JOIN uploads up ON up.id = sp.headshot_upload_id AND up.event_id = sp.event_id AND up.purpose = 'headshot' AND up.deleted_at IS NULL WHERE sp.event_id = ? AND sp.published = 1 AND ps.status = 'published' ORDER BY sp.name")
       .bind(event.id).all<Record<string, unknown>>(),
-    c.env.DB.prepare("SELECT id, title, slug, summary, updated_at AS updatedAt FROM resource_pages WHERE event_id = ? AND status = 'published' ORDER BY title")
+    c.env.DB.prepare("SELECT id, title, slug, summary, sanitized_html AS body, embed_url AS linkUrl, updated_at AS updatedAt FROM resource_pages WHERE event_id = ? AND status = 'published' ORDER BY title")
       .bind(event.id).all<Record<string, unknown>>(),
   ]);
   const formControls = form ? versionControlsFromRow(form) : null;
@@ -270,6 +291,7 @@ app.get("/api/v1/public/events/:slug", async (c) => {
     id: String(form.id),
     eventId: event.id,
     name: String(form.name),
+    slug: form.slug ? String(form.slug) : undefined,
     status: "published" as const,
     kind: "cfp" as const,
     version: Number(form.version),
@@ -327,7 +349,10 @@ app.get("/api/v1/public/events/:slug/speakers/:speakerId/headshot", async (c) =>
   return c.body(object.body);
 });
 
+app.post("/api/v1/integrations/airtable/webhook", handleAirtableWebhook);
+
 app.use("/api/v1/*", requireActor);
+app.use("/api/v1/*", dispatchAirtableAfterMutation);
 
 app.get("/api/v1/bootstrap", async (c) => {
   const actor = c.get("actor");
@@ -644,6 +669,149 @@ app.delete("/api/v1/events/:eventId/tracks/:trackId", async (c) => {
   return c.json({ data: { id: trackId, deleted: true } });
 });
 
+// Participant resources ----------------------------------------------------
+// The legacy sanitized_html column stores organizer-authored plain text. The
+// client renders it as text nodes only, so resource copy can never execute as
+// markup. A single optional HTTP(S) reference link is validated separately.
+
+const resourceLinkSchema = z.string().trim().max(2048).refine((value) => {
+  if (!value) return true;
+  try {
+    return ["http:", "https:"].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}, "Use a complete http:// or https:// URL.");
+
+const resourcePageSchema = z.object({
+  title: z.string().trim().min(2).max(160),
+  slug: z.string().trim().toLowerCase().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
+  summary: z.string().trim().max(500),
+  body: z.string().trim().max(50_000),
+  linkUrl: resourceLinkSchema.optional(),
+  status: z.enum(["draft", "published"]),
+}).superRefine((value, context) => {
+  if (value.status === "published" && !value.body) {
+    context.addIssue({ code: "custom", path: ["body"], message: "Add page content before publishing." });
+  }
+});
+
+function resourcePageFromRow(row: Record<string, unknown>): ResourcePage {
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    slug: String(row.slug),
+    summary: String(row.summary ?? ""),
+    body: String(row.body ?? row.sanitized_html ?? ""),
+    ...(row.linkUrl ?? row.embed_url ? { linkUrl: String(row.linkUrl ?? row.embed_url) } : {}),
+    status: String(row.status) as ResourcePage["status"],
+    updatedAt: databaseTimestampToIso(row.updatedAt ?? row.updated_at) ?? new Date(0).toISOString(),
+  };
+}
+
+function isResourceSlugConstraintError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /resource_event_slug_unique|UNIQUE constraint failed:\s*resource_pages\.event_id,\s*resource_pages\.slug/i.test(message);
+}
+
+app.post("/api/v1/events/:eventId/resources", zValidator("json", resourcePageSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  const body = c.req.valid("json");
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  if (c.get("actor")?.demo) {
+    const workspace = createDemoWorkspace(c.get("actor")!.id);
+    if (workspace.event.id !== eventId) return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
+    if (workspace.resources.some((resource) => resource.slug === body.slug)) {
+      return jsonError(c, 409, "RESOURCE_SLUG_TAKEN", "A participant resource already uses that URL slug.", { slug: "Choose a different resource slug." });
+    }
+    return c.json({ data: resourcePageFromRow({ id, ...body, updatedAt: now }) }, 201);
+  }
+  let result: D1Result;
+  try {
+    result = await c.env.DB.prepare(`INSERT INTO resource_pages
+        (id, event_id, title, slug, summary, sanitized_html, embed_url, status, created_at, updated_at)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM events WHERE id = ? AND deleted_at IS NULL)
+        AND NOT EXISTS (SELECT 1 FROM resource_pages WHERE event_id = ? AND slug = ?)`)
+      .bind(id, eventId, body.title, body.slug, body.summary, body.body, body.linkUrl || null, body.status, now, now, eventId, eventId, body.slug)
+      .run();
+  } catch (error) {
+    if (isResourceSlugConstraintError(error)) return jsonError(c, 409, "RESOURCE_SLUG_TAKEN", "A participant resource already uses that URL slug.", { slug: "Choose a different resource slug." });
+    throw error;
+  }
+  if (!result.meta.changes) {
+    const duplicate = await c.env.DB.prepare("SELECT id FROM resource_pages WHERE event_id = ? AND slug = ? LIMIT 1").bind(eventId, body.slug).first();
+    if (duplicate) return jsonError(c, 409, "RESOURCE_SLUG_TAKEN", "A participant resource already uses that URL slug.", { slug: "Choose a different resource slug." });
+    return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
+  }
+  return c.json({ data: resourcePageFromRow({ id, ...body, updatedAt: now }) }, 201);
+});
+
+app.put("/api/v1/events/:eventId/resources/:resourceId", zValidator("json", resourcePageSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  const resourceId = c.req.param("resourceId");
+  const body = c.req.valid("json");
+  const now = Date.now();
+  if (c.get("actor")?.demo) {
+    const workspace = createDemoWorkspace(c.get("actor")!.id);
+    if (workspace.event.id !== eventId) return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
+    if (!workspace.resources.some((resource) => resource.id === resourceId)) return jsonError(c, 404, "RESOURCE_NOT_FOUND", "Participant resource not found.");
+    if (workspace.resources.some((resource) => resource.id !== resourceId && resource.slug === body.slug)) {
+      return jsonError(c, 409, "RESOURCE_SLUG_TAKEN", "A participant resource already uses that URL slug.", { slug: "Choose a different resource slug." });
+    }
+    return c.json({ data: resourcePageFromRow({ id: resourceId, ...body, updatedAt: now }) });
+  }
+  let result: D1Result;
+  try {
+    result = await c.env.DB.prepare(`UPDATE resource_pages
+      SET title = ?, slug = ?, summary = ?, sanitized_html = ?, embed_url = ?, status = ?, updated_at = ?
+      WHERE id = ? AND event_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM resource_pages AS collision
+          WHERE collision.event_id = ? AND collision.id <> ? AND collision.slug = ?
+        )`)
+      .bind(body.title, body.slug, body.summary, body.body, body.linkUrl || null, body.status, now, resourceId, eventId, eventId, resourceId, body.slug)
+      .run();
+  } catch (error) {
+    if (isResourceSlugConstraintError(error)) return jsonError(c, 409, "RESOURCE_SLUG_TAKEN", "A participant resource already uses that URL slug.", { slug: "Choose a different resource slug." });
+    throw error;
+  }
+  if (!result.meta.changes) {
+    const resource = await c.env.DB.prepare("SELECT id FROM resource_pages WHERE id = ? AND event_id = ?").bind(resourceId, eventId).first();
+    if (!resource) return jsonError(c, 404, "RESOURCE_NOT_FOUND", "Participant resource not found.");
+    return jsonError(c, 409, "RESOURCE_SLUG_TAKEN", "A participant resource already uses that URL slug.", { slug: "Choose a different resource slug." });
+  }
+  return c.json({ data: resourcePageFromRow({ id: resourceId, ...body, updatedAt: now }) });
+});
+
+app.delete("/api/v1/events/:eventId/resources/:resourceId", async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  const resourceId = c.req.param("resourceId");
+  if (c.get("actor")?.demo) {
+    const workspace = createDemoWorkspace(c.get("actor")!.id);
+    if (workspace.event.id !== eventId) return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
+    const resource = workspace.resources.find((candidate) => candidate.id === resourceId);
+    if (!resource) return jsonError(c, 404, "RESOURCE_NOT_FOUND", "Participant resource not found.");
+    if (resource.status === "published") return jsonError(c, 409, "RESOURCE_PUBLISHED", "Unpublish this resource before deleting it.");
+    return c.json({ data: { id: resourceId, deleted: true } });
+  }
+  const result = await c.env.DB.prepare("DELETE FROM resource_pages WHERE id = ? AND event_id = ? AND status = 'draft'")
+    .bind(resourceId, eventId).run();
+  if (!result.meta.changes) {
+    const resource = await c.env.DB.prepare("SELECT status FROM resource_pages WHERE id = ? AND event_id = ?").bind(resourceId, eventId).first<{ status: ResourcePage["status"] }>();
+    if (!resource) return jsonError(c, 404, "RESOURCE_NOT_FOUND", "Participant resource not found.");
+    return jsonError(c, 409, "RESOURCE_PUBLISHED", "Unpublish this resource before deleting it.");
+  }
+  return c.json({ data: { id: resourceId, deleted: true } });
+});
+
 const reviewerRoutingSchema = z.object({
   groups: z.array(z.object({
     id: z.string().min(1).optional(),
@@ -654,6 +822,9 @@ const reviewerRoutingSchema = z.object({
 }).superRefine((value, context) => {
   const categories = new Set<string>();
   for (const [index, group] of value.groups.entries()) {
+    if (group.category.includes(",")) {
+      context.addIssue({ code: "custom", path: ["groups", index, "category"], message: "Program lane names cannot contain commas." });
+    }
     const key = group.category.toLocaleLowerCase();
     if (categories.has(key)) {
       context.addIssue({ code: "custom", path: ["groups", index, "category"], message: "Each program lane can have only one reviewer group." });
@@ -725,8 +896,8 @@ app.put("/api/v1/events/:eventId/reviewer-routing", zValidator("json", reviewerR
         AND proposal_id IN (SELECT id FROM proposals WHERE event_id = ?)`)
       .bind(eventId),
     c.env.DB.prepare(`INSERT OR IGNORE INTO review_assignments
-      (id, proposal_id, round_id, reviewer_user_id, status, scores, created_at, updated_at)
-      SELECT 'review-' || lower(hex(randomblob(16))), p.id, rr.id, rgm.user_id, 'pending', '{}', ?, ?
+      (id, proposal_id, round_id, reviewer_user_id, review_cycle, status, scores, created_at, updated_at)
+      SELECT 'review-' || lower(hex(randomblob(16))), p.id, rr.id, rgm.user_id, p.review_cycle, 'pending', '{}', ?, ?
       FROM proposals p
       JOIN proposal_reviewer_groups prg ON prg.proposal_id = p.id
       JOIN reviewer_groups rg ON rg.id = prg.reviewer_group_id AND rg.event_id = p.event_id
@@ -748,6 +919,90 @@ app.put("/api/v1/events/:eventId/reviewer-routing", zValidator("json", reviewerR
   );
   await c.env.DB.batch(statements);
   return c.json({ data: { groups: normalized, assignmentsRebuilt: true } });
+});
+
+const reviewPlanSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  status: z.enum(["draft", "active", "closed"]),
+  rubric: z.array(z.object({
+    id: z.string().trim().min(1).max(80),
+    label: z.string().trim().min(2).max(160),
+    description: z.string().trim().max(1000).optional(),
+    weight: z.number().positive().max(1000),
+    maxScore: z.number().int().min(2).max(20),
+  })).min(1).max(12),
+}).superRefine((value, context) => {
+  const ids = new Set<string>();
+  for (const [index, criterion] of value.rubric.entries()) {
+    if (ids.has(criterion.id)) context.addIssue({ code: "custom", path: ["rubric", index, "id"], message: "Criterion identifiers must be unique." });
+    ids.add(criterion.id);
+  }
+});
+
+function reviewPlanFromRow(row: Record<string, unknown>, eventId: string) {
+  return {
+    id: String(row.id),
+    eventId,
+    name: String(row.name),
+    round: Number(row.round),
+    status: String(row.status) as "draft" | "active" | "closed",
+    rubric: parseJson<unknown[]>(row.rubric, []),
+    submittedReviews: Number(row.submitted_reviews ?? 0),
+    updatedAt: databaseTimestampToIso(row.updated_at) ?? new Date(0).toISOString(),
+  };
+}
+
+app.get("/api/v1/events/:eventId/review-plans", async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  if (c.get("actor")?.demo) {
+    const demo = createDemoWorkspace(c.get("actor")!.id);
+    const assignment = demo.reviews[0];
+    return c.json({ data: { plans: assignment ? [{ id: "round-1", eventId, name: assignment.roundName, round: assignment.round, status: "active", rubric: assignment.rubric, submittedReviews: demo.reviews.filter((review) => review.status === "submitted").length, updatedAt: new Date().toISOString() }] : [] } });
+  }
+  const rows = await c.env.DB.prepare(`SELECT rr.*,
+      (SELECT COUNT(*) FROM review_assignments ra WHERE ra.round_id = rr.id AND ra.status = 'submitted') AS submitted_reviews
+    FROM review_rounds rr WHERE rr.event_id = ? ORDER BY rr.round`)
+    .bind(eventId).all<Record<string, unknown>>();
+  return c.json({ data: { plans: rows.results.map((row) => reviewPlanFromRow(row, eventId)) } });
+});
+
+app.get("/api/v1/events/:eventId/integrations/airtable/status", async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const status = c.get("actor")?.demo
+    ? projectAirtableOperatorStatus({ envEnabled: false, authorityDefault: "d1" })
+    : await loadAirtableOperatorStatus(c.env, c.req.param("eventId"));
+  return c.json({ data: status });
+});
+
+app.put("/api/v1/events/:eventId/review-plans/:planId", zValidator("json", reviewPlanSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  const planId = c.req.param("planId");
+  const body = c.req.valid("json");
+  if (c.get("actor")?.demo) return c.json({ data: { id: planId, eventId, round: 1, submittedReviews: 0, updatedAt: new Date().toISOString(), ...body } });
+  const existing = await c.env.DB.prepare(`SELECT rr.*,
+      (SELECT COUNT(*) FROM review_assignments ra WHERE ra.round_id = rr.id AND ra.status = 'submitted') AS submitted_reviews
+    FROM review_rounds rr WHERE rr.id = ? AND rr.event_id = ?`)
+    .bind(planId, eventId).first<Record<string, unknown>>();
+  if (!existing) return jsonError(c, 404, "REVIEW_PLAN_NOT_FOUND", "Review plan not found.");
+  const existingRubric = JSON.stringify(parseJson(existing.rubric, []));
+  const nextRubric = JSON.stringify(body.rubric);
+  if (Number(existing.submitted_reviews) > 0 && existingRubric !== nextRubric) {
+    return jsonError(c, 409, "REVIEW_RUBRIC_LOCKED", "This rubric has submitted reviews. Create a future round before changing its scoring contract.");
+  }
+  const now = Date.now();
+  const statements = [
+    ...(body.status === "active" ? [c.env.DB.prepare("UPDATE review_rounds SET status = 'closed', updated_at = ? WHERE event_id = ? AND id <> ? AND status = 'active'").bind(now, eventId, planId)] : []),
+    c.env.DB.prepare("UPDATE review_rounds SET name = ?, status = ?, rubric = ?, updated_at = ? WHERE id = ? AND event_id = ?")
+      .bind(body.name, body.status, nextRubric, now, planId, eventId),
+  ];
+  const result = await c.env.DB.batch(statements);
+  if (!result[result.length - 1]?.meta.changes) return jsonError(c, 409, "REVIEW_PLAN_CONFLICT", "The review plan changed before it could be saved.");
+  return c.json({ data: { id: planId, eventId, round: Number(existing.round), submittedReviews: Number(existing.submitted_reviews), updatedAt: new Date(now).toISOString(), ...body } });
 });
 
 const enrollSchema = z.object({ eventId: z.string().min(1) });
@@ -800,13 +1055,6 @@ app.post("/api/v1/invitations/accept", zValidator("json", invitationAcceptSchema
   const acceptanceStatements = [
     c.env.DB.prepare("INSERT OR IGNORE INTO event_memberships (event_id, user_id, role, invited_by, accepted_at, created_at) SELECT event_id, ?, role, invited_by, ?, ? FROM event_invitations WHERE id = ?").bind(actor.id, now, now, invitation.id),
   ];
-  if (invitation.role === "reviewer") {
-    acceptanceStatements.push(
-      c.env.DB.prepare("INSERT OR IGNORE INTO reviewer_group_members (reviewer_group_id, user_id, created_at) SELECT id, ?, ? FROM reviewer_groups WHERE event_id = ?").bind(actor.id, now, invitation.eventId),
-      c.env.DB.prepare(backfillReviewerAssignmentsSql).bind(actor.id, now, now, actor.id, invitation.eventId, actor.id, actor.id),
-      c.env.DB.prepare(promoteAssignedBacklogSql).bind(now, invitation.eventId),
-    );
-  }
   acceptanceStatements.push(
     c.env.DB.prepare("UPDATE event_invitations SET accepted_at = ? WHERE id = ? AND accepted_at IS NULL").bind(now, invitation.id),
   );
@@ -989,18 +1237,16 @@ app.post("/api/v1/events/:eventId/submissions", zValidator("json", submissionSch
     SELECT ?, ? WHERE EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ?)`)
     .bind(proposalId, group.id, proposalId, c.req.param("eventId"), actor.id));
   if (activeRound) {
-    for (const reviewer of reviewerMembers.results) dependentStatements.push(c.env.DB.prepare(`INSERT INTO review_assignments (id, proposal_id, round_id, reviewer_user_id, status, scores, created_at, updated_at)
-      SELECT ?, ?, ?, ?, 'pending', '{}', ?, ?
-      WHERE EXISTS (
-        SELECT 1 FROM proposals p
-        WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ?
-          AND p.owner_user_id <> ?
-          AND NOT EXISTS (
-            SELECT 1 FROM proposal_speakers ps
-            JOIN speaker_profiles sp ON sp.id = ps.speaker_profile_id AND sp.event_id = p.event_id
-            WHERE ps.proposal_id = p.id AND sp.user_id = ?
-          )
-      )`)
+    for (const reviewer of reviewerMembers.results) dependentStatements.push(c.env.DB.prepare(`INSERT INTO review_assignments (id, proposal_id, round_id, reviewer_user_id, review_cycle, status, scores, created_at, updated_at)
+      SELECT ?, ?, ?, ?, p.review_cycle, 'pending', '{}', ?, ?
+      FROM proposals p
+      WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ?
+        AND p.owner_user_id <> ?
+        AND NOT EXISTS (
+          SELECT 1 FROM proposal_speakers ps
+          JOIN speaker_profiles sp ON sp.id = ps.speaker_profile_id AND sp.event_id = p.event_id
+          WHERE ps.proposal_id = p.id AND sp.user_id = ?
+        )`)
       .bind(crypto.randomUUID(), proposalId, activeRound.id, reviewer.id, now, now, proposalId, c.req.param("eventId"), actor.id, reviewer.id, reviewer.id));
   }
   let confirmationJob: { kind: "email"; idempotencyKey: string; payload: Record<string, unknown> } | null = null;
@@ -1052,13 +1298,15 @@ app.put("/api/v1/events/:eventId/submissions/:proposalId", zValidator("json", su
   const actor = c.get("actor")!;
   const body = c.req.valid("json");
   if (actor.demo) return c.json({ data: { id: c.req.param("proposalId"), eventId: c.req.param("eventId"), status: body.submit ? "submitted" : "draft", version: body.expectedVersion + 1, ...body } });
-  const proposal = await c.env.DB.prepare(`SELECT p.id, p.status, p.version, fv.fields, fv.settings, fv.confirmation_copy AS confirmationCopy, sf.status AS formStatus, sf.collects_participants AS collectsParticipants, sf.closes_at AS closesAt, sf.confirmation_email_enabled AS confirmationEmailEnabled, fv.max_speakers AS maxSpeakers, e.name AS eventName
+  const proposal = await c.env.DB.prepare(`SELECT p.id, p.status, p.version, p.review_cycle AS reviewCycle, fv.fields, fv.settings, fv.confirmation_copy AS confirmationCopy, sf.status AS formStatus, sf.collects_participants AS collectsParticipants, sf.closes_at AS closesAt, sf.confirmation_email_enabled AS confirmationEmailEnabled, fv.max_speakers AS maxSpeakers, e.name AS eventName
     FROM proposals p JOIN form_versions fv ON fv.id = p.form_version_id JOIN submission_forms sf ON sf.id = fv.form_id JOIN events e ON e.id = p.event_id
     WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ?`)
     .bind(c.req.param("proposalId"), c.req.param("eventId"), actor.id).first<Record<string, unknown>>();
   if (!proposal) return jsonError(c, 404, "SUBMISSION_NOT_FOUND", "Submission not found or not editable by you.");
   const proposalControls = versionControlsFromRow(proposal);
-  if (!applicantMayEditProposal(String(proposal.status) as ProposalStatus)) return jsonError(c, 409, "SUBMISSION_LOCKED", "Only a draft submission can be edited.");
+  const currentProposalStatus = String(proposal.status) as ProposalStatus;
+  const revisionOpen = currentProposalStatus === "changes_requested" || currentProposalStatus === "revision_open";
+  if (!applicantMayEditProposal(currentProposalStatus)) return jsonError(c, 409, "SUBMISSION_LOCKED", "Only a draft or an organizer-requested revision can be edited.");
   const normalizedEmails = body.speakers.map((speaker) => speaker.email.trim().toLowerCase());
   if (new Set(normalizedEmails).size !== normalizedEmails.length) return jsonError(c, 422, "DUPLICATE_SPEAKER", "Each speaker must have a different email address.");
   if (!verifiedPrimarySpeakerMatches(actor.email, body.speakers[0].email)) {
@@ -1070,7 +1318,13 @@ app.put("/api/v1/events/:eventId/submissions/:proposalId", zValidator("json", su
   if (proposalControls.collectsParticipants && body.speakers.length < settings.participantMin) {
     return jsonError(c, 422, "SPEAKER_MINIMUM", `This form requires at least ${settings.participantMin} participants.`);
   }
-  if (body.submit && (String(proposal.formStatus) !== "published" || (proposalControls.closesAt && Date.now() > new Date(proposalControls.closesAt).getTime()))) return jsonError(c, 409, "FORM_CLOSED", "The call for proposals closed before this draft could be submitted.");
+  const proposalFormClosed = String(proposal.formStatus) !== "published"
+    || Boolean(proposalControls.closesAt && Date.now() > new Date(proposalControls.closesAt).getTime());
+  if ((body.submit || revisionOpen) && proposalFormClosed) {
+    return jsonError(c, 409, "FORM_CLOSED", revisionOpen
+      ? "The call for proposals closed before these requested changes could be saved."
+      : "The call for proposals closed before this draft could be submitted.");
+  }
   const fields = submissionValidationFields(parseJson<FormField[]>(proposal.fields, []), proposalControls.collectsParticipants);
   const categories = configuredSubmissionCategories(fields, body.responses);
   const category = categories[0];
@@ -1138,8 +1392,8 @@ app.put("/api/v1/events/:eventId/submissions/:proposalId", zValidator("json", su
     confirmationJob = await submissionConfirmationJob({ db: c.env.DB, publicAppUrl: c.env.PUBLIC_APP_URL, eventId: c.req.param("eventId"), proposalId: String(proposal.id), proposalTitle: body.title, recipientName: primary.name, recipientEmail: primary.email, fallbackCopy: confirmationCopy });
   }
   const updateStatements = [
-    c.env.DB.prepare("UPDATE proposals SET reviewer_group_id = ?, title = ?, summary = ?, category = ?, format = ?, duration_minutes = ?, level = ?, responses = ?, status = CASE WHEN ? = 1 THEN ? ELSE status END, submitted_at = CASE WHEN ? = 1 THEN COALESCE(submitted_at, ?) ELSE submitted_at END, version = version + 1, updated_at = ? WHERE id = ? AND event_id = ? AND owner_user_id = ? AND version = ? AND status = 'draft'")
-      .bind(reviewerGroup?.id ?? null, body.title, body.summary, categories.join(", "), body.format, body.durationMinutes, body.level, JSON.stringify(body.responses), body.submit ? 1 : 0, submittedStatus, body.submit ? 1 : 0, now, now, proposal.id, c.req.param("eventId"), actor.id, body.expectedVersion),
+    c.env.DB.prepare("UPDATE proposals SET reviewer_group_id = ?, title = ?, summary = ?, category = ?, format = ?, duration_minutes = ?, level = ?, responses = ?, status = CASE WHEN ? = 1 THEN ? ELSE status END, submitted_at = CASE WHEN ? = 1 THEN COALESCE(submitted_at, ?) ELSE submitted_at END, version = version + 1, updated_at = ? WHERE id = ? AND event_id = ? AND owner_user_id = ? AND version = ? AND status = ?")
+      .bind(reviewerGroup?.id ?? null, body.title, body.summary, categories.join(", "), body.format, body.durationMinutes, body.level, JSON.stringify(body.responses), body.submit ? 1 : 0, submittedStatus, body.submit ? 1 : 0, now, now, proposal.id, c.req.param("eventId"), actor.id, body.expectedVersion, currentProposalStatus),
     ...rosterStatements,
     c.env.DB.prepare(`DELETE FROM proposal_speakers WHERE proposal_id = ?
       AND EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ? AND p.version = ? AND p.updated_at = ?)`)
@@ -1153,18 +1407,20 @@ app.put("/api/v1/events/:eventId/submissions/:proposalId", zValidator("json", su
     ...routing.groups.map((group) => c.env.DB.prepare(`INSERT OR IGNORE INTO proposal_reviewer_groups (proposal_id, reviewer_group_id)
       SELECT ?, ? WHERE EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ? AND p.version = ? AND p.updated_at = ?)`)
       .bind(proposal.id, group.id, proposal.id, c.req.param("eventId"), actor.id, body.expectedVersion + 1, now)),
-    ...(activeRound ? reviewerMembers.results.map((reviewer) => c.env.DB.prepare(`INSERT OR IGNORE INTO review_assignments (id, proposal_id, round_id, reviewer_user_id, status, scores, created_at, updated_at)
-      SELECT ?, ?, ?, ?, 'pending', '{}', ?, ?
-      WHERE EXISTS (
-        SELECT 1 FROM proposals p
-        WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ? AND p.version = ? AND p.status = ? AND p.updated_at = ?
-          AND p.owner_user_id <> ?
-          AND NOT EXISTS (
-            SELECT 1 FROM proposal_speakers ps
-            JOIN speaker_profiles sp ON sp.id = ps.speaker_profile_id AND sp.event_id = p.event_id
-            WHERE ps.proposal_id = p.id AND sp.user_id = ?
-          )
-      )`)
+    ...(revisionOpen && body.submit ? [c.env.DB.prepare(`DELETE FROM review_assignments
+      WHERE proposal_id = ? AND status IN ('pending', 'in_progress')
+        AND EXISTS (SELECT 1 FROM proposals p WHERE p.id = review_assignments.proposal_id AND p.event_id = ? AND p.owner_user_id = ? AND p.version = ? AND p.status = ? AND p.updated_at = ?)`)
+      .bind(proposal.id, c.req.param("eventId"), actor.id, body.expectedVersion + 1, submittedStatus, now)] : []),
+    ...(activeRound ? reviewerMembers.results.map((reviewer) => c.env.DB.prepare(`INSERT OR IGNORE INTO review_assignments (id, proposal_id, round_id, reviewer_user_id, review_cycle, status, scores, created_at, updated_at)
+      SELECT ?, ?, ?, ?, p.review_cycle, 'pending', '{}', ?, ?
+      FROM proposals p
+      WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ? AND p.version = ? AND p.status = ? AND p.updated_at = ?
+        AND p.owner_user_id <> ?
+        AND NOT EXISTS (
+          SELECT 1 FROM proposal_speakers ps
+          JOIN speaker_profiles sp ON sp.id = ps.speaker_profile_id AND sp.event_id = p.event_id
+          WHERE ps.proposal_id = p.id AND sp.user_id = ?
+        )`)
       .bind(crypto.randomUUID(), proposal.id, activeRound.id, reviewer.id, now, now, proposal.id, c.req.param("eventId"), actor.id, body.expectedVersion + 1, submittedStatus, now, reviewer.id, reviewer.id)) : []),
   ];
   if (confirmationJob) {
@@ -1182,7 +1438,77 @@ app.put("/api/v1/events/:eventId/submissions/:proposalId", zValidator("json", su
       console.error(JSON.stringify({ event: "submission.confirmation_queue_failed", eventId: c.req.param("eventId"), proposalId: proposal.id, recovery: "scheduled_outbox", error: error instanceof Error ? error.message : String(error) }));
     }
   }
-  return c.json({ data: { id: proposal.id, status: body.submit ? submittedStatus : proposal.status, assignments: reviewerMembers.results.length, version: body.expectedVersion + 1, updatedAt: new Date(now).toISOString(), confirmationQueued: Boolean(confirmationJob) } });
+  return c.json({ data: { id: proposal.id, status: body.submit ? submittedStatus : currentProposalStatus, assignments: reviewerMembers.results.length, version: body.expectedVersion + 1, updatedAt: new Date(now).toISOString(), confirmationQueued: Boolean(confirmationJob) } });
+});
+
+app.post("/api/v1/events/:eventId/submissions/:proposalId/reopen", async (c) => {
+  const actor = c.get("actor")!;
+  const eventId = c.req.param("eventId");
+  const proposalId = c.req.param("proposalId");
+  if (actor.demo) {
+    const proposal = createDemoWorkspace(actor.id).proposals.find((candidate) => candidate.id === proposalId);
+    if (!proposal || !applicantMayOpenProposalRevision(proposal.status)) {
+      return jsonError(c, 409, "SUBMISSION_REVISION_INVALID", "Only a submitted proposal without a final decision can be edited.");
+    }
+    return c.json({ data: {
+      id: proposalId,
+      status: "revision_open",
+      version: (proposal.version ?? 1) + 1,
+      revisionRequestedAt: new Date().toISOString(),
+      revokedAssignments: createDemoWorkspace(actor.id).reviews.filter((review) => review.proposalId === proposalId && review.status !== "submitted").length,
+      submittedReviewsPreserved: createDemoWorkspace(actor.id).reviews.filter((review) => review.proposalId === proposalId && review.status === "submitted").length,
+    } });
+  }
+  const proposal = await c.env.DB.prepare(`SELECT p.id, p.title, p.status, p.version,
+      fv.settings, sf.status AS formStatus, sf.submission_type AS submissionType,
+      sf.collects_participants AS collectsParticipants, sf.max_submissions_per_user AS maxSubmissionsPerUser,
+      sf.redirect_to_portal AS redirectToPortal, sf.confirmation_email_enabled AS confirmationEmailEnabled,
+      sf.closes_at AS closesAt
+    FROM proposals p
+    JOIN form_versions fv ON fv.id = p.form_version_id
+    JOIN submission_forms sf ON sf.id = fv.form_id AND sf.event_id = p.event_id
+    WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ?`)
+    .bind(proposalId, eventId, actor.id)
+    .first<Record<string, unknown>>();
+  if (!proposal) return jsonError(c, 404, "SUBMISSION_NOT_FOUND", "Submission not found or not editable by you.");
+  if (!applicantMayOpenProposalRevision(String(proposal.status) as ProposalStatus)) {
+    return jsonError(c, 409, "SUBMISSION_REVISION_INVALID", "Only a submitted proposal without a final decision can be edited.");
+  }
+  const controls = versionControlsFromRow(proposal);
+  if (String(proposal.formStatus) !== "published" || (controls.closesAt && Date.now() > new Date(controls.closesAt).getTime())) {
+    return jsonError(c, 409, "FORM_CLOSED", "The call for proposals is closed, so this submission can no longer be edited.");
+  }
+  const now = Date.now();
+  const auditId = crypto.randomUUID();
+  const note = "Applicant reopened this proposal for editing before the CFP deadline.";
+  const [auditResult, updateResult, revokedResult] = await c.env.DB.batch([
+    c.env.DB.prepare(auditApplicantRevisionOpenSql).bind(
+      auditId,
+      actor.id,
+      "Applicant opened a controlled proposal revision before the CFP deadline.",
+      JSON.stringify({ previousStatus: proposal.status, previousVersion: proposal.version }),
+      c.get("requestId"),
+      now,
+      proposalId,
+      actor.id,
+      eventId,
+    ),
+    c.env.DB.prepare(updateProposalForApplicantRevisionSql).bind(note, now, now, proposalId, eventId, actor.id, auditId),
+    c.env.DB.prepare(revokeOpenReviewsForRevisionSql).bind(proposalId, auditId, eventId),
+  ]);
+  if (!auditResult.meta.changes || !updateResult.meta.changes) {
+    return jsonError(c, 409, "SUBMISSION_REVISION_INVALID", "The proposal changed before editing could begin.");
+  }
+  const submittedReviews = await c.env.DB.prepare("SELECT COUNT(*) AS count FROM review_assignments WHERE proposal_id = ? AND status = 'submitted'")
+    .bind(proposalId).first<{ count: number }>();
+  return c.json({ data: {
+    id: proposalId,
+    status: "revision_open",
+    version: Number(proposal.version) + 1,
+    revisionRequestedAt: new Date(now).toISOString(),
+    revokedAssignments: revokedResult.meta.changes,
+    submittedReviewsPreserved: Number(submittedReviews?.count ?? 0),
+  } });
 });
 
 app.post("/api/v1/events/:eventId/submissions/:proposalId/withdraw", async (c) => {
@@ -1202,6 +1528,159 @@ app.post("/api/v1/events/:eventId/submissions/:proposalId/withdraw", async (c) =
   ]);
   if (!result.meta.changes) return jsonError(c, 409, "SUBMISSION_NOT_WITHDRAWABLE", "The proposal changed before it could be withdrawn.");
   return c.json({ data: { id: c.req.param("proposalId"), status: "withdrawn", withdrawnAt: new Date(now).toISOString(), revokedAssignments: revoked.meta.changes } });
+});
+
+const revisionRequestSchema = z.object({ note: z.string().trim().min(3).max(2000) });
+
+function prepareRevisionRequestOutboxJob(
+  db: D1Database,
+  job: OutboxJob,
+  input: { auditId: string; proposalId: string; eventId: string; now: number },
+) {
+  return db.prepare(`INSERT OR IGNORE INTO outbox
+    (id, event_id, kind, idempotency_key, payload, status, attempts, available_at, created_at, updated_at)
+    SELECT ?, p.event_id, ?, ?, ?, 'queued', 0, ?, ?, ?
+    FROM proposals p
+    JOIN audit_logs revision_audit
+      ON revision_audit.id = ?
+      AND revision_audit.event_id = p.event_id
+      AND revision_audit.entity_type = 'proposal'
+      AND revision_audit.entity_id = p.id
+      AND revision_audit.action = 'proposal.changes_requested'
+    WHERE p.id = ? AND p.event_id = ? AND p.status = 'changes_requested'`)
+    .bind(
+      crypto.randomUUID(),
+      job.kind,
+      job.idempotencyKey,
+      JSON.stringify(job.payload),
+      input.now,
+      input.now,
+      input.now,
+      input.auditId,
+      input.proposalId,
+      input.eventId,
+    );
+}
+
+app.post("/api/v1/events/:eventId/proposals/:proposalId/request-changes", zValidator("json", revisionRequestSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const body = c.req.valid("json");
+  const eventId = c.req.param("eventId");
+  const proposalId = c.req.param("proposalId");
+  if (c.get("actor")?.demo) {
+    const demoWorkspace = createDemoWorkspace();
+    if (demoWorkspace.event.id !== eventId) return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
+    const proposal = demoWorkspace.proposals.find((candidate) => candidate.id === proposalId);
+    if (!proposal || !proposalMayRequestRevision(proposal.status)) return jsonError(c, 409, "PROPOSAL_REVISION_INVALID", "This demo proposal cannot be reopened for changes.");
+    const proposalReviews = demoWorkspace.reviews.filter((review) => review.proposalId === proposalId);
+    return c.json({ data: {
+      proposalId,
+      status: "changes_requested",
+      note: body.note,
+      revisionRequestedAt: new Date().toISOString(),
+      revokedAssignments: proposalReviews.filter((review) => review.status !== "submitted").length,
+      submittedReviewsPreserved: proposalReviews.filter((review) => review.status === "submitted").length,
+      messagesQueued: proposal.speakers.length,
+      messagesDispatched: proposal.speakers.length,
+    } });
+  }
+
+  const proposal = await c.env.DB.prepare(`SELECT p.title, p.status, p.version,
+      e.name AS eventName, e.slug AS eventSlug, sf.slug AS formSlug, sf.status AS formStatus,
+      sf.submission_type AS submissionType, sf.collects_participants AS collectsParticipants,
+      sf.max_submissions_per_user AS maxSubmissionsPerUser, sf.redirect_to_portal AS redirectToPortal,
+      sf.confirmation_email_enabled AS confirmationEmailEnabled, sf.closes_at AS closesAt, fv.settings
+    FROM proposals p
+    JOIN events e ON e.id = p.event_id
+    JOIN form_versions fv ON fv.id = p.form_version_id
+    JOIN submission_forms sf ON sf.id = fv.form_id AND sf.event_id = p.event_id
+    WHERE p.id = ? AND p.event_id = ?`)
+    .bind(proposalId, eventId)
+    .first<Record<string, unknown>>();
+  if (!proposal) return jsonError(c, 404, "PROPOSAL_NOT_FOUND", "Proposal not found.");
+  if (!proposalMayRequestRevision(String(proposal.status) as ProposalStatus)) {
+    return jsonError(c, 409, "PROPOSAL_REVISION_INVALID", `A ${String(proposal.status).replaceAll("_", " ")} proposal cannot be reopened for changes.`);
+  }
+  const controls = versionControlsFromRow(proposal);
+  if (String(proposal.formStatus) !== "published" || (controls.closesAt && Date.now() > new Date(controls.closesAt).getTime())) {
+    return jsonError(c, 409, "FORM_CLOSED", "The call for proposals is closed, so this proposal can no longer be reopened.");
+  }
+
+  const [speakers, submittedReviewCount] = await Promise.all([
+    c.env.DB.prepare(`SELECT sp.id, sp.name, sp.email
+      FROM proposal_speakers ps
+      JOIN speaker_profiles sp ON sp.id = ps.speaker_profile_id
+      JOIN proposals p ON p.id = ps.proposal_id AND p.event_id = sp.event_id
+      WHERE p.id = ? AND p.event_id = ? ORDER BY ps.sort_order`)
+      .bind(proposalId, eventId).all<{ id: string; name: string; email: string }>(),
+    c.env.DB.prepare("SELECT COUNT(*) AS count FROM review_assignments WHERE proposal_id = ? AND status = 'submitted'")
+      .bind(proposalId).first<{ count: number }>(),
+  ]);
+  const editUrl = new URL(`/submit/${encodeURIComponent(String(proposal.eventSlug))}`, c.env.PUBLIC_APP_URL);
+  if (proposal.formSlug) editUrl.searchParams.set("form", String(proposal.formSlug));
+  editUrl.searchParams.set("edit", proposalId);
+  const variables = {
+    "event.name": String(proposal.eventName),
+    "proposal.title": String(proposal.title),
+    "revision.note": body.note,
+    "proposal.edit_url": editUrl.toString(),
+  };
+  const revisionJobs: OutboxJob[] = speakers.results.map((speaker) => {
+    const speakerVariables = { ...variables, "speaker.name": speaker.name };
+    const htmlVariables = Object.fromEntries(Object.entries(speakerVariables).map(([key, value]) => [key, escapeHtml(value)]));
+    return {
+      kind: "email",
+      idempotencyKey: `proposal-revision:${proposalId}:${String(proposal.version)}:${speaker.id}`,
+      payload: {
+        kind: "communication",
+        communicationKind: "revision_request",
+        eventId,
+        recipient: speaker.email.toLowerCase(),
+        recipientName: speaker.name,
+        subject: renderMessageTemplate("Changes requested for your {{event.name}} proposal", speakerVariables),
+        text: renderMessageTemplate("Hi {{speaker.name}},\n\nThe program team requested changes to “{{proposal.title}}”:\n\n{{revision.note}}\n\nRevise and resubmit before the CFP closes: {{proposal.edit_url}}", speakerVariables),
+        html: renderMessageTemplate("<p>Hi {{speaker.name}},</p><p>The program team requested changes to <strong>“{{proposal.title}}”</strong>:</p><blockquote>{{revision.note}}</blockquote><p><a href=\"{{proposal.edit_url}}\">Revise and resubmit before the CFP closes</a></p>", htmlVariables),
+      },
+    };
+  });
+  const now = Date.now();
+  const auditId = crypto.randomUUID();
+  const statements = [
+    c.env.DB.prepare(auditProposalRevisionRequestSql).bind(...auditProposalRevisionRequestBindings({
+      auditId,
+      actorUserId: c.get("actor")!.id,
+      proposalId,
+      eventId,
+      summary: "Organizer requested applicant changes before review continues.",
+      metadata: JSON.stringify({ previousStatus: proposal.status, previousVersion: proposal.version, note: body.note }),
+      requestId: c.get("requestId"),
+      now,
+    })),
+    c.env.DB.prepare(updateProposalForRevisionSql).bind(...updateProposalForRevisionBindings({ note: body.note, now, proposalId, eventId, auditId })),
+    c.env.DB.prepare(revokeOpenReviewsForRevisionSql).bind(proposalId, auditId, eventId),
+    ...revisionJobs.map((job) => prepareRevisionRequestOutboxJob(c.env.DB, job, { auditId, proposalId, eventId, now })),
+  ];
+  const results = await c.env.DB.batch(statements);
+  if (!results[1].meta.changes) {
+    return jsonError(c, 409, "PROPOSAL_REVISION_INVALID", "The proposal changed before the revision request could be saved.");
+  }
+  let messagesDispatched = 0;
+  if (revisionJobs.length && c.env.JOBS_QUEUE) {
+    messagesDispatched = await dispatchPersistedJobs(c.env.JOBS_QUEUE, revisionJobs, (job, error) => {
+      console.error(JSON.stringify({ event: "proposal.revision_queue_failed", idempotencyKey: job.idempotencyKey, recovery: "scheduled_outbox", error: error instanceof Error ? error.message : String(error) }));
+    });
+  }
+  return c.json({ data: {
+    proposalId,
+    status: "changes_requested",
+    note: body.note,
+    revisionRequestedAt: new Date(now).toISOString(),
+    revokedAssignments: results[2].meta.changes,
+    submittedReviewsPreserved: Number(submittedReviewCount?.count ?? 0),
+    messagesQueued: revisionJobs.length,
+    messagesDispatched,
+  } });
 });
 
 const decisionSchema = z.object({ status: z.enum(["accept_queue", "accepted", "decline_queue", "rejected", "waitlisted"]), note: z.string().max(2000).optional() });
@@ -1456,6 +1935,7 @@ app.post("/api/v1/events/:eventId/proposals/:proposalId/review", zValidator("jso
       JOIN review_rounds rr ON rr.id = ra.round_id
       JOIN proposals p ON p.id = ra.proposal_id AND p.event_id = rr.event_id
       WHERE ra.proposal_id = ? AND ra.reviewer_user_id = ? AND rr.event_id = ? AND rr.status = 'active'
+        AND ra.review_cycle = p.review_cycle
         AND p.owner_user_id <> ?
         AND NOT EXISTS (
           SELECT 1 FROM proposal_speakers ps
@@ -1496,6 +1976,7 @@ app.post("/api/v1/events/:eventId/proposals/:proposalId/review", zValidator("jso
         SELECT 1 FROM proposals p
         JOIN review_rounds rr ON rr.id = review_assignments.round_id AND rr.event_id = p.event_id AND rr.status = 'active'
         WHERE p.id = review_assignments.proposal_id AND p.event_id = ? AND p.status = ?
+          AND review_assignments.review_cycle = p.review_cycle
           AND p.owner_user_id <> ?
           AND NOT EXISTS (
             SELECT 1 FROM proposal_speakers ps
@@ -1512,6 +1993,7 @@ app.post("/api/v1/events/:eventId/proposals/:proposalId/review", zValidator("jso
         AND EXISTS (
           SELECT 1 FROM review_assignments
           WHERE id = ? AND reviewer_user_id = ? AND proposal_id = proposals.id
+            AND review_cycle = proposals.review_cycle
             AND status = 'submitted' AND updated_at = ?
         )`)
       .bind(now, c.req.param("proposalId"), c.req.param("eventId"), assignment.id, actor.id, now));
@@ -1589,15 +2071,103 @@ app.post("/api/v1/events/:eventId/tasks/:taskId/artifact", zValidator("json", ta
   const actor = c.get("actor")!;
   const { uploadId } = c.req.valid("json");
   if (actor.demo) return c.json({ data: { taskId: c.req.param("taskId"), uploadId, status: "complete", completedAt: new Date().toISOString() } });
+  const task = await c.env.DB.prepare(`SELECT st.id, tt.file_request_id AS fileRequestId
+    FROM speaker_tasks st
+    JOIN speaker_profiles sp ON sp.id = st.speaker_profile_id AND sp.event_id = st.event_id
+    LEFT JOIN task_templates tt ON tt.id = st.template_id AND tt.event_id = st.event_id
+    WHERE st.id = ? AND st.event_id = ? AND sp.user_id = ?
+      AND (st.type = 'upload' OR tt.completion_mode = 'file_request')`)
+    .bind(c.req.param("taskId"), c.req.param("eventId"), actor.id)
+    .first<{ id: string; fileRequestId: string | null }>();
+  if (!task) return jsonError(c, 422, "TASK_ARTIFACT_INVALID", "The task or uploaded artifact is not available to this account.");
   const now = Date.now();
-  const result = await c.env.DB.prepare(`UPDATE speaker_tasks SET artifact_upload_id = ?, status = 'complete', completed_at = ?, updated_at = ?
-    WHERE id = ? AND event_id = ?
-      AND speaker_profile_id IN (SELECT id FROM speaker_profiles WHERE event_id = ? AND user_id = ?)
-      AND (type = 'upload' OR template_id IN (SELECT id FROM task_templates WHERE event_id = ? AND completion_mode = 'file_request'))
-      AND ? IN (SELECT id FROM uploads WHERE event_id = ? AND owner_user_id = ? AND purpose IN ('slides', 'supporting_document') AND deleted_at IS NULL)`)
-    .bind(uploadId, now, now, c.req.param("taskId"), c.req.param("eventId"), c.req.param("eventId"), actor.id, c.req.param("eventId"), uploadId, c.req.param("eventId"), actor.id).run();
-  if (!result.meta.changes) return jsonError(c, 422, "TASK_ARTIFACT_INVALID", "The task or uploaded artifact is not available to this account.");
+  const statements = [
+    c.env.DB.prepare(`UPDATE speaker_tasks SET artifact_upload_id = ?, status = 'complete', completed_at = ?, updated_at = ?
+      WHERE id = ? AND event_id = ?
+        AND speaker_profile_id IN (SELECT id FROM speaker_profiles WHERE event_id = ? AND user_id = ?)
+        AND (type = 'upload' OR template_id IN (SELECT id FROM task_templates WHERE event_id = ? AND completion_mode = 'file_request'))
+        AND ? IN (SELECT id FROM uploads WHERE event_id = ? AND owner_user_id = ? AND purpose IN ('slides', 'supporting_document') AND deleted_at IS NULL)`)
+      .bind(uploadId, now, now, task.id, c.req.param("eventId"), c.req.param("eventId"), actor.id, c.req.param("eventId"), uploadId, c.req.param("eventId"), actor.id),
+  ];
+  if (task.fileRequestId) {
+    statements.push(c.env.DB.prepare(`INSERT INTO file_request_responses
+      (id, file_request_id, target_id, uploader_user_id, upload_ids, submitted_at, created_at, updated_at)
+      SELECT ?, ?, ?, ?, json_array(?), ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM speaker_tasks st
+        JOIN speaker_profiles sp ON sp.id = st.speaker_profile_id AND sp.event_id = st.event_id
+        JOIN task_templates tt ON tt.id = st.template_id AND tt.event_id = st.event_id
+        JOIN uploads uploaded ON uploaded.id = ? AND uploaded.event_id = st.event_id
+          AND uploaded.owner_user_id = ? AND uploaded.purpose IN ('slides', 'supporting_document') AND uploaded.deleted_at IS NULL
+        WHERE st.id = ? AND st.event_id = ? AND sp.user_id = ?
+          AND tt.file_request_id = ? AND st.artifact_upload_id = ?
+      )
+      ON CONFLICT(file_request_id, target_id) DO UPDATE SET
+        uploader_user_id = excluded.uploader_user_id,
+        upload_ids = CASE
+          WHEN EXISTS (
+            SELECT 1 FROM json_each(file_request_responses.upload_ids)
+            WHERE json_each.value = json_extract(excluded.upload_ids, '$[0]')
+          ) THEN file_request_responses.upload_ids
+          ELSE json_insert(file_request_responses.upload_ids, '$[#]', json_extract(excluded.upload_ids, '$[0]'))
+        END,
+        submitted_at = excluded.submitted_at,
+        updated_at = excluded.updated_at`)
+      .bind(crypto.randomUUID(), task.fileRequestId, task.id, actor.id, uploadId, now, now, now,
+        uploadId, actor.id, task.id, c.req.param("eventId"), actor.id, task.fileRequestId, uploadId));
+  }
+  const results = await c.env.DB.batch(statements);
+  if (!results[0].meta.changes || (task.fileRequestId && !results[1]?.meta.changes)) {
+    return jsonError(c, 422, "TASK_ARTIFACT_INVALID", "The task or uploaded artifact is not available to this account.");
+  }
   return c.json({ data: { taskId: c.req.param("taskId"), uploadId, status: "complete", completedAt: new Date(now).toISOString() } });
+});
+
+app.get("/api/v1/events/:eventId/tasks/:taskId/artifacts/:uploadId", async (c) => {
+  const actor = c.get("actor")!;
+  if (actor.demo) return jsonError(c, 404, "DEMO_UPLOAD_NOT_STORED", "Demo uploads are not persisted between requests.");
+  const upload = await c.env.DB.prepare(`SELECT uploaded.object_key AS objectKey, uploaded.file_name AS fileName,
+      uploaded.content_type AS contentType
+    FROM speaker_tasks st
+    JOIN speaker_profiles sp ON sp.id = st.speaker_profile_id AND sp.event_id = st.event_id
+    JOIN uploads uploaded ON uploaded.id = ? AND uploaded.event_id = st.event_id AND uploaded.deleted_at IS NULL
+    LEFT JOIN task_templates tt ON tt.id = st.template_id AND tt.event_id = st.event_id
+    LEFT JOIN file_request_responses response ON response.file_request_id = tt.file_request_id AND response.target_id = st.id
+    WHERE st.id = ? AND st.event_id = ? AND (? = 'organizer' OR sp.user_id = ?)
+      AND (
+        st.artifact_upload_id = uploaded.id
+        OR EXISTS (SELECT 1 FROM json_each(COALESCE(response.upload_ids, '[]')) WHERE json_each.value = uploaded.id)
+      )`)
+    .bind(c.req.param("uploadId"), c.req.param("taskId"), c.req.param("eventId"), actor.role, actor.id)
+    .first<{ objectKey: string; fileName: string; contentType: string }>();
+  if (!upload) return jsonError(c, 404, "TASK_ARTIFACT_NOT_FOUND", "This file version is not available for this task.");
+  const object = await c.env.UPLOADS.get(upload.objectKey);
+  if (!object) return jsonError(c, 404, "UPLOAD_OBJECT_NOT_FOUND", "The file record exists, but its object is unavailable.");
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("content-type", upload.contentType);
+  headers.set("etag", object.httpEtag);
+  headers.set("content-disposition", `attachment; filename*=UTF-8''${encodeURIComponent(upload.fileName)}`);
+  headers.set("cache-control", "private, no-store");
+  return new Response(object.body, { headers });
+});
+
+const taskCommentSchema = z.object({ body: z.string().trim().min(1).max(5000) });
+app.post("/api/v1/events/:eventId/tasks/:taskId/comments", zValidator("json", taskCommentSchema), async (c) => {
+  const actor = c.get("actor")!;
+  const body = c.req.valid("json");
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  if (actor.demo) return c.json({ data: { id, authorId: actor.id, authorName: actor.name, body: body.body, createdAt: new Date(now).toISOString() } }, 201);
+  const result = await c.env.DB.prepare(`INSERT INTO task_comments (id, event_id, task_id, author_user_id, body, created_at)
+    SELECT ?, st.event_id, st.id, ?, ?, ?
+    FROM speaker_tasks st
+    JOIN speaker_profiles sp ON sp.id = st.speaker_profile_id AND sp.event_id = st.event_id
+    WHERE st.id = ? AND st.event_id = ? AND (? = 'organizer' OR sp.user_id = ?)`)
+    .bind(id, actor.id, body.body, now, c.req.param("taskId"), c.req.param("eventId"), actor.role, actor.id)
+    .run();
+  if (!result.meta.changes) return jsonError(c, 404, "TASK_NOT_FOUND", "This task is not available to your account.");
+  return c.json({ data: { id, authorId: actor.id, authorName: actor.name, body: body.body, createdAt: new Date(now).toISOString() } }, 201);
 });
 
 const taskResponseSchema = z.object({ responses: formResponseRecordSchema, submit: z.boolean().default(false) });
@@ -1822,7 +2392,7 @@ app.post("/api/v1/events/:eventId/forms", zValidator("json", formDraftSchema), a
   const fieldErrors = formDefinitionErrors(body.fields);
   if (Object.keys(fieldErrors).length) return jsonError(c, 422, "FORM_DEFINITION_INVALID", "Fix the form definition before saving.", fieldErrors);
   const id = crypto.randomUUID();
-  if (c.get("actor")?.demo) return c.json({ data: { id, eventId: c.req.param("eventId"), version: 1, status: "draft", ...body } }, 201);
+  if (c.get("actor")?.demo) return c.json({ data: { id, eventId: c.req.param("eventId"), slug: `${body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60)}-${id.slice(0, 6)}`, kind: "cfp", version: 1, status: "draft", submissions: 0, updatedAt: new Date().toISOString(), ...body } }, 201);
   const now = Date.now();
   const slug = `${body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60)}-${id.slice(0, 6)}`;
   const versionSettings = JSON.stringify(formVersionSettingsWithControls(body.settings, controlsFromFormDraft(body)));
@@ -1832,7 +2402,7 @@ app.post("/api/v1/events/:eventId/forms", zValidator("json", formDraftSchema), a
     c.env.DB.prepare("INSERT INTO form_versions (id, form_id, version, public_title, page_heading, welcome_title, welcome_copy, confirmation_copy, max_speakers, allow_multiple_drafts, fields, settings, created_by, created_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .bind(crypto.randomUUID(), id, body.publicTitle, body.pageHeading, body.welcomeTitle, body.welcomeCopy, body.confirmationCopy, body.maxSpeakers, body.allowMultipleDrafts ? 1 : 0, JSON.stringify(body.fields), versionSettings, c.get("actor")!.id, now),
   ]);
-  return c.json({ data: { id, eventId: c.req.param("eventId"), version: 1, status: "draft", ...body } }, 201);
+  return c.json({ data: { id, eventId: c.req.param("eventId"), slug, kind: "cfp", version: 1, status: "draft", submissions: 0, updatedAt: new Date(now).toISOString(), ...body } }, 201);
 });
 
 app.put("/api/v1/events/:eventId/forms/:formId", zValidator("json", formDraftUpdateSchema), async (c) => {
@@ -1939,12 +2509,6 @@ app.post("/api/v1/events/:eventId/forms/:formId/publish", zValidator("json", for
       SELECT ?, ?, ?, ?, ?, ?
       WHERE NOT EXISTS (SELECT 1 FROM reviewer_groups WHERE event_id = ? AND lower(category) = lower(?))`)
       .bind(crypto.randomUUID(), c.req.param("eventId"), `${category} committee`, category, now, now, c.req.param("eventId"), category)),
-    c.env.DB.prepare(`INSERT OR IGNORE INTO reviewer_group_members (reviewer_group_id, user_id, created_at)
-      SELECT rg.id, em.user_id, ?
-      FROM reviewer_groups rg
-      JOIN event_memberships em ON em.event_id = rg.event_id AND em.role = 'reviewer'
-      WHERE rg.event_id = ?`)
-      .bind(now, c.req.param("eventId")),
   ]);
   if (!result[0].meta.changes || !result[1].meta.changes) return jsonError(c, 409, "FORM_VERSION_CONFLICT", "Publish the latest saved version of this form.");
   return c.json({ data: { formId: c.req.param("formId"), version: body.version, status: "published", publishedAt: new Date(now).toISOString() } });
@@ -1962,16 +2526,28 @@ app.post("/api/v1/events/:eventId/forms/:formId/close", async (c) => {
   return c.json({ data: { formId: c.req.param("formId"), status: "closed", closedAt: new Date().toISOString() } });
 });
 
+const externalTaskUrlSchema = z.string().trim().max(2048).refine((value) => {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}, "Use a complete https:// URL.");
+
 const taskTemplateSchema = z.object({
   title: z.string().trim().min(2).max(255),
   description: z.string().trim().min(2).max(5000),
   type: z.enum(["profile", "upload", "form", "calendar"]),
   targetType: z.enum(["contact", "group", "submission"]),
   relativeDueDays: z.number().int().min(0).max(365),
+  externalUrl: externalTaskUrlSchema.optional(),
   fields: z.array(formFieldSchema).min(1).max(50).optional(),
 }).superRefine((value, context) => {
   if (value.type === "form" && !value.fields?.length) {
     context.addIssue({ code: "custom", path: ["fields"], message: "Add at least one question to a form task." });
+  }
+  if (value.externalUrl && ["form", "upload"].includes(value.type)) {
+    context.addIssue({ code: "custom", path: ["externalUrl"], message: "External action links are available on manual profile or calendar tasks." });
   }
 });
 
@@ -2063,9 +2639,9 @@ app.post("/api/v1/events/:eventId/task-templates", zValidator("json", taskTempla
   }
   const completionMode = body.type === "form" ? "form" : body.type === "upload" ? "file_request" : "manual";
   statements.push(c.env.DB.prepare(`INSERT INTO task_templates
-    (id, event_id, title, description, type, target_type, completion_mode, relative_due_days, form_version_id, file_request_id, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(id, eventId, body.title, body.description, body.type, body.targetType, completionMode, body.relativeDueDays, formVersionId, fileRequestId, now, now));
+    (id, event_id, title, description, type, target_type, completion_mode, relative_due_days, external_url, form_version_id, file_request_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(id, eventId, body.title, body.description, body.type, body.targetType, completionMode, body.relativeDueDays, body.externalUrl ?? null, formVersionId, fileRequestId, now, now));
   await c.env.DB.batch(statements);
   return c.json({ data: { id, ...body, completionMode, formId, formFields: body.type === "form" ? body.fields : undefined, fileRequestId: fileRequestId ?? undefined } }, 201);
 });
@@ -2125,9 +2701,9 @@ app.put("/api/v1/events/:eventId/task-templates/:templateId", zValidator("json",
     }
   }
   const completionMode = body.type === "form" ? "form" : body.type === "upload" ? "file_request" : "manual";
-  statements.push(c.env.DB.prepare(`UPDATE task_templates SET title = ?, description = ?, type = ?, target_type = ?, completion_mode = ?, relative_due_days = ?, form_version_id = ?, file_request_id = ?, updated_at = ?
+  statements.push(c.env.DB.prepare(`UPDATE task_templates SET title = ?, description = ?, type = ?, target_type = ?, completion_mode = ?, relative_due_days = ?, external_url = ?, form_version_id = ?, file_request_id = ?, updated_at = ?
     WHERE id = ? AND event_id = ?`)
-    .bind(body.title, body.description, body.type, body.targetType, completionMode, body.relativeDueDays, formVersionId, fileRequestId, now, templateId, eventId));
+    .bind(body.title, body.description, body.type, body.targetType, completionMode, body.relativeDueDays, body.externalUrl ?? null, formVersionId, fileRequestId, now, templateId, eventId));
   const results = await c.env.DB.batch(statements);
   if (!results.at(-1)?.meta.changes) return jsonError(c, 409, "TASK_TEMPLATE_UPDATE_FAILED", "The task template changed before it could be updated.");
   return c.json({ data: { id: templateId, ...body, completionMode, formId, formFields: body.type === "form" ? body.fields : undefined, fileRequestId: fileRequestId ?? undefined } });
@@ -2216,6 +2792,29 @@ app.post("/api/v1/events/:eventId/assistant", zValidator("json", readinessAssist
   return c.json({ data: { answer: readinessAnswer(workspace, question), insights: readinessInsights(workspace), generatedAt: new Date().toISOString(), mode: "grounded" } });
 });
 
+app.get("/api/v1/events/:eventId/communications/history", async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  if (c.get("actor")?.demo) {
+    const workspace = createDemoWorkspace(c.get("actor")!.id);
+    if (workspace.event.id !== eventId) return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
+    return c.json({ data: { deliveries: demoCommunicationDeliveries(eventId), generatedAt: new Date().toISOString() } });
+  }
+  const rows = await c.env.DB.prepare(`SELECT id, event_id AS eventId, kind AS transport,
+      idempotency_key AS idempotencyKey, payload, status, attempts,
+      last_error AS lastError, sent_at AS sentAt, created_at AS createdAt, updated_at AS updatedAt
+    FROM outbox
+    WHERE event_id = ? AND kind IN ('email', 'calendar')
+    ORDER BY created_at DESC, id DESC LIMIT 100`)
+    .bind(eventId)
+    .all<CommunicationOutboxRow>();
+  const deliveries = rows.results
+    .map((row) => projectCommunicationDelivery(row))
+    .filter((delivery) => delivery !== null);
+  return c.json({ data: { deliveries, generatedAt: new Date().toISOString() } });
+});
+
 const queueSchema = z.object({ kind: z.enum(["reminder", "acceptance", "calendar"]), recipientIds: z.array(z.string()).min(1).max(50), templateId: z.string().optional() });
 app.post("/api/v1/events/:eventId/communications/send", zValidator("json", queueSchema), async (c) => {
   const denied = requireRole(c, ["organizer"]);
@@ -2290,7 +2889,7 @@ app.post("/api/v1/events/:eventId/communications/send", zValidator("json", queue
           "session.room": session.room ?? "Room to be confirmed",
         };
         const htmlVariables = Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, escapeHtml(value)]));
-        jobs.push({ kind: "calendar", idempotencyKey: messageKey, payload: { kind: "communication", eventId: c.req.param("eventId"), recipient: speaker.email, recipientName: speaker.name, subject: renderMessageTemplate(template?.subject ?? "Your {{event.name}} session: {{session.title}}", variables), text: renderMessageTemplate(template?.text ?? "Hi {{speaker.name}}, your session “{{session.title}}” is scheduled in {{session.room}}. Add the attached calendar invitation to your calendar.", variables), html: renderMessageTemplate(template?.html ?? "<p>Hi {{speaker.name}},</p><p>Your session <strong>“{{session.title}}”</strong> is scheduled in {{session.room}}. The calendar invitation is attached.</p>", htmlVariables), calendar: { method: "REQUEST", uid: session.uid, sequence: session.sequence, title: session.title, description: session.description, location: `${session.room ?? "Room to be confirmed"}, ${event.venue ?? ""}`, startsAt: new Date(Number(session.startsAt)).toISOString(), endsAt: new Date(Number(session.endsAt)).toISOString(), organizerName: event.name } } });
+        jobs.push({ kind: "calendar", idempotencyKey: messageKey, payload: { kind: "communication", communicationKind: body.kind, eventId: c.req.param("eventId"), recipient: speaker.email, recipientName: speaker.name, subject: renderMessageTemplate(template?.subject ?? "Your {{event.name}} session: {{session.title}}", variables), text: renderMessageTemplate(template?.text ?? "Hi {{speaker.name}}, your session “{{session.title}}” is scheduled in {{session.room}}. Add the attached calendar invitation to your calendar.", variables), html: renderMessageTemplate(template?.html ?? "<p>Hi {{speaker.name}},</p><p>Your session <strong>“{{session.title}}”</strong> is scheduled in {{session.room}}. The calendar invitation is attached.</p>", htmlVariables), calendar: { method: "REQUEST", uid: session.uid, sequence: session.sequence, title: session.title, description: session.description, location: `${session.room ?? "Room to be confirmed"}, ${event.venue ?? ""}`, startsAt: new Date(Number(session.startsAt)).toISOString(), endsAt: new Date(Number(session.endsAt)).toISOString(), organizerName: event.name } } });
       }
     } else {
       const acceptance = body.kind === "acceptance";
@@ -2308,7 +2907,7 @@ app.post("/api/v1/events/:eventId/communications/send", zValidator("json", queue
       const subject = renderMessageTemplate(template?.subject ?? (acceptance ? "You're speaking at {{event.name}}" : "Speaker task reminder · {{event.name}}"), variables);
       const text = renderMessageTemplate(template?.text ?? (acceptance ? "Hi {{speaker.name}}, your proposal “{{proposal.title}}” has been accepted. Claim your speaker profile and review your onboarding tasks: {{speaker.portal_url}}" : "Hi {{speaker.name}}, you have {{task.count}} outstanding speaker task(s). Open your speaker portal: {{speaker.portal_url}}"), variables);
       const html = renderMessageTemplate(template?.html ?? (acceptance ? "<p>Hi {{speaker.name}},</p><p>Your proposal <strong>“{{proposal.title}}”</strong> has been accepted.</p><p><a href=\"{{speaker.portal_url}}\">Open speaker portal</a></p>" : "<p>Hi {{speaker.name}},</p><p>You have {{task.count}} outstanding speaker task(s).</p><p><a href=\"{{speaker.portal_url}}\">Open speaker portal</a></p>"), htmlVariables);
-      jobs.push({ kind: "email", idempotencyKey: `${idempotencyKey}:${speaker.id}`, payload: { kind: "communication", eventId: c.req.param("eventId"), recipient: speaker.email, recipientName: speaker.name, subject, text, html } });
+      jobs.push({ kind: "email", idempotencyKey: `${idempotencyKey}:${speaker.id}`, payload: { kind: "communication", communicationKind: body.kind, eventId: c.req.param("eventId"), recipient: speaker.email, recipientName: speaker.name, subject, text, html } });
     }
   }
   await persistOutboxJobs(c.env.DB, jobs);

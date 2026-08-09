@@ -70,6 +70,16 @@ function safeArtifactContentType(value: unknown) {
     : "application/octet-stream";
 }
 
+function safeExternalHttpsUrl(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" ? url.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function workspaceTaskFromRow(row: Record<string, unknown>, eventId: string): OnboardingTask {
   const linkedFormId = row.linked_form_id ? String(row.linked_form_id) : undefined;
   const linkedFormVersionId = row.linked_form_version_id ? String(row.linked_form_version_id) : undefined;
@@ -77,6 +87,39 @@ export function workspaceTaskFromRow(row: Record<string, unknown>, eventId: stri
   const artifactUploadId = row.authorized_artifact_upload_id
     ? String(row.authorized_artifact_upload_id)
     : undefined;
+  const artifactVersions = json<Array<Record<string, unknown>>>(row.artifact_versions, [])
+    .map((version) => ({
+      position: Number(version.position),
+      uploadId: String(version.uploadId ?? ""),
+      fileName: safeArtifactFileName(version.fileName) ?? "Submitted file",
+      contentType: safeArtifactContentType(version.contentType) ?? "application/octet-stream",
+      uploadedAt: iso(version.uploadedAt),
+    }))
+    .filter((version) => version.uploadId && Number.isInteger(version.position) && version.position >= 0)
+    .sort((left, right) => right.position - left.position)
+    .map((version) => ({
+      uploadId: version.uploadId,
+      fileName: version.fileName,
+      contentType: version.contentType,
+      uploadedAt: version.uploadedAt,
+    }));
+  if (artifactUploadId && !artifactVersions.some((version) => version.uploadId === artifactUploadId)) {
+    artifactVersions.unshift({
+      uploadId: artifactUploadId,
+      fileName: safeArtifactFileName(row.artifact_file_name) ?? "Submitted file",
+      contentType: safeArtifactContentType(row.artifact_content_type) ?? "application/octet-stream",
+      uploadedAt: iso(row.artifact_created_at),
+    });
+  }
+  const comments = json<Array<Record<string, unknown>>>(row.task_comments, [])
+    .map((comment) => ({
+      id: String(comment.id ?? ""),
+      authorId: String(comment.authorId ?? ""),
+      authorName: String(comment.authorName ?? "Conference participant"),
+      body: String(comment.body ?? ""),
+      createdAt: iso(comment.createdAt),
+    }))
+    .filter((comment) => comment.id && comment.authorId && comment.body.trim());
   const responseStatus = row.form_response_status === "draft" || row.form_response_status === "submitted"
     ? row.form_response_status
     : undefined;
@@ -98,11 +141,14 @@ export function workspaceTaskFromRow(row: Record<string, unknown>, eventId: stri
     proposalId: row.authorized_proposal_id ? String(row.authorized_proposal_id) : undefined,
     targetTitle: row.authorized_proposal_id && row.target_title ? String(row.target_title) : undefined,
     completionMode: row.completion_mode ? String(row.completion_mode) as OnboardingTask["completionMode"] : undefined,
+    externalUrl: safeExternalHttpsUrl(row.external_url),
     formId: linkedFormBelongsToEvent ? linkedFormId : undefined,
     fileRequestId: row.file_request_id ? String(row.file_request_id) : undefined,
     artifactUploadId,
     artifactFileName: artifactUploadId ? safeArtifactFileName(row.artifact_file_name) : undefined,
     artifactContentType: artifactUploadId ? safeArtifactContentType(row.artifact_content_type) : undefined,
+    artifactVersions,
+    comments,
     form: linkedFormBelongsToEvent && linkedFormId && linkedFormVersionId
       ? {
           id: linkedFormVersionId,
@@ -136,17 +182,36 @@ export function workspaceReviewFromRow(row: Record<string, unknown>): ReviewAssi
     round: Number(row.round),
     roundName: String(row.round_name ?? `Round ${Number(row.round)}`),
     status: String(row.status) as ReviewAssignment["status"],
+    reviewCycle: row.review_cycle === null || row.review_cycle === undefined ? undefined : Number(row.review_cycle),
     rubric,
     scores,
     score: row.total_score === null || row.total_score === undefined ? undefined : Number(row.total_score),
     recommendation: row.recommendation ? String(row.recommendation) as ReviewAssignment["recommendation"] : undefined,
     notes: row.notes ? String(row.notes) : undefined,
+    submittedAt: row.submitted_at ? iso(row.submitted_at) : undefined,
+  };
+}
+
+export function workspaceResourceFromRow(row: Record<string, unknown>): ResourcePage {
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    slug: String(row.slug),
+    status: String(row.status) as ResourcePage["status"],
+    summary: String(row.summary ?? ""),
+    body: String(row.sanitized_html ?? ""),
+    ...(row.embed_url ? { linkUrl: String(row.embed_url) } : {}),
+    updatedAt: iso(row.updated_at),
   };
 }
 
 export function workspaceProposalForRole(proposal: Proposal, role: Actor["role"]): Proposal {
-  if (role === "organizer" || role === "reviewer") return proposal;
   const projected = { ...proposal };
+  if (role === "organizer") return projected;
+  if (role === "reviewer") {
+    delete projected.revisionRequest;
+    return projected;
+  }
   delete projected.score;
   delete projected.reviewerGroup;
   return projected;
@@ -160,7 +225,13 @@ export const workspaceReviewRowsSql = `SELECT ra.*, rr.round, rr.name AS round_n
     AND (
       ? = 'organizer' OR (
         ra.reviewer_user_id = ?
+        AND ra.review_cycle = p.review_cycle
         AND p.status IN ('submitted', 'under_review')
+        AND NOT (
+          ra.status = 'submitted'
+          AND p.revision_requested_at IS NOT NULL
+          AND (ra.submitted_at IS NULL OR ra.submitted_at <= p.revision_requested_at)
+        )
         AND p.owner_user_id <> ?
         AND NOT EXISTS (
           SELECT 1 FROM proposal_speakers conflict_speaker
@@ -210,8 +281,12 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
       response_form.redirect_to_portal AS response_legacy_redirect_to_portal,
       response_form.confirmation_email_enabled AS response_legacy_confirmation_email_enabled,
       response_form.closes_at AS response_legacy_closes_at,
-      (SELECT AVG(ra.total_score) FROM review_assignments ra JOIN review_rounds score_round ON score_round.id = ra.round_id WHERE ra.proposal_id = p.id AND ra.status = 'submitted' AND score_round.status = 'active') AS score,
-      (SELECT COUNT(*) FROM review_assignments ra JOIN review_rounds count_round ON count_round.id = ra.round_id WHERE ra.proposal_id = p.id AND ra.status = 'submitted' AND count_round.status = 'active') AS review_count
+      (SELECT AVG(ra.total_score) FROM review_assignments ra JOIN review_rounds score_round ON score_round.id = ra.round_id WHERE ra.proposal_id = p.id AND ra.status = 'submitted' AND score_round.status = 'active'
+        AND ra.review_cycle = p.review_cycle
+        AND (p.revision_requested_at IS NULL OR (ra.submitted_at IS NOT NULL AND ra.submitted_at > p.revision_requested_at))) AS score,
+      (SELECT COUNT(*) FROM review_assignments ra JOIN review_rounds count_round ON count_round.id = ra.round_id WHERE ra.proposal_id = p.id AND ra.status = 'submitted' AND count_round.status = 'active'
+        AND ra.review_cycle = p.review_cycle
+        AND (p.revision_requested_at IS NULL OR (ra.submitted_at IS NOT NULL AND ra.submitted_at > p.revision_requested_at))) AS review_count
       FROM proposals p JOIN form_versions response_version ON response_version.id = p.form_version_id
       JOIN submission_forms response_form ON response_form.id = response_version.form_id AND response_form.event_id = p.event_id
       LEFT JOIN reviewer_groups rg ON rg.id = p.reviewer_group_id WHERE p.event_id = ? ORDER BY p.submitted_at DESC, p.updated_at DESC`).bind(eventId).all<Record<string, unknown>>(),
@@ -222,7 +297,35 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
       fv.public_title AS linked_form_title, fv.welcome_copy AS linked_form_description, fv.fields AS linked_form_fields,
       sf.event_id AS linked_form_event_id, tr.responses AS form_responses, tr.status AS form_response_status,
       artifact.id AS authorized_artifact_upload_id, artifact.file_name AS artifact_file_name,
-      artifact.content_type AS artifact_content_type,
+      artifact.content_type AS artifact_content_type, artifact.created_at AS artifact_created_at,
+      (SELECT json_group_array(json_object(
+          'position', artifact_history.key,
+          'uploadId', history_upload.id,
+          'fileName', history_upload.file_name,
+          'contentType', history_upload.content_type,
+          'uploadedAt', history_upload.created_at
+        ))
+        FROM json_each(COALESCE(file_response.upload_ids, '[]')) artifact_history
+        JOIN uploads history_upload ON history_upload.id = artifact_history.value
+          AND history_upload.event_id = st.event_id AND history_upload.deleted_at IS NULL
+      ) AS artifact_versions,
+      (SELECT json_group_array(json_object(
+          'id', ordered_comment.id,
+          'authorId', ordered_comment.author_user_id,
+          'authorName', ordered_comment.author_name,
+          'body', ordered_comment.body,
+          'createdAt', ordered_comment.created_at
+        ))
+        FROM (
+          SELECT task_comment.id, task_comment.author_user_id,
+            COALESCE(task_comment_author.name, 'Conference participant') AS author_name,
+            task_comment.body, task_comment.created_at
+          FROM task_comments task_comment
+          LEFT JOIN user task_comment_author ON task_comment_author.id = task_comment.author_user_id
+          WHERE task_comment.task_id = st.id AND task_comment.event_id = st.event_id
+          ORDER BY task_comment.created_at, task_comment.id
+        ) ordered_comment
+      ) AS task_comments,
       task_proposal.id AS authorized_proposal_id, task_proposal.title AS target_title
       FROM speaker_tasks st
       LEFT JOIN task_templates tt ON tt.id = st.template_id AND tt.event_id = st.event_id
@@ -232,6 +335,8 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
       LEFT JOIN task_responses tr ON tr.task_id = st.id
       LEFT JOIN uploads artifact ON artifact.id = st.artifact_upload_id
         AND artifact.event_id = st.event_id AND artifact.deleted_at IS NULL
+      LEFT JOIN file_request_responses file_response ON file_response.file_request_id = tt.file_request_id
+        AND file_response.target_id = st.id
       WHERE st.event_id = ? ORDER BY st.due_at`).bind(eventId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT * FROM tracks WHERE event_id = ? ORDER BY name").bind(eventId).all<Record<string, unknown>>(),
     env.DB.prepare("SELECT * FROM rooms WHERE event_id = ? ORDER BY name").bind(eventId).all<Record<string, unknown>>(),
@@ -294,7 +399,7 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
       ...(row.legacy_closes_at ? { closesAt: iso(row.legacy_closes_at) } : {}),
     });
     return {
-      id: String(row.id), eventId, name: String(row.name), publicTitle: String(row.public_title), pageHeading: String(row.page_heading), version, publishedVersion, status,
+      id: String(row.id), eventId, name: String(row.name), slug: row.slug ? String(row.slug) : undefined, publicTitle: String(row.public_title), pageHeading: String(row.page_heading), version, publishedVersion, status,
       kind: row.kind ? String(row.kind) as FormDefinition["kind"] : undefined, targetType: row.target_type ? String(row.target_type) as FormDefinition["targetType"] : undefined,
       submissionType: controls.submissionType, collectsParticipants: controls.collectsParticipants,
       welcomeTitle: String(row.welcome_title), welcomeCopy: String(row.welcome_copy), confirmationCopy: String(row.confirmation_copy), maxSpeakers: Number(row.max_speakers),
@@ -346,8 +451,13 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
       updatedAt: iso(row.response_version_created_at),
     };
     return {
-      id: String(row.id), eventId, version: Number(row.version), title: String(row.title), summary: String(row.summary), category: String(row.category), format: String(row.format) as Proposal["format"],
+      id: String(row.id), eventId, version: Number(row.version), reviewCycle: Number(row.review_cycle ?? 1), title: String(row.title), summary: String(row.summary), category: String(row.category), format: String(row.format) as Proposal["format"],
       durationMinutes: Number(row.duration_minutes), level: String(row.level) as Proposal["level"], status: String(row.status) as Proposal["status"], speakers: proposalSpeakers.get(String(row.id)) ?? [],
+      revisionRequest: row.revision_note && row.revision_requested_at ? {
+        note: String(row.revision_note),
+        requestedAt: iso(row.revision_requested_at),
+        requestedBy: row.revision_requested_by === "applicant" ? "applicant" : "organizer",
+      } : undefined,
       submittedAt: row.submitted_at ? iso(row.submitted_at) : iso(row.updated_at), score: row.score === null || row.score === undefined ? undefined : Number(row.score), reviewCount: Number(row.review_count ?? 0),
       reviewerGroup: String(row.reviewer_group ?? "Unassigned"), tags: json<string[]>(jsonRecord(row.responses).tags, []), responses: jsonRecord(row.responses),
       customResponses: projectCustomFormResponses(responseFields, jsonRecord(row.responses)),
@@ -363,7 +473,7 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
     const ids = sessionSpeakerIds.get(String(row.id)) ?? [];
     return { id: String(row.id), eventId, proposalId: row.proposal_id ? String(row.proposal_id) : undefined, origin: String(row.origin) as ProgramSession["origin"], title: String(row.title), description: String(row.description ?? ""), format: String(row.format) as ProgramSession["format"], capacity: row.capacity === null || row.capacity === undefined ? undefined : Number(row.capacity), ceuCredits: row.ceu_credits ? String(row.ceu_credits) : undefined, clientId: row.client_id ? String(row.client_id) : undefined, speakerIds: ids, speakerNames: ids.map((id) => speakerById.get(id)?.name ?? "Invited speaker"), trackId: row.track_id ? String(row.track_id) : undefined, roomId: row.room_id ? String(row.room_id) : undefined, startsAt: row.starts_at ? iso(row.starts_at) : undefined, endsAt: row.ends_at ? iso(row.ends_at) : undefined, status: String(row.status) as ProgramSession["status"], overrideReason: row.override_reason ? String(row.override_reason) : undefined };
   });
-  const resources: ResourcePage[] = resourceRows.results.map((row) => ({ id: String(row.id), title: String(row.title), slug: String(row.slug), status: String(row.status) as ResourcePage["status"], summary: String(row.summary), updatedAt: iso(row.updated_at) }));
+  const resources: ResourcePage[] = resourceRows.results.map(workspaceResourceFromRow);
   const embeds: EmbedDefinition[] = embedRows.results.map((row) => ({ id: String(row.id), name: String(row.name), eventId, format: String(row.format) as EmbedDefinition["format"], enabled: Boolean(row.enabled), theme: String(row.theme) as EmbedDefinition["theme"], updatedAt: iso(row.updated_at) }));
   const actors: Actor[] = actorRows.results.map((row) => ({ id: String(row.id), name: String(row.name), email: String(row.email), role: String(row.role) as Actor["role"] }));
   const reviewerIdsByGroup = new Map<string, string[]>();
@@ -385,6 +495,7 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
     targetType: String(row.target_type) as TaskTemplateDefinition["targetType"],
     completionMode: String(row.completion_mode) as TaskTemplateDefinition["completionMode"],
     relativeDueDays: Number(row.relative_due_days),
+    externalUrl: safeExternalHttpsUrl(row.external_url),
     formId: row.linked_form_id ? String(row.linked_form_id) : undefined,
     fileRequestId: row.file_request_id ? String(row.file_request_id) : undefined,
     formFields: row.linked_form_fields ? json<FormField[]>(row.linked_form_fields, []) : undefined,

@@ -149,7 +149,7 @@ function StaffInviteDialog({ onClose }: { onClose: () => void }) {
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close staff invitation"><X size={18} /></button>
         </div>
         <div className="drawer__body form-stack">
-          <p className="muted">The invitation is delivered through the durable message queue. Reviewers are added to the event’s category routing groups after they accept.</p>
+          <p className="muted">The invitation is delivered through the durable message queue. After a reviewer accepts, assign their tracks in Program setup → Review routing.</p>
           <Field label="Email address"><input data-dialog-initial-focus required type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="reviewer@example.com" /></Field>
           <Field label="Event role"><select value={role} onChange={(event) => setRole(event.target.value as typeof role)}><option value="reviewer">Reviewer</option><option value="organizer">Organizer</option></select></Field>
           {error && <InlineAlert tone="danger">{error}</InlineAlert>}

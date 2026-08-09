@@ -13,6 +13,16 @@ const row = {
   authorized_artifact_upload_id: "upload-a",
   artifact_file_name: "../deck\u202e.pdf",
   artifact_content_type: "APPLICATION/PDF",
+  artifact_created_at: 1787097500000,
+  artifact_versions: JSON.stringify([
+    { position: 0, uploadId: "upload-old", fileName: "../first.pdf", contentType: "application/pdf", uploadedAt: 1787000000000 },
+    { position: 1, uploadId: "upload-a", fileName: "../deck\u202e.pdf", contentType: "APPLICATION/PDF", uploadedAt: 1787097500000 },
+  ]),
+  task_comments: JSON.stringify([
+    { id: "comment-1", authorId: "speaker-user", authorName: "Speaker <script>", body: "Is this version final?", createdAt: 1787097600000 },
+    { id: "comment-2", authorId: "organizer-user", authorName: "Organizer", body: "Yes — thank you.", createdAt: 1787097700000 },
+  ]),
+  external_url: "https://conference.example.test/speaker-checklist",
   authorized_proposal_id: "proposal-a",
   target_title: "Operating a reliable workshop",
 };
@@ -43,6 +53,10 @@ describe("workspace task form projection", () => {
       artifactUploadId: "upload-a",
       artifactFileName: "deck.pdf",
       artifactContentType: "application/pdf",
+      artifactVersions: [
+        expect.objectContaining({ uploadId: "upload-a", fileName: "deck.pdf" }),
+        expect.objectContaining({ uploadId: "upload-old", fileName: "first.pdf" }),
+      ],
     });
     expect(workspaceTaskFromRow({
       ...row,
@@ -52,6 +66,18 @@ describe("workspace task form projection", () => {
       artifactFileName: undefined,
       artifactContentType: undefined,
     });
+  });
+
+  it("projects chronological collaboration and only a safe HTTPS task link", () => {
+    expect(workspaceTaskFromRow(row, "event-a")).toMatchObject({
+      externalUrl: "https://conference.example.test/speaker-checklist",
+      comments: [
+        { id: "comment-1", authorName: "Speaker <script>", body: "Is this version final?" },
+        { id: "comment-2", authorName: "Organizer", body: "Yes — thank you." },
+      ],
+    });
+    expect(workspaceTaskFromRow({ ...row, external_url: "http://conference.example.test/unsafe" }, "event-a").externalUrl).toBeUndefined();
+    expect(workspaceTaskFromRow({ ...row, external_url: "javascript:alert(1)" }, "event-a").externalUrl).toBeUndefined();
   });
 
   it("derives overdue work at read time without a cron-only status transition", () => {

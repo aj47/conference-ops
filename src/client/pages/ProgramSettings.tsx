@@ -1,8 +1,11 @@
 import {
   ArrowRight,
+  BookOpen,
   Bot,
   Check,
   ClipboardList,
+  Database,
+  ExternalLink,
   Mail,
   MapPinned,
   Pencil,
@@ -12,29 +15,37 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type {
+  CommunicationDelivery,
   FormField,
   MessageTemplateDefinition,
   ReadinessInsight,
   ReminderRule,
+  ReviewPlanDefinition,
+  ReviewRubricCriterion,
+  ResourcePage,
   ReviewerGroupConfig,
   TaskTemplateDefinition,
 } from "../../shared/domain";
 import { submissionCategoryField } from "../../shared/form-fields";
-import { conferenceApi } from "../api";
+import { CommunicationDeliveryHistory } from "../CommunicationDeliveryHistory";
+import { AirtablePanel } from "../AirtableOperatorStatus";
+import { conferenceApi, type ResourcePageDraft } from "../api";
 import { EmptyState, Field, InlineAlert, PageHeader, StatusPill } from "../components";
 import { useDialogA11y } from "../dialog-a11y";
 import { privateEventPath } from "../private-routes";
 import { useWorkspace } from "../workspace";
 
-type SettingsSection = "routing" | "onboarding" | "communications" | "assistant";
+type SettingsSection = "routing" | "onboarding" | "communications" | "resources" | "data" | "assistant";
 
 const sections: Array<{ id: SettingsSection; label: string; detail: string; icon: typeof MapPinned }> = [
   { id: "routing", label: "Review routing", detail: "Tracks → reviewers", icon: MapPinned },
   { id: "onboarding", label: "Onboarding plan", detail: "Forms, files, profile", icon: ClipboardList },
   { id: "communications", label: "Communications", detail: "Templates & reminders", icon: Mail },
+  { id: "resources", label: "Participant resources", detail: "Guides & policies", icon: BookOpen },
+  { id: "data", label: "Airtable source", detail: "Authority & sync health", icon: Database },
   { id: "assistant", label: "Readiness assistant", detail: "Grounded next actions", icon: Bot },
 ];
 
@@ -80,6 +91,7 @@ function TaskTemplateDialog({
   const [type, setType] = useState<TaskTemplateDefinition["type"]>(template?.type ?? "form");
   const [targetType, setTargetType] = useState<TaskTemplateDefinition["targetType"]>(template?.targetType ?? "contact");
   const [relativeDueDays, setRelativeDueDays] = useState(template?.relativeDueDays ?? 14);
+  const [externalUrl, setExternalUrl] = useState(template?.externalUrl ?? "");
   const [fields, setFields] = useState<FormField[]>(template?.formFields ?? [
     { id: `field-${crypto.randomUUID()}`, label: "Your answer", type: "long_text", required: true, section: "proposal" },
   ]);
@@ -100,7 +112,15 @@ function TaskTemplateDialog({
           setSaving(true);
           setError(null);
           try {
-            await onSave({ title, description, type, targetType, relativeDueDays, ...(type === "form" ? { fields } : {}) });
+            await onSave({
+              title,
+              description,
+              type,
+              targetType,
+              relativeDueDays,
+              ...(["profile", "calendar"].includes(type) && externalUrl.trim() ? { externalUrl: externalUrl.trim() } : {}),
+              ...(type === "form" ? { fields } : {}),
+            });
             onClose();
           } catch (caught) {
             setError(caught instanceof Error ? caught.message : "The task template could not be saved.");
@@ -122,6 +142,7 @@ function TaskTemplateDialog({
             <Field label="Applies to"><select value={targetType} onChange={(event) => setTargetType(event.target.value as TaskTemplateDefinition["targetType"])}><option value="contact">Speaker once per event</option><option value="submission">Speaker for every accepted talk</option></select></Field>
           </div>
           <Field label="Due before event" hint="Days before the event starts"><input type="number" min={0} max={365} value={relativeDueDays} onChange={(event) => setRelativeDueDays(Number(event.target.value))} /></Field>
+          {["profile", "calendar"].includes(type) && <Field label="External action link" hint="Optional. Speakers open this HTTPS page, then separately mark the task complete."><input type="url" inputMode="url" placeholder="https://…" maxLength={2048} value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} /></Field>}
           {type === "form" && (
             <section className="program-config__questions" aria-labelledby="task-question-heading">
               <div className="section-heading"><div><p className="eyebrow">Linked portal form</p><h3 id="task-question-heading">Questions speakers will answer</h3></div><button type="button" className="button button--quiet" onClick={() => setFields((current) => [...current, { id: `field-${crypto.randomUUID()}`, label: "", type: "short_text", required: true, section: "proposal" }])}><Plus size={15} /> Add question</button></div>
@@ -209,6 +230,89 @@ function RoutingPanel() {
         ))}
       </div>
       {categories.length > 0 && <div className="program-config-actions"><p>Saving replaces pending/in-progress assignments with this mapping. Submitted review evidence is preserved.</p><button type="button" className="button button--primary" disabled={saving} onClick={() => void save()}><Save size={16} /> {saving ? "Saving routing…" : "Save routing"}</button></div>}
+      <ReviewPlanPanel />
+    </section>
+  );
+}
+
+function ReviewPlanPanel() {
+  const { workspace, setNotice } = useWorkspace();
+  const [plans, setPlans] = useState<ReviewPlanDefinition[]>([]);
+  const [draft, setDraft] = useState<ReviewPlanDefinition | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    conferenceApi.reviewPlans(workspace.actor.id, workspace.event.id)
+      .then(({ plans: next }) => {
+        if (!active) return;
+        setPlans(next);
+        setDraft(next.find((plan) => plan.status === "active") ?? next[0] ?? null);
+      })
+      .catch((caught: unknown) => active && setError(caught instanceof Error ? caught.message : "The review plan could not be loaded."))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
+  }, [workspace.actor.id, workspace.event.id]);
+
+  const updateCriterion = (id: string, patch: Partial<ReviewRubricCriterion>) => {
+    setDraft((current) => current ? { ...current, rubric: current.rubric.map((criterion) => criterion.id === id ? { ...criterion, ...patch } : criterion) } : current);
+  };
+  const totalWeight = draft?.rubric.reduce((sum, criterion) => sum + criterion.weight, 0) ?? 0;
+  const locked = Boolean(draft?.submittedReviews);
+
+  const save = async () => {
+    if (!draft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await conferenceApi.updateReviewPlan(workspace.actor.id, workspace.event.id, draft.id, {
+        name: draft.name,
+        status: draft.status,
+        rubric: draft.rubric,
+      });
+      setPlans((current) => current.map((plan) => plan.id === saved.id ? saved : plan.status === "active" && saved.status === "active" ? { ...plan, status: "closed" } : plan));
+      setDraft(saved);
+      setNotice(`${saved.name} saved. Reviewer queues now use this scoring contract.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The review plan could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="review-plan-editor" aria-labelledby="review-plan-title">
+      <div className="section-heading"><div><p className="eyebrow">Evaluation contract</p><h3 id="review-plan-title">Review plan & rubric</h3><p>Keep the minimum workflow legible: every routed talk moves from unreviewed to Approve, Maybe, or Deny against the same weighted evidence.</p></div>{draft && <StatusPill status={draft.status} />}</div>
+      {loading && <p className="muted">Loading the active review plan…</p>}
+      {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+      {!loading && !draft && <EmptyState title="No review plan" detail="Fresh events include one active program-review round. Re-run event setup defaults before accepting proposals." />}
+      {draft && (
+        <div className="form-stack">
+          <div className="field-grid field-grid--2">
+            <Field label="Plan name"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
+            <Field label="Availability"><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as ReviewPlanDefinition["status"] })}><option value="draft">Draft · view only</option><option value="active">Open for review</option><option value="closed">Closed</option></select></Field>
+          </div>
+          {locked && <InlineAlert tone="info"><strong>Scoring contract locked.</strong> {draft.submittedReviews} final {draft.submittedReviews === 1 ? "review uses" : "reviews use"} this rubric. You can rename or close the plan, but its criteria cannot change.</InlineAlert>}
+          <div className="review-plan-editor__criteria">
+            {draft.rubric.map((criterion, index) => (
+              <article key={criterion.id}>
+                <span className="review-plan-editor__index">{String(index + 1).padStart(2, "0")}</span>
+                <div className="review-plan-editor__copy">
+                  <input aria-label={`Criterion ${index + 1} name`} disabled={locked} value={criterion.label} onChange={(event) => updateCriterion(criterion.id, { label: event.target.value })} />
+                  <input aria-label={`${criterion.label} guidance`} disabled={locked} placeholder="What should reviewers look for?" value={criterion.description ?? ""} onChange={(event) => updateCriterion(criterion.id, { description: event.target.value })} />
+                </div>
+                <label><span>Weight</span><input aria-label={`${criterion.label} weight`} disabled={locked} type="number" min={1} max={1000} value={criterion.weight} onChange={(event) => updateCriterion(criterion.id, { weight: Number(event.target.value) })} /></label>
+                <label><span>Scale</span><select aria-label={`${criterion.label} maximum score`} disabled={locked} value={criterion.maxScore} onChange={(event) => updateCriterion(criterion.id, { maxScore: Number(event.target.value) })}>{[3, 5, 10, 20].map((value) => <option key={value} value={value}>1–{value}</option>)}</select></label>
+                <button type="button" className="icon-button icon-button--danger" disabled={locked || draft.rubric.length === 1} aria-label={`Remove ${criterion.label}`} onClick={() => setDraft({ ...draft, rubric: draft.rubric.filter((candidate) => candidate.id !== criterion.id) })}><Trash2 size={15} /></button>
+              </article>
+            ))}
+          </div>
+          <div className="program-config-actions"><p>Relative weight total: <strong>{totalWeight}</strong>. Reviewer recommendations remain Approve, Maybe, or Deny; the weighted score is decision evidence, not an automatic decision.</p><span><button type="button" className="button button--quiet" disabled={locked || draft.rubric.length >= 12} onClick={() => setDraft({ ...draft, rubric: [...draft.rubric, { id: `criterion-${crypto.randomUUID()}`, label: "New criterion", description: "", weight: 1, maxScore: 5 }] })}><Plus size={15} /> Add criterion</button><button type="button" className="button button--primary" disabled={saving || !draft.name.trim() || draft.rubric.some((criterion) => !criterion.label.trim() || criterion.weight <= 0)} onClick={() => void save()}><Save size={15} /> {saving ? "Saving plan…" : "Save review plan"}</button></span></div>
+          {plans.length > 1 && <p className="form-hint">This event has {plans.length} historical rounds. Conference Ops exposes the active plan here; submitted evidence from closed rounds remains in the audit record.</p>}
+        </div>
+      )}
     </section>
   );
 }
@@ -256,13 +360,153 @@ function OnboardingPanel() {
         {templates.map((template) => (
           <article className="template-row" key={template.id}>
             <span className="template-row__icon"><ClipboardList size={18} /></span>
-            <div><strong>{template.title}</strong><p>{template.description}</p><small>{taskTypeLabels[template.type]} · {template.targetType === "submission" ? "Every accepted talk" : "Once per speaker"} · Due {template.relativeDueDays} days before event</small></div>
+            <div><strong>{template.title}</strong><p>{template.description}</p><small>{taskTypeLabels[template.type]} · {template.targetType === "submission" ? "Every accepted talk" : "Once per speaker"} · Due {template.relativeDueDays} days before event</small>{template.externalUrl && <a className="template-row__external" href={template.externalUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={13} /> External action</a>}</div>
             <div className="template-row__actions"><button type="button" className="icon-button" aria-label={`Edit ${template.title}`} onClick={() => setEditing(template)}><Pencil size={15} /></button><button type="button" className="icon-button icon-button--danger" aria-label={`Remove ${template.title}`} onClick={() => void remove(template)}><Trash2 size={15} /></button></div>
           </article>
         ))}
         {!templates.length && <EmptyState title="No onboarding plan" detail="Create the hotel and flight forms first; then add profile, slides, calendar, or custom tasks." action={<button type="button" className="button button--primary" onClick={() => setEditing("new")}>Add first task</button>} />}
       </div>
       {editing && <TaskTemplateDialog template={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} onSave={save} />}
+    </section>
+  );
+}
+
+function resourceSlug(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 80);
+}
+
+function resourceDraft(resource?: ResourcePage): ResourcePageDraft {
+  return resource
+    ? { title: resource.title, slug: resource.slug, summary: resource.summary, body: resource.body, linkUrl: resource.linkUrl ?? "", status: resource.status }
+    : { title: "", slug: "", summary: "", body: "", linkUrl: "", status: "draft" };
+}
+
+function ResourcesPanel() {
+  const { workspace, setNotice, updateProgramConfiguration } = useWorkspace();
+  const [resources, setResources] = useState(workspace.resources);
+  const [draft, setDraft] = useState<ResourcePageDraft | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [slugEdited, setSlugEdited] = useState(false);
+  const [workingId, setWorkingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const editorTitleRef = useRef<HTMLInputElement>(null);
+  const editorReturnFocusRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => setResources(workspace.resources), [workspace.resources]);
+
+  const replaceResource = (saved: ResourcePage) => {
+    const next = resources.some((resource) => resource.id === saved.id)
+      ? resources.map((resource) => resource.id === saved.id ? saved : resource)
+      : [saved, ...resources];
+    setResources(next);
+    updateProgramConfiguration({ resources: next });
+  };
+
+  const openEditor = (resource?: ResourcePage, opener?: HTMLButtonElement) => {
+    editorReturnFocusRef.current = opener ?? null;
+    setEditingId(resource?.id ?? null);
+    setDraft(resourceDraft(resource));
+    setSlugEdited(Boolean(resource));
+    setError(null);
+    requestAnimationFrame(() => editorTitleRef.current?.focus());
+  };
+
+  const closeEditor = () => {
+    setDraft(null);
+    setEditingId(null);
+    requestAnimationFrame(() => editorReturnFocusRef.current?.focus());
+  };
+
+  const save = async () => {
+    if (!draft) return;
+    setWorkingId(editingId ?? "new");
+    setError(null);
+    const payload = { ...draft, title: draft.title.trim(), slug: draft.slug.trim(), summary: draft.summary.trim(), body: draft.body.trim(), linkUrl: draft.linkUrl?.trim() || undefined };
+    try {
+      const saved: ResourcePage = workspace.demoMode
+        ? { id: editingId ?? `demo-resource-${crypto.randomUUID()}`, updatedAt: new Date().toISOString(), ...payload }
+        : editingId
+          ? await conferenceApi.updateResourcePage(workspace.actor.id, workspace.event.id, editingId, payload)
+          : await conferenceApi.createResourcePage(workspace.actor.id, workspace.event.id, payload);
+      replaceResource(saved);
+      closeEditor();
+      setNotice(`${saved.title} ${saved.status === "published" ? "is available in participant and public resources." : "saved as a private organizer draft."}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The participant resource could not be saved.");
+    } finally {
+      setWorkingId(null);
+    }
+  };
+
+  const togglePublished = async (resource: ResourcePage) => {
+    setWorkingId(resource.id);
+    setError(null);
+    try {
+      const payload = { ...resourceDraft(resource), status: resource.status === "published" ? "draft" as const : "published" as const };
+      const saved: ResourcePage = workspace.demoMode
+        ? { ...resource, ...payload, updatedAt: new Date().toISOString() }
+        : await conferenceApi.updateResourcePage(workspace.actor.id, workspace.event.id, resource.id, payload);
+      replaceResource(saved);
+      setNotice(`${saved.title} ${saved.status === "published" ? "published to participants." : "returned to organizer draft."}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The resource visibility could not be changed.");
+    } finally {
+      setWorkingId(null);
+    }
+  };
+
+  const remove = async (resource: ResourcePage) => {
+    if (!window.confirm(`Delete the draft “${resource.title}”? This cannot be undone.`)) return;
+    setWorkingId(resource.id);
+    setError(null);
+    try {
+      if (!workspace.demoMode) await conferenceApi.deleteResourcePage(workspace.actor.id, workspace.event.id, resource.id);
+      const next = resources.filter((candidate) => candidate.id !== resource.id);
+      setResources(next);
+      updateProgramConfiguration({ resources: next });
+      if (editingId === resource.id) closeEditor();
+      setNotice(`${resource.title} deleted.`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The participant resource could not be deleted.");
+    } finally {
+      setWorkingId(null);
+    }
+  };
+
+  return (
+    <section className="program-config-panel">
+      <div className="program-config-panel__head"><div><p className="eyebrow">Self-service participant wiki</p><h2>Publish the answers speakers need without another email.</h2><p>Write travel instructions, production policies, FAQs, or day-of guides. Drafts stay organizer-only; published pages appear in the signed-in portal and public event resources.</p></div><button type="button" className="button button--primary" onClick={(event) => openEditor(undefined, event.currentTarget)}><Plus size={16} /> New resource</button></div>
+      {error && <InlineAlert tone="danger">{error}</InlineAlert>}
+      <div className={`resource-admin-layout${draft ? " resource-admin-layout--editing" : ""}`}>
+        <div className="resource-admin-list" aria-label="Participant resources">
+          {resources.map((resource) => (
+            <article key={resource.id}>
+              <span className="resource-admin-list__mark"><BookOpen size={17} /></span>
+              <div><span className="resource-admin-list__title"><strong>{resource.title}</strong><StatusPill status={resource.status} /></span><p>{resource.summary || "No summary yet."}</p><small>/{resource.slug} · Updated {new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(resource.updatedAt))}</small></div>
+              <div className="resource-admin-list__actions">
+                <button type="button" className="button button--quiet" disabled={workingId === resource.id} onClick={(event) => openEditor(resource, event.currentTarget)}><Pencil size={14} /> Edit</button>
+                <button type="button" className="button button--quiet" disabled={workingId === resource.id || (resource.status === "draft" && !resource.body.trim())} title={resource.status === "draft" && !resource.body.trim() ? "Add page content before publishing" : undefined} onClick={() => void togglePublished(resource)}>{resource.status === "published" ? "Unpublish" : "Publish"}</button>
+                {resource.status === "draft" && <button type="button" className="icon-button icon-button--danger" disabled={workingId === resource.id} aria-label={`Delete ${resource.title}`} onClick={() => void remove(resource)}><Trash2 size={15} /></button>}
+              </div>
+            </article>
+          ))}
+          {!resources.length && <EmptyState title="No participant resources" detail="Start with an arrival guide or speaker policy. You can keep the page private until its details are final." action={<button type="button" className="button button--primary" onClick={(event) => openEditor(undefined, event.currentTarget)}>Create first resource</button>} />}
+        </div>
+        {draft && (
+          <form className="resource-editor" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+            <header><div><p className="eyebrow">{editingId ? "Edit resource" : "New resource"}</p><h3>{draft.title || "Untitled guide"}</h3></div><button type="button" className="icon-button" aria-label="Close resource editor" onClick={closeEditor}><X size={17} /></button></header>
+            <Field label="Page title"><input ref={editorTitleRef} required maxLength={160} value={draft.title} onChange={(event) => { const title = event.target.value; setDraft({ ...draft, title, ...(!slugEdited ? { slug: resourceSlug(title) } : {}) }); }} /></Field>
+            <div className="field-grid field-grid--2">
+              <Field label="URL slug" hint="Lowercase letters, numbers, and hyphens"><input required maxLength={80} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" value={draft.slug} onChange={(event) => { setSlugEdited(true); setDraft({ ...draft, slug: resourceSlug(event.target.value) }); }} /></Field>
+              <Field label="Visibility"><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as ResourcePage["status"] })}><option value="draft">Organizer draft</option><option value="published">Published</option></select></Field>
+            </div>
+            <Field label="Short summary" hint={`${draft.summary.length} / 500 characters`}><textarea required rows={3} maxLength={500} value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} /></Field>
+            <Field label="Page content" hint="Plain text only. Blank lines create separate paragraphs; HTML is shown as text, never executed."><textarea required={draft.status === "published"} rows={12} maxLength={50_000} value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} /></Field>
+            <Field label="Organizer reference link" hint="Optional · complete http:// or https:// URL"><input type="url" maxLength={2048} placeholder="https://…" value={draft.linkUrl ?? ""} onChange={(event) => setDraft({ ...draft, linkUrl: event.target.value })} /></Field>
+            <footer><span>{draft.status === "published" ? "Saving will make this content immediately visible." : "Only organizers can see drafts."}</span><button type="submit" className="button button--primary" disabled={workingId !== null || !draft.title.trim() || !draft.slug.trim() || !draft.summary.trim() || (draft.status === "published" && !draft.body.trim())}><Save size={15} /> {workingId ? "Saving…" : draft.status === "published" ? "Save & publish" : "Save draft"}</button></footer>
+          </form>
+        )}
+      </div>
     </section>
   );
 }
@@ -277,6 +521,27 @@ function CommunicationsPanel() {
   const [rules, setRules] = useState<ReminderRule[]>(workspace.reminderRules ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deliveries, setDeliveries] = useState<CommunicationDelivery[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const historyRequest = useRef(0);
+  const loadHistory = useCallback(async () => {
+    const request = ++historyRequest.current;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const result = await conferenceApi.communicationHistory(workspace.actor.id, workspace.event.id);
+      if (request === historyRequest.current) setDeliveries(result.deliveries);
+    } catch (caught) {
+      if (request === historyRequest.current) setHistoryError(caught instanceof Error ? caught.message : "The delivery history could not be loaded.");
+    } finally {
+      if (request === historyRequest.current) setHistoryLoading(false);
+    }
+  }, [workspace.actor.id, workspace.event.id]);
+  useEffect(() => {
+    void loadHistory();
+    return () => { historyRequest.current += 1; };
+  }, [loadHistory]);
   const patchDraft = (patch: Partial<typeof draft>) => setDrafts((current) => ({ ...current, [kind]: { ...draft, ...patch } }));
   const saveTemplate = async () => {
     setSaving(true); setError(null);
@@ -302,7 +567,7 @@ function CommunicationsPanel() {
   };
   return (
     <section className="program-config-panel">
-      <div className="program-config-panel__head"><div><p className="eyebrow">Cloudflare Email + durable outbox</p><h2>Write the messages the workflow actually sends.</h2><p>Submission confirmations, decisions, task reminders, and calendar REQUEST invites are persisted before queue delivery. Supported variables are shown beside the editor.</p></div><StatusPill status="delivery active" /></div>
+      <div className="program-config-panel__head"><div><p className="eyebrow">Cloudflare Email + durable outbox</p><h2>Write the messages the workflow actually sends.</h2><p>Submission confirmations, decisions, task reminders, and calendar REQUEST invites are persisted before queue delivery. Supported variables are shown beside the editor.</p></div><StatusPill status="durable queue" /></div>
       {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       <div className="communications-layout">
         <nav className="communications-kinds" aria-label="Communication templates">{(Object.keys(messageKindLabels) as MessageTemplateDefinition["kind"][]).map((item) => <button type="button" key={item} className={kind === item ? "active" : ""} onClick={() => setKind(item)}><span>{messageKindLabels[item]}</span><small>{templates.some((template) => template.kind === item) ? "Configured" : "Uses fallback"}</small></button>)}</nav>
@@ -326,6 +591,7 @@ function CommunicationsPanel() {
         ))}
         {!rules.length && <EmptyState title="No scheduled reminder rules" detail="Fresh events include overdue-task and unfinished-draft rules. Re-run setup defaults or create the missing rules through the API." />}
       </div>
+      <CommunicationDeliveryHistory deliveries={deliveries} loading={historyLoading} error={historyError} timezone={workspace.event.timezone} onRefresh={() => void loadHistory()} />
     </section>
   );
 }
@@ -376,6 +642,8 @@ export function ProgramSettings() {
         {section === "routing" && <RoutingPanel />}
         {section === "onboarding" && <OnboardingPanel />}
         {section === "communications" && <CommunicationsPanel />}
+        {section === "resources" && <ResourcesPanel />}
+        {section === "data" && <AirtablePanel />}
         {section === "assistant" && <AssistantPanel onOpenRouting={() => setSection("routing")} />}
       </div>
     </>

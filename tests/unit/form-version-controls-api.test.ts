@@ -169,6 +169,58 @@ function draftBody(fields: unknown[]) {
 }
 
 describe("versioned form controls API", () => {
+  it("creates, publishes, and closes a second CFP without changing the existing live form", async () => {
+    const d1 = createDatabase([titleField, categoryField]);
+    d1.database.exec(`
+      INSERT INTO event_memberships VALUES ('event-a', 'reviewer-a', 'reviewer'), ('event-a', 'reviewer-b', 'reviewer');
+      INSERT INTO reviewer_groups VALUES ('group-existing', 'event-a', 'Existing committee', 'Existing', 1, 1);
+      INSERT INTO reviewer_group_members VALUES ('group-existing', 'reviewer-a', 1);
+    `);
+    const additional = draftBody([titleField, categoryField]);
+    const draftWithExpectedVersion = {
+      ...additional,
+      name: "Workshop proposals",
+      publicTitle: "Hands-on workshop proposals",
+      pageHeading: "Workshops",
+      welcomeTitle: "Propose a workshop",
+      confirmationEmailEnabled: true,
+    };
+    const createBody = Object.fromEntries(Object.entries(draftWithExpectedVersion)
+      .filter(([key]) => key !== "expectedVersion"));
+    const created = await app.request("http://localhost/api/v1/events/event-a/forms", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(createBody),
+    }, bindings(d1));
+
+    expect(created.status).toBe(201);
+    const createdPayload = await created.json() as { data: { id: string; slug: string; version: number; status: string } };
+    expect(createdPayload.data).toMatchObject({ version: 1, status: "draft" });
+    expect(createdPayload.data.slug).toMatch(/^workshop-proposals-/);
+    expect(d1.database.prepare("SELECT COUNT(*) AS count FROM submission_forms WHERE event_id = 'event-a' AND kind = 'cfp'").get()).toEqual({ count: 2 });
+
+    const published = await app.request(`http://localhost/api/v1/events/event-a/forms/${createdPayload.data.id}/publish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1 }),
+    }, bindings(d1));
+    expect(published.status).toBe(200);
+    expect(d1.database.prepare("SELECT reviewer_group_id, user_id FROM reviewer_group_members ORDER BY reviewer_group_id, user_id").all()).toEqual([
+      { reviewer_group_id: "group-existing", user_id: "reviewer-a" },
+    ]);
+
+    const closed = await app.request(`http://localhost/api/v1/events/event-a/forms/${createdPayload.data.id}/close`, {
+      method: "POST",
+    }, bindings(d1));
+    expect(closed.status).toBe(200);
+    expect(await closed.json()).toMatchObject({ data: { formId: createdPayload.data.id, status: "closed" } });
+    expect(d1.database.prepare("SELECT id, status FROM submission_forms ORDER BY id").all()).toEqual(expect.arrayContaining([
+      { id: "form-a", status: "published" },
+      { id: createdPayload.data.id, status: "closed" },
+    ]));
+    expect(d1.database.prepare("SELECT status FROM events WHERE id = 'event-a'").get()).toEqual({ status: "cfp_open" });
+  });
+
   it("keeps published controls unchanged when an organizer saves a private next version", async () => {
     const d1 = createDatabase([titleField, categoryField]);
     d1.database.prepare("UPDATE form_versions SET settings = ? WHERE id = 'form-a-v1'").run(JSON.stringify(defaultFormVersionSettings));
@@ -392,5 +444,20 @@ describe("versioned form controls API", () => {
     });
     expect(d1.database.prepare("SELECT status, published_version FROM submission_forms WHERE id = 'form-a'").get()).toEqual({ status: "draft", published_version: null });
     expect(d1.database.prepare("SELECT published_at FROM form_versions WHERE id = 'form-a-v1'").get()).toEqual({ published_at: null });
+  });
+
+  it("rejects comma-delimited program lane choices that cannot be routed unambiguously", async () => {
+    const commaCategory = { ...categoryField, options: ["AI, Ethics", "Build"] };
+    const d1 = createDatabase([titleField, commaCategory]);
+    const response = await app.request("http://localhost/api/v1/events/event-a/forms/form-a/publish", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ version: 1 }),
+    }, bindings(d1));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "FORM_CATEGORY_INVALID", fieldErrors: { category: expect.stringContaining("cannot contain commas") } },
+    });
   });
 });

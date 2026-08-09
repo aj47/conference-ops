@@ -81,6 +81,15 @@ if (previewAccessEnabled && previewAccessHostname.toLowerCase() !== customDomain
 
 const emailEnabled = optionalBoolean("ENABLE_CLOUDFLARE_EMAIL");
 const mailFrom = process.env.MAIL_FROM?.trim() || (emailEnabled ? requiredEnvironment("MAIL_FROM") : "program@example.invalid");
+const airtableEnabled = optionalBoolean("AIRTABLE_ENABLED");
+const airtableBaseId = process.env.AIRTABLE_BASE_ID?.trim() || "";
+if (airtableEnabled && !/^app[A-Za-z0-9]+$/.test(airtableBaseId)) throw new Error("AIRTABLE_BASE_ID must be a valid base ID when Airtable is enabled");
+const airtableAuthority = process.env.AIRTABLE_AUTHORITY_DEFAULT?.trim() || "d1";
+if (!["d1", "airtable"].includes(airtableAuthority)) throw new Error("AIRTABLE_AUTHORITY_DEFAULT must be d1 or airtable");
+const airtableRequestsPerSecond = process.env.AIRTABLE_MAX_REQUESTS_PER_SECOND?.trim() || "4";
+if (!Number.isFinite(Number(airtableRequestsPerSecond)) || Number(airtableRequestsPerSecond) <= 0 || Number(airtableRequestsPerSecond) > 4) {
+  throw new Error("AIRTABLE_MAX_REQUESTS_PER_SECOND must be between 0 and 4");
+}
 
 const publicAppUrl = normalizePublicUrl(customDomain);
 const replacements = {
@@ -90,6 +99,10 @@ const replacements = {
   __MAIL_REPLY_TO__: process.env.MAIL_REPLY_TO?.trim() || mailFrom,
   __ACCELEVENTS_EVENT_URL__: process.env.ACCELEVENTS_EVENT_URL?.trim() || "",
   __ACCELEVENTS_ENABLED__: optionalBoolean("ACCELEVENTS_ENABLED") ? "true" : "false",
+  __AIRTABLE_ENABLED__: airtableEnabled ? "true" : "false",
+  __AIRTABLE_BASE_ID__: airtableBaseId,
+  __AIRTABLE_AUTHORITY_DEFAULT__: airtableAuthority,
+  __AIRTABLE_MAX_REQUESTS_PER_SECOND__: airtableRequestsPerSecond,
 };
 
 await mkdir(options.outDir, { recursive: true });

@@ -19,6 +19,8 @@ describe("workspace review projection", () => {
       total_score: 4.12,
       recommendation: "yes",
       notes: "Specific evidence supports the recommendation.",
+      submitted_at: 1785844800000,
+      review_cycle: 3,
     })).toEqual({
       id: "review-1",
       proposalId: "proposal-1",
@@ -26,6 +28,7 @@ describe("workspace review projection", () => {
       round: 2,
       roundName: "Final calibration",
       status: "in_progress",
+      reviewCycle: 3,
       rubric: [
         { id: "fit", label: "Program fit", weight: 2, maxScore: 5, description: "Matches the audience" },
         { id: "proof", label: "Evidence", weight: 3, maxScore: 10, description: undefined },
@@ -34,6 +37,7 @@ describe("workspace review projection", () => {
       score: 4.12,
       recommendation: "yes",
       notes: "Specific evidence supports the recommendation.",
+      submittedAt: "2026-08-04T12:00:00.000Z",
     });
   });
 
@@ -60,7 +64,14 @@ describe("workspace review visibility", () => {
   it("keeps only reviewable proposals in reviewer queues while preserving organizer history", () => {
     const db = new DatabaseSync(":memory:");
     db.exec(`
-      CREATE TABLE proposals (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, owner_user_id TEXT NOT NULL, status TEXT NOT NULL);
+      CREATE TABLE proposals (
+        id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        owner_user_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        revision_requested_at INTEGER,
+        review_cycle INTEGER NOT NULL DEFAULT 1
+      );
       CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, user_id TEXT);
       CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
       CREATE TABLE review_rounds (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, round INTEGER NOT NULL, name TEXT NOT NULL, rubric TEXT NOT NULL, status TEXT NOT NULL);
@@ -71,24 +82,28 @@ describe("workspace review visibility", () => {
         reviewer_user_id TEXT NOT NULL,
         status TEXT NOT NULL,
         scores TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+        submitted_at INTEGER,
+        created_at INTEGER NOT NULL,
+        review_cycle INTEGER NOT NULL DEFAULT 1
       );
       INSERT INTO proposals VALUES
-        ('proposal-active', 'event-a', 'applicant-a', 'under_review'),
-        ('proposal-final', 'event-a', 'applicant-b', 'accepted'),
-        ('proposal-withdrawn', 'event-a', 'applicant-c', 'withdrawn'),
-        ('proposal-self-owned', 'event-a', 'reviewer-a', 'under_review'),
-        ('proposal-claim-later', 'event-a', 'applicant-d', 'under_review');
+        ('proposal-active', 'event-a', 'applicant-a', 'under_review', NULL, 1),
+        ('proposal-final', 'event-a', 'applicant-b', 'accepted', NULL, 1),
+        ('proposal-withdrawn', 'event-a', 'applicant-c', 'withdrawn', NULL, 1),
+        ('proposal-self-owned', 'event-a', 'reviewer-a', 'under_review', NULL, 1),
+        ('proposal-claim-later', 'event-a', 'applicant-d', 'under_review', NULL, 1),
+        ('proposal-revised', 'event-a', 'applicant-e', 'under_review', 10, 2);
       INSERT INTO speaker_profiles VALUES ('speaker-claim-later', 'event-a', NULL);
       INSERT INTO proposal_speakers VALUES ('proposal-claim-later', 'speaker-claim-later');
       INSERT INTO review_rounds VALUES ('round-a', 'event-a', 1, 'Program review', '[]', 'active');
       INSERT INTO review_assignments VALUES
-        ('review-active', 'proposal-active', 'round-a', 'reviewer-a', 'pending', '{}', 1),
-        ('review-final', 'proposal-final', 'round-a', 'reviewer-a', 'submitted', '{}', 2),
-        ('review-withdrawn', 'proposal-withdrawn', 'round-a', 'reviewer-a', 'submitted', '{}', 3),
-        ('review-other', 'proposal-active', 'round-a', 'reviewer-b', 'pending', '{}', 4),
-        ('review-self-owned', 'proposal-self-owned', 'round-a', 'reviewer-a', 'pending', '{}', 5),
-        ('review-claim-later', 'proposal-claim-later', 'round-a', 'reviewer-a', 'pending', '{}', 6);
+        ('review-active', 'proposal-active', 'round-a', 'reviewer-a', 'pending', '{}', NULL, 1, 1),
+        ('review-final', 'proposal-final', 'round-a', 'reviewer-a', 'submitted', '{}', 2, 2, 1),
+        ('review-withdrawn', 'proposal-withdrawn', 'round-a', 'reviewer-a', 'submitted', '{}', 3, 3, 1),
+        ('review-other', 'proposal-active', 'round-a', 'reviewer-b', 'pending', '{}', NULL, 4, 1),
+        ('review-self-owned', 'proposal-self-owned', 'round-a', 'reviewer-a', 'pending', '{}', NULL, 5, 1),
+        ('review-claim-later', 'proposal-claim-later', 'round-a', 'reviewer-a', 'pending', '{}', NULL, 6, 1),
+        ('review-revised', 'proposal-revised', 'round-a', 'reviewer-a', 'submitted', '{}', 5, 7, 1);
     `);
 
     const reviewerRowsBeforeClaim = db.prepare(workspaceReviewRowsSql).all("event-a", "reviewer", "reviewer-a", "reviewer-a", "reviewer-a");
@@ -98,7 +113,7 @@ describe("workspace review visibility", () => {
 
     expect(reviewerRowsBeforeClaim.map((row) => row.id)).toEqual(["review-active", "review-claim-later"]);
     expect(reviewerRowsAfterClaim.map((row) => row.id)).toEqual(["review-active"]);
-    expect(organizerRows.map((row) => row.id)).toEqual(["review-active", "review-final", "review-withdrawn", "review-other", "review-self-owned", "review-claim-later"]);
+    expect(organizerRows.map((row) => row.id)).toEqual(["review-active", "review-final", "review-withdrawn", "review-other", "review-self-owned", "review-claim-later", "review-revised"]);
     expect(db.prepare("SELECT status FROM review_assignments WHERE id = 'review-withdrawn'").get()).toEqual({ status: "submitted" });
   });
 });
