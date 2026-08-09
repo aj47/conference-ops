@@ -41,7 +41,7 @@ function database() {
     CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL);
     CREATE TABLE speaker_tasks (
       id TEXT PRIMARY KEY, event_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL,
-      status TEXT NOT NULL, due_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      title TEXT NOT NULL, status TEXT NOT NULL, due_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
     CREATE TABLE message_templates (
       id TEXT PRIMARY KEY, event_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -76,7 +76,7 @@ describe("scheduled communication rules", () => {
         ('rule-task', 'event-a', 'task_overdue', 1, 2, NULL, 1, 1),
         ('rule-draft', 'event-a', 'cfp_draft', 1, 2, NULL, 1, 1);
       INSERT INTO speaker_profiles VALUES ('speaker-a', 'event-a', 'Speaker A', 'speaker@example.test');
-      INSERT INTO speaker_tasks VALUES ('task-a', 'event-a', 'speaker-a', 'in_progress', ${now - 3 * day}, 1);
+      INSERT INTO speaker_tasks VALUES ('task-a', 'event-a', 'speaker-a', 'Upload final slides', 'in_progress', ${now - 3 * day}, 1);
       INSERT INTO message_templates VALUES (
         'template-reminder', 'event-a', 'reminder',
         'Tasks · {{event.name}}',
@@ -102,7 +102,7 @@ describe("scheduled communication rules", () => {
     const payloads = sqlite.prepare("SELECT payload FROM outbox ORDER BY idempotency_key").all() as Array<{ payload: string }>;
     expect(payloads.map(({ payload }) => JSON.parse(payload))).toEqual(expect.arrayContaining([
       expect.objectContaining({ recipient: "applicant@example.test", text: expect.stringContaining("/submit/conference-a?edit=proposal-a") }),
-      expect.objectContaining({ recipient: "speaker@example.test", subject: "Tasks · Conference A", text: expect.stringContaining("task(s): https://conference.example.test/portal/tasks?eventId=event-a&role=speaker") }),
+      expect.objectContaining({ recipient: "speaker@example.test", subject: "Tasks · Conference A", text: expect.stringMatching(/Upload final slides — due 2030-01-07/) }),
     ]));
     expect(sqlite.prepare("SELECT COUNT(*) AS count FROM communication_schedules WHERE last_run_at = ?").get(now)).toEqual({ count: 2 });
   });

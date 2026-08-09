@@ -128,6 +128,7 @@ describe("public program projections", () => {
     const rows = publicRows();
     const sessions = publicSessionsFromRows(rows.sessions!, [...rows.sessionSpeakers!, rows.sessionSpeakers![0]]);
     expect(sessions[0]).toMatchObject({
+      format: "talk",
       speakerIds: ["speaker-a", "speaker-b"],
       speakerNames: ["Ada Rivera", "Lin Park"],
       startsAt: "2026-08-28T16:00:00.000Z",
@@ -173,6 +174,24 @@ describe("production public program API", () => {
     expect(serialized).not.toContain("private/event-a");
     expect(prepare.mock.calls.find(([sql]) => String(sql).includes("FROM submission_forms"))?.[0]).toContain("fv.settings");
     expect(prepare.mock.calls.find(([sql]) => String(sql).includes("FROM resource_pages"))?.[0]).toContain("sanitized_html AS body");
+    expect(prepare.mock.calls.find(([sql]) => String(sql).includes("FROM program_sessions ps LEFT JOIN"))?.[0]).toContain("session_content_status");
+  });
+
+  it.each([
+    ["json", "application/json", '"title":"Operational evals"'],
+    ["xml", "application/xml", "<title>Operational evals</title>"],
+    ["ical", "text/calendar", "SUMMARY:Operational evals"],
+  ])("serves a filtered anonymous %s widget feed from approved published data", async (format, contentType, expected) => {
+    const { bindings, prepare } = productionBindings(publicRows());
+    const response = await app.request(`https://conference.example.com/api/v1/public/events/summit-2026/widgets/sessions/${format}?track=track-a&sessionFormat=talk&room=room-a`, undefined, bindings);
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain(contentType);
+    expect(response.headers.get("access-control-allow-origin")).toBe("*");
+    expect(response.headers.get("cache-control")).toContain("max-age=60");
+    expect(body).toContain(expected);
+    expect(prepare.mock.calls.find(([sql]) => String(sql).includes("FROM program_sessions ps LEFT JOIN"))?.[0]).toContain("session_content_status");
   });
 
   it("projects published version controls ahead of denormalized legacy form columns", async () => {

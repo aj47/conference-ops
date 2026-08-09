@@ -60,4 +60,39 @@ describe("review rubric scoring", () => {
       expect.objectContaining<Partial<ReviewRubricError>>({ code: "INVALID_RUBRIC" }),
     );
   });
+
+  it("round-trips numeric, dropdown, and long-text responses while weighting numeric criteria only", () => {
+    const typed = [
+      { id: "originality", label: "Originality", type: "numeric", weight: 2, maxScore: 5 },
+      { id: "relevance", label: "Relevance", type: "numeric", weight: 1, maxScore: 5 },
+      { id: "recommendation", label: "Recommendation", type: "dropdown", weight: 1, maxScore: 5, options: ["Accept", "Maybe", "Reject"] },
+      { id: "comments", label: "Comments", type: "text", weight: 1, maxScore: 5 },
+    ];
+
+    expect(evaluateReviewScores(typed, {
+      originality: 4,
+      relevance: 2,
+      recommendation: "Accept",
+      comments: "Strong monorepo evidence with a concrete build-performance payoff.",
+    }, true)).toEqual({
+      scores: {
+        originality: 4,
+        relevance: 2,
+        recommendation: "Accept",
+        comments: "Strong monorepo evidence with a concrete build-performance payoff.",
+      },
+      complete: true,
+      totalScore: 3.33,
+    });
+  });
+
+  it("rejects values outside configured dropdown options and blank required text", () => {
+    const typed = [
+      { id: "recommendation", label: "Recommendation", type: "dropdown", weight: 1, maxScore: 5, options: ["Accept", "Maybe", "Reject"] },
+      { id: "comments", label: "Comments", type: "text", weight: 1, maxScore: 5 },
+    ];
+    expect(() => evaluateReviewScores(typed, { recommendation: "Strong yes", comments: " " }, true)).toThrowError(
+      expect.objectContaining<Partial<ReviewRubricError>>({ code: "INVALID_SCORE" }),
+    );
+  });
 });

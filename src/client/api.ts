@@ -10,6 +10,7 @@ import type {
   ReadinessInsight,
   ReminderRule,
   ReviewPlanDefinition,
+  ReviewResponseValue,
   ResourcePage,
   ReviewerGroupConfig,
   Room,
@@ -364,13 +365,13 @@ export const conferenceApi = {
     eventId: string,
     proposalId: string,
     payload: {
-      scores: Record<string, number>;
+      scores: Record<string, ReviewResponseValue>;
       recommendation: "strong_yes" | "yes" | "maybe" | "no";
       notes: string;
       submit: boolean;
     },
   ) {
-    return request<{ proposalId: string; status: string; scores: Record<string, number>; score?: number }>(
+    return request<{ proposalId: string; status: string; scores: Record<string, ReviewResponseValue>; score?: number }>(
       `/api/v1/events/${eventId}/proposals/${proposalId}/review`,
       actorId,
       { method: "POST", body: JSON.stringify(payload) },
@@ -713,7 +714,7 @@ export const conferenceApi = {
   },
 
   publishAgenda(actorId: string, eventId: string, sessionIds: string[]) {
-    return request<{ eventId: string; status: string; publishedSessions: number; publishedAt: string }>(
+    return request<{ eventId: string; status: string; publishedSessions: number; approvedSessions: number; publishedAt: string }>(
       `/api/v1/events/${eventId}/agenda/publish`,
       actorId,
       { method: "POST", body: JSON.stringify({ sessionIds }) },

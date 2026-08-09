@@ -860,6 +860,27 @@ function PublicSubmissionExperience({ builder: publishedBuilder, previewingDraft
     }
   };
 
+  if (cfpClosed && !previewingDraft) {
+    return (
+      <div className="public-page">
+        <PublicHeader active="cfp" />
+        <main className="public-unavailable public-cfp-closed" role="status">
+          <p className="eyebrow">{workspace.event.name} · Call for speakers closed</p>
+          <h1>This submission window has ended.</h1>
+          <p>The deadline was <strong>{formatDeadline(cfpDeadline, workspace.event.timezone)}</strong>. New proposals, account drafts, and revisions are now locked so every applicant is evaluated against the same cutoff.</p>
+          <p>Already submitted work remains in the review process. Sign in to see its current status, or continue to the published program.</p>
+          <div className="public-cfp-closed__actions">
+            {source === "api" && accountState.kind === "verified"
+              ? <Link className="button button--primary" to={portalPath}>Open your participant portal <ArrowRight size={15} /></Link>
+              : <Link className="button button--primary" to={authPath}>Sign in to view saved proposals <ArrowRight size={15} /></Link>}
+            <Link className="button button--quiet" to={`/events/${encodeURIComponent(workspace.event.slug)}/agenda`}>View the public agenda</Link>
+          </div>
+        </main>
+        <NoticeRegion />
+      </div>
+    );
+  }
+
   if (submittedId) {
     return (
       <div className="public-page">

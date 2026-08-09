@@ -31,7 +31,7 @@ export function validateGeneratedViteConfig(config, environment) {
   requireMatch(config.assets.binding, "ASSETS", "Generated assets binding");
   requireMatch(config.assets.not_found_handling, "single-page-application", "Generated assets fallback");
   if (!config.assets.run_worker_first?.includes("/api/*")) throw new Error("Generated assets config must route /api/* through the Worker");
-  if (!config.assets.run_worker_first?.includes("/events/*/embed/agenda")) throw new Error("Generated assets config must route event-scoped agenda embeds through the Worker");
+  if (!config.assets.run_worker_first?.includes("/events/*/embed/*")) throw new Error("Generated assets config must route every event-scoped public widget embed through the Worker");
   const publicUrl = new URL(config.vars?.PUBLIC_APP_URL ?? "invalid:");
   requireMatch(config.vars?.BETTER_AUTH_URL, publicUrl.origin, "Generated auth origin");
   if (publicUrl.protocol !== "https:") throw new Error("Generated public origin must use HTTPS");
@@ -63,7 +63,7 @@ export function validateStaticAssetHeaders(source) {
     throw new Error("Built static assets are missing immutable cache headers");
   }
 
-  for (const pathPattern of ["/embed/*", "/events/:slug/embed/agenda"]) {
+  for (const pathPattern of ["/embed/*", "/events/:slug/embed/*"]) {
     const embedHeaders = rules.get(pathPattern) ?? [];
     if (
       !embedHeaders.includes("! Content-Security-Policy")

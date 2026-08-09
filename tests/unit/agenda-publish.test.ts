@@ -2,8 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   AgendaPublishError,
+  agendaContentApprovalBindings,
   agendaEventPublishBindings,
   agendaSessionPublishBindings,
+  approveAgendaContentSql,
   normalizeAgendaSessionIds,
   publishAgendaEventSql,
   publishAgendaSessionsSql,
@@ -81,6 +83,13 @@ describe("guarded agenda publication SQL", () => {
         version INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE session_content_status (
+        session_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
       INSERT INTO events VALUES
         ('event-a', 'review', 0, NULL, 1),
         ('event-b', 'review', 0, NULL, 1),
@@ -98,9 +107,10 @@ describe("guarded agenda publication SQL", () => {
     db.exec("BEGIN IMMEDIATE");
     try {
       const sessions = db.prepare(publishAgendaSessionsSql).run(...agendaSessionPublishBindings(now, eventId, sessionIds));
+      const content = db.prepare(approveAgendaContentSql).run(...agendaContentApprovalBindings(now, eventId, sessionIds));
       const event = db.prepare(publishAgendaEventSql).run(...agendaEventPublishBindings(now, eventId, sessionIds));
       db.exec("COMMIT");
-      return { sessionChanges: sessions.changes, eventChanges: event.changes };
+      return { sessionChanges: sessions.changes, contentChanges: content.changes, eventChanges: event.changes };
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
@@ -108,27 +118,31 @@ describe("guarded agenda publication SQL", () => {
   }
 
   it("publishes all valid selected sessions and advances the event in one batch shape", () => {
-    expect(publish("event-a", ["scheduled-a", "published-a"])).toEqual({ sessionChanges: 1, eventChanges: 1 });
+    expect(publish("event-a", ["scheduled-a", "published-a"])).toEqual({ sessionChanges: 1, contentChanges: 2, eventChanges: 1 });
     expect(db.prepare("SELECT status, version FROM program_sessions WHERE id = 'scheduled-a'").get()).toEqual({ status: "published", version: 2 });
     expect(db.prepare("SELECT status, version FROM program_sessions WHERE id = 'published-a'").get()).toEqual({ status: "published", version: 1 });
+    expect(db.prepare("SELECT session_id, status FROM session_content_status ORDER BY session_id").all()).toEqual([
+      { session_id: "published-a", status: "approved" },
+      { session_id: "scheduled-a", status: "approved" },
+    ]);
     expect(db.prepare("SELECT status, public_agenda_revision FROM events WHERE id = 'event-a'").get()).toEqual({ status: "agenda_published", public_agenda_revision: 1 });
   });
 
   it("does not partially publish when any selected session belongs to another event", () => {
-    expect(publish("event-a", ["scheduled-a", "scheduled-b"])).toEqual({ sessionChanges: 0, eventChanges: 0 });
+    expect(publish("event-a", ["scheduled-a", "scheduled-b"])).toEqual({ sessionChanges: 0, contentChanges: 0, eventChanges: 0 });
     expect(db.prepare("SELECT status FROM program_sessions WHERE id = 'scheduled-a'").get()).toEqual({ status: "scheduled" });
     expect(db.prepare("SELECT status, public_agenda_revision FROM events WHERE id = 'event-a'").get()).toEqual({ status: "review", public_agenda_revision: 0 });
   });
 
   it("does not transition the event for empty, missing, or unscheduled selections", () => {
-    expect(publish("event-a", [])).toEqual({ sessionChanges: 0, eventChanges: 0 });
-    expect(publish("event-a", ["missing"])).toEqual({ sessionChanges: 0, eventChanges: 0 });
-    expect(publish("event-a", ["unscheduled-a"])).toEqual({ sessionChanges: 0, eventChanges: 0 });
+    expect(publish("event-a", [])).toEqual({ sessionChanges: 0, contentChanges: 0, eventChanges: 0 });
+    expect(publish("event-a", ["missing"])).toEqual({ sessionChanges: 0, contentChanges: 0, eventChanges: 0 });
+    expect(publish("event-a", ["unscheduled-a"])).toEqual({ sessionChanges: 0, contentChanges: 0, eventChanges: 0 });
     expect(db.prepare("SELECT status, public_agenda_revision FROM events WHERE id = 'event-a'").get()).toEqual({ status: "review", public_agenda_revision: 0 });
   });
 
   it("does not publish sessions for a soft-deleted event", () => {
-    expect(publish("event-deleted", ["scheduled-deleted"])).toEqual({ sessionChanges: 0, eventChanges: 0 });
+    expect(publish("event-deleted", ["scheduled-deleted"])).toEqual({ sessionChanges: 0, contentChanges: 0, eventChanges: 0 });
     expect(db.prepare("SELECT status FROM program_sessions WHERE id = 'scheduled-deleted'").get()).toEqual({ status: "scheduled" });
   });
 });

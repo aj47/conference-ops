@@ -40,6 +40,13 @@ import {
   type PublicSessionSpeakerRow,
 } from "./public-program";
 import {
+  filterPublicWidgetExport,
+  isPublicWidgetExportFormat,
+  publicWidgetIcal,
+  publicWidgetXml,
+  type PublicWidgetExportPayload,
+} from "./public-widget-export";
+import {
   auditProposalDecisionBindings,
   auditProposalDecisionSql,
   isProfileComplete,
@@ -70,6 +77,7 @@ import {
 } from "./acceptance-activation";
 import { readinessAnswer, readinessInsights } from "./readiness-agent";
 import { dispatchAirtableAfterMutation } from "./airtable-dispatch";
+import speakerContentRoutes from "./speaker-content-routes";
 import { handleAirtableWebhook } from "./airtable-webhook";
 import { loadAirtableOperatorStatus, projectAirtableOperatorStatus } from "./airtable-status";
 import {
@@ -82,13 +90,18 @@ import {
   updateProposalForApplicantRevisionSql,
   updateProposalForRevisionSql,
 } from "./proposal-revision";
+import { boundedProposalEvaluation, reviewResultsCsv } from "./abstract-review";
+import { spreadsheetSafeCsvCell } from "../shared/csv";
 
 const app = new Hono<AppEnv>();
 
 app.use("*", requestContext);
 
-app.on(["GET", "HEAD"], "/events/:slug/embed/agenda", async (c) => {
-  if (!c.env.ASSETS) return jsonError(c, 503, "ASSETS_UNAVAILABLE", "The embedded agenda is temporarily unavailable.");
+app.on(["GET", "HEAD"], "/events/:slug/embed/:widget", async (c) => {
+  if (!["sessions", "speakers", "agenda", "itinerary", "gallery"].includes(c.req.param("widget"))) {
+    return jsonError(c, 404, "WIDGET_NOT_FOUND", "This public widget is not available.");
+  }
+  if (!c.env.ASSETS) return jsonError(c, 503, "ASSETS_UNAVAILABLE", "The embedded public program is temporarily unavailable.");
   const contentSecurityPolicy = agendaEmbedContentSecurityPolicyForEnvironment(c.env.ENVIRONMENT);
   const response = withAgendaEmbedFramingPolicy(await c.env.ASSETS.fetch(agendaEmbedAssetRequest(c.req.raw)), contentSecurityPolicy);
   c.header("content-security-policy", contentSecurityPolicy);
@@ -182,14 +195,6 @@ async function reviewerRoutingForCategories(db: D1Database, eventId: string, cat
   return { groups: groups.results, reviewers: members.results };
 }
 
-function csvCell(value: unknown) {
-  const text = value === null || value === undefined ? "" : String(value);
-  let markerIndex = 0;
-  while (markerIndex < text.length && text.charCodeAt(markerIndex) <= 0x20) markerIndex += 1;
-  const safeText = "=+-@".includes(text[markerIndex] ?? "") ? `'${text}` : text;
-  return `"${safeText.replace(/"/g, '""')}"`;
-}
-
 function escapeHtml(value: string) {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character]!);
 }
@@ -277,11 +282,11 @@ app.get("/api/v1/public/events/:slug", async (c) => {
   const [form, sessionResult, sessionSpeakerResult, speakerResult, resourceResult] = await Promise.all([
     c.env.DB.prepare("SELECT sf.id, sf.slug, sf.name, sf.status, sf.published_version AS version, sf.submission_type AS submissionType, sf.collects_participants AS collectsParticipants, sf.max_submissions_per_user AS maxSubmissionsPerUser, sf.redirect_to_portal AS redirectToPortal, sf.confirmation_email_enabled AS confirmationEmailEnabled, sf.closes_at AS closesAt, sf.updated_at AS updatedAt, fv.public_title AS publicTitle, fv.page_heading AS pageHeading, fv.welcome_title AS welcomeTitle, fv.welcome_copy AS welcomeCopy, fv.confirmation_copy AS confirmationCopy, fv.max_speakers AS maxSpeakers, fv.allow_multiple_drafts AS allowMultipleDrafts, fv.settings, fv.fields FROM submission_forms sf JOIN form_versions fv ON fv.form_id = sf.id AND fv.version = sf.published_version WHERE sf.event_id = ? AND sf.kind = 'cfp' AND sf.status = 'published' AND (? IS NULL OR sf.slug = ? OR sf.id = ?) ORDER BY CASE WHEN sf.slug = ? OR sf.id = ? THEN 0 ELSE 1 END, sf.created_at LIMIT 1")
       .bind(event.id, requestedForm ?? null, requestedForm ?? null, requestedForm ?? null, requestedForm ?? null, requestedForm ?? null).first<Record<string, unknown>>(),
-    c.env.DB.prepare("SELECT ps.id, ps.event_id AS eventId, ps.proposal_id AS proposalId, ps.title, ps.description, ps.starts_at AS startsAt, ps.ends_at AS endsAt, t.id AS trackId, t.name AS trackName, t.color AS trackColor, r.id AS roomId, r.name AS roomName FROM program_sessions ps LEFT JOIN tracks t ON t.id = ps.track_id AND t.event_id = ps.event_id LEFT JOIN rooms r ON r.id = ps.room_id AND r.event_id = ps.event_id WHERE ps.event_id = ? AND ps.status = 'published' ORDER BY ps.starts_at")
+    c.env.DB.prepare("SELECT ps.id, ps.event_id AS eventId, ps.proposal_id AS proposalId, ps.title, ps.description, ps.format, ps.starts_at AS startsAt, ps.ends_at AS endsAt, t.id AS trackId, t.name AS trackName, t.color AS trackColor, r.id AS roomId, r.name AS roomName FROM program_sessions ps LEFT JOIN tracks t ON t.id = ps.track_id AND t.event_id = ps.event_id LEFT JOIN rooms r ON r.id = ps.room_id AND r.event_id = ps.event_id WHERE ps.event_id = ? AND ps.status = 'published' AND EXISTS (SELECT 1 FROM session_content_status scs WHERE scs.session_id = ps.id AND scs.event_id = ps.event_id AND scs.status = 'approved') ORDER BY ps.starts_at")
       .bind(event.id).all<Record<string, unknown>>(),
-    c.env.DB.prepare("SELECT ss.session_id AS sessionId, sp.id AS speakerId, sp.name AS speakerName FROM session_speakers ss JOIN program_sessions ps ON ps.id = ss.session_id JOIN speaker_profiles sp ON sp.id = ss.speaker_profile_id AND sp.event_id = ps.event_id WHERE ps.event_id = ? AND ps.status = 'published' ORDER BY ps.starts_at, sp.name")
+    c.env.DB.prepare("SELECT ss.session_id AS sessionId, sp.id AS speakerId, sp.name AS speakerName FROM session_speakers ss JOIN program_sessions ps ON ps.id = ss.session_id JOIN speaker_profiles sp ON sp.id = ss.speaker_profile_id AND sp.event_id = ps.event_id WHERE ps.event_id = ? AND ps.status = 'published' AND EXISTS (SELECT 1 FROM session_content_status scs WHERE scs.session_id = ps.id AND scs.event_id = ps.event_id AND scs.status = 'approved') ORDER BY ps.starts_at, sp.name")
       .bind(event.id).all<PublicSessionSpeakerRow>(),
-    c.env.DB.prepare("SELECT DISTINCT sp.id, sp.name, sp.title, sp.company, sp.bio, sp.pronouns, sp.city, sp.profile_complete AS profileComplete, CASE WHEN up.id IS NULL THEN 0 ELSE 1 END AS hasHeadshot FROM speaker_profiles sp JOIN session_speakers ss ON ss.speaker_profile_id = sp.id JOIN program_sessions ps ON ps.id = ss.session_id AND ps.event_id = sp.event_id LEFT JOIN uploads up ON up.id = sp.headshot_upload_id AND up.event_id = sp.event_id AND up.purpose = 'headshot' AND up.deleted_at IS NULL WHERE sp.event_id = ? AND sp.published = 1 AND ps.status = 'published' ORDER BY sp.name")
+    c.env.DB.prepare("SELECT DISTINCT sp.id, sp.name, sp.title, sp.company, sp.bio, sp.pronouns, sp.city, sp.profile_complete AS profileComplete, CASE WHEN up.id IS NULL THEN 0 ELSE 1 END AS hasHeadshot FROM speaker_profiles sp JOIN session_speakers ss ON ss.speaker_profile_id = sp.id JOIN program_sessions ps ON ps.id = ss.session_id AND ps.event_id = sp.event_id LEFT JOIN uploads up ON up.id = sp.headshot_upload_id AND up.event_id = sp.event_id AND up.purpose = 'headshot' AND up.deleted_at IS NULL WHERE sp.event_id = ? AND sp.published = 1 AND ps.status = 'published' AND EXISTS (SELECT 1 FROM session_content_status scs WHERE scs.session_id = ps.id AND scs.event_id = ps.event_id AND scs.status = 'approved') ORDER BY sp.name")
       .bind(event.id).all<Record<string, unknown>>(),
     c.env.DB.prepare("SELECT id, title, slug, summary, sanitized_html AS body, embed_url AS linkUrl, updated_at AS updatedAt FROM resource_pages WHERE event_id = ? AND status = 'published' ORDER BY title")
       .bind(event.id).all<Record<string, unknown>>(),
@@ -323,6 +328,70 @@ app.get("/api/v1/public/events/:slug", async (c) => {
   } });
 });
 
+app.get("/api/v1/public/events/:slug/widgets/:widget/:format", async (c) => {
+  const widget = c.req.param("widget");
+  const format = c.req.param("format");
+  if (!["sessions", "speakers", "agenda", "itinerary", "gallery"].includes(widget)) {
+    return jsonError(c, 404, "WIDGET_NOT_FOUND", "This public widget is not available.");
+  }
+  if (!isPublicWidgetExportFormat(format)) {
+    return jsonError(c, 404, "WIDGET_FORMAT_NOT_FOUND", "Choose JSON, XML, or iCal for a public widget feed.");
+  }
+
+  let payload: PublicWidgetExportPayload;
+  if (c.env.DEMO_MODE === "true") {
+    const workspace = createDemoWorkspace("user-applicant");
+    if (workspace.event.slug !== c.req.param("slug") || !isPublicEventStatus(workspace.event.status)) {
+      return jsonError(c, 404, "EVENT_NOT_FOUND", "This public event is not available.");
+    }
+    const sessions = workspace.sessions.filter((session) => session.status === "published").map((session) => ({
+      ...session,
+      trackName: workspace.tracks.find((track) => track.id === session.trackId)?.name,
+      roomName: workspace.rooms.find((room) => room.id === session.roomId)?.name,
+    }));
+    const publishedSpeakerIds = new Set(sessions.flatMap((session) => session.speakerIds));
+    payload = {
+      event: workspace.event,
+      sessions,
+      speakers: [...new Map(workspace.proposals.flatMap((proposal) => proposal.speakers).filter((speaker) => publishedSpeakerIds.has(speaker.id)).map((speaker) => [speaker.id, speaker])).values()].map(publicSpeakerFromProfile),
+    };
+  } else {
+    const eventRow = await c.env.DB.prepare("SELECT id, slug, name, short_name AS shortName, description, timezone, starts_at AS startsAt, ends_at AS endsAt, cfp_closes_at AS cfpClosesAt, venue, website_url AS websiteUrl, accent, status FROM events WHERE slug = ? AND deleted_at IS NULL AND status IN ('cfp_open', 'review', 'agenda_published', 'archived')")
+      .bind(c.req.param("slug")).first<Record<string, unknown>>();
+    if (!eventRow) return jsonError(c, 404, "EVENT_NOT_FOUND", "This public event is not available.");
+    const event = publicEventFromRow(eventRow);
+    const [sessionResult, sessionSpeakerResult, speakerResult] = await Promise.all([
+      c.env.DB.prepare("SELECT ps.id, ps.event_id AS eventId, ps.proposal_id AS proposalId, ps.title, ps.description, ps.format, ps.starts_at AS startsAt, ps.ends_at AS endsAt, t.id AS trackId, t.name AS trackName, t.color AS trackColor, r.id AS roomId, r.name AS roomName FROM program_sessions ps LEFT JOIN tracks t ON t.id = ps.track_id AND t.event_id = ps.event_id LEFT JOIN rooms r ON r.id = ps.room_id AND r.event_id = ps.event_id WHERE ps.event_id = ? AND ps.status = 'published' AND EXISTS (SELECT 1 FROM session_content_status scs WHERE scs.session_id = ps.id AND scs.event_id = ps.event_id AND scs.status = 'approved') ORDER BY ps.starts_at")
+        .bind(event.id).all<Record<string, unknown>>(),
+      c.env.DB.prepare("SELECT ss.session_id AS sessionId, sp.id AS speakerId, sp.name AS speakerName FROM session_speakers ss JOIN program_sessions ps ON ps.id = ss.session_id JOIN speaker_profiles sp ON sp.id = ss.speaker_profile_id AND sp.event_id = ps.event_id WHERE ps.event_id = ? AND ps.status = 'published' AND EXISTS (SELECT 1 FROM session_content_status scs WHERE scs.session_id = ps.id AND scs.event_id = ps.event_id AND scs.status = 'approved') ORDER BY ps.starts_at, sp.name")
+        .bind(event.id).all<PublicSessionSpeakerRow>(),
+      c.env.DB.prepare("SELECT DISTINCT sp.id, sp.name, sp.title, sp.company, sp.bio, sp.pronouns, sp.city, sp.profile_complete AS profileComplete, CASE WHEN up.id IS NULL THEN 0 ELSE 1 END AS hasHeadshot FROM speaker_profiles sp JOIN session_speakers ss ON ss.speaker_profile_id = sp.id JOIN program_sessions ps ON ps.id = ss.session_id AND ps.event_id = sp.event_id LEFT JOIN uploads up ON up.id = sp.headshot_upload_id AND up.event_id = sp.event_id AND up.purpose = 'headshot' AND up.deleted_at IS NULL WHERE sp.event_id = ? AND sp.published = 1 AND ps.status = 'published' AND EXISTS (SELECT 1 FROM session_content_status scs WHERE scs.session_id = ps.id AND scs.event_id = ps.event_id AND scs.status = 'approved') ORDER BY sp.name")
+        .bind(event.id).all<Record<string, unknown>>(),
+    ]);
+    payload = {
+      event,
+      sessions: publicSessionsFromRows(sessionResult.results, sessionSpeakerResult.results),
+      speakers: speakerResult.results.map((speaker) => publicSpeakerFromRow(speaker, event.slug)),
+    };
+  }
+
+  const filtered = filterPublicWidgetExport(payload, {
+    trackId: c.req.query("track"),
+    sessionFormat: c.req.query("sessionFormat"),
+    roomId: c.req.query("room"),
+  });
+  c.header("access-control-allow-origin", "*");
+  c.header("cache-control", "public, max-age=60, stale-while-revalidate=300");
+  if (format === "json") return c.json({ data: { widget, ...filtered } });
+  if (format === "xml") {
+    c.header("content-type", "application/xml; charset=utf-8");
+    return c.body(publicWidgetXml(filtered));
+  }
+  c.header("content-type", "text/calendar; charset=utf-8");
+  c.header("content-disposition", `inline; filename="${filtered.event.slug}-${widget}.ics"`);
+  return c.body(publicWidgetIcal(filtered));
+});
+
 app.get("/api/v1/public/events/:slug/speakers/:speakerId/headshot", async (c) => {
   if (c.env.DEMO_MODE === "true") return jsonError(c, 404, "HEADSHOT_NOT_FOUND", "This public headshot is not available.");
   const upload = await c.env.DB.prepare(`SELECT up.object_key AS objectKey, up.content_type AS contentType
@@ -330,7 +399,8 @@ app.get("/api/v1/public/events/:slug/speakers/:speakerId/headshot", async (c) =>
     JOIN speaker_profiles sp ON sp.event_id = e.id AND sp.id = ? AND sp.published = 1
     JOIN uploads up ON up.id = sp.headshot_upload_id AND up.event_id = e.id AND up.purpose = 'headshot' AND up.deleted_at IS NULL
     WHERE e.slug = ? AND e.deleted_at IS NULL AND e.status IN ('cfp_open', 'review', 'agenda_published', 'archived')
-      AND EXISTS (SELECT 1 FROM session_speakers ss JOIN program_sessions ps ON ps.id = ss.session_id WHERE ss.speaker_profile_id = sp.id AND ps.event_id = e.id AND ps.status = 'published')`)
+      AND EXISTS (SELECT 1 FROM session_speakers ss JOIN program_sessions ps ON ps.id = ss.session_id WHERE ss.speaker_profile_id = sp.id AND ps.event_id = e.id AND ps.status = 'published'
+        AND EXISTS (SELECT 1 FROM session_content_status scs WHERE scs.session_id = ps.id AND scs.event_id = ps.event_id AND scs.status = 'approved'))`)
     .bind(c.req.param("speakerId"), c.req.param("slug"))
     .first<{ objectKey: string; contentType: string }>();
   if (!upload || !["image/jpeg", "image/png", "image/webp"].includes(upload.contentType.toLowerCase())) {
@@ -353,6 +423,10 @@ app.post("/api/v1/integrations/airtable/webhook", handleAirtableWebhook);
 
 app.use("/api/v1/*", requireActor);
 app.use("/api/v1/*", dispatchAirtableAfterMutation);
+
+// Speaker roster, deliverables, content-versioning, and latest-file exports live
+// in an isolated router so their extensive workflow does not widen this module.
+app.route("/", speakerContentRoutes);
 
 app.get("/api/v1/bootstrap", async (c) => {
   const actor = c.get("actor");
@@ -927,19 +1001,34 @@ const reviewPlanSchema = z.object({
   rubric: z.array(z.object({
     id: z.string().trim().min(1).max(80),
     label: z.string().trim().min(2).max(160),
+    type: z.enum(["numeric", "dropdown", "text"]).optional().default("numeric"),
     description: z.string().trim().max(1000).optional(),
     weight: z.number().positive().max(1000),
-    maxScore: z.number().int().min(2).max(20),
+    maxScore: z.number().int().min(2).max(20).optional().default(5),
+    options: z.array(z.string().trim().min(1).max(120)).min(2).max(20).optional(),
+    required: z.boolean().optional().default(true),
   })).min(1).max(12),
+  opensAt: z.string().trim().nullable().optional(),
+  closesAt: z.string().trim().nullable().optional(),
+  anonymized: z.boolean().optional().default(false),
+  reviewerIds: z.array(z.string().min(1)).max(100).optional(),
+  reviewerCaps: z.record(z.string(), z.number().int().min(1).max(500)).optional(),
 }).superRefine((value, context) => {
   const ids = new Set<string>();
   for (const [index, criterion] of value.rubric.entries()) {
     if (ids.has(criterion.id)) context.addIssue({ code: "custom", path: ["rubric", index, "id"], message: "Criterion identifiers must be unique." });
+    if (criterion.type === "dropdown" && (!criterion.options || criterion.options.length < 2)) context.addIssue({ code: "custom", path: ["rubric", index, "options"], message: "Dropdown criteria need at least two options." });
     ids.add(criterion.id);
   }
+  const opensAt = value.opensAt ? Date.parse(value.opensAt) : undefined;
+  const closesAt = value.closesAt ? Date.parse(value.closesAt) : undefined;
+  if (value.opensAt && !Number.isFinite(opensAt)) context.addIssue({ code: "custom", path: ["opensAt"], message: "Choose a valid opening date." });
+  if (value.closesAt && !Number.isFinite(closesAt)) context.addIssue({ code: "custom", path: ["closesAt"], message: "Choose a valid closing date." });
+  if (opensAt !== undefined && closesAt !== undefined && opensAt >= closesAt) context.addIssue({ code: "custom", path: ["closesAt"], message: "The closing date must be after the opening date." });
 });
 
 function reviewPlanFromRow(row: Record<string, unknown>, eventId: string) {
+  const reviewerIds = parseJson<string[]>(row.reviewer_ids, []);
   return {
     id: String(row.id),
     eventId,
@@ -947,6 +1036,11 @@ function reviewPlanFromRow(row: Record<string, unknown>, eventId: string) {
     round: Number(row.round),
     status: String(row.status) as "draft" | "active" | "closed",
     rubric: parseJson<unknown[]>(row.rubric, []),
+    opensAt: row.opens_at ? new Date(Number(row.opens_at)).toISOString() : undefined,
+    closesAt: row.closes_at ? new Date(Number(row.closes_at)).toISOString() : undefined,
+    anonymized: Boolean(row.anonymized),
+    reviewerIds,
+    reviewerCaps: parseJson<Record<string, number>>(row.reviewer_caps, {}),
     submittedReviews: Number(row.submitted_reviews ?? 0),
     updatedAt: databaseTimestampToIso(row.updated_at) ?? new Date(0).toISOString(),
   };
@@ -959,13 +1053,53 @@ app.get("/api/v1/events/:eventId/review-plans", async (c) => {
   if (c.get("actor")?.demo) {
     const demo = createDemoWorkspace(c.get("actor")!.id);
     const assignment = demo.reviews[0];
-    return c.json({ data: { plans: assignment ? [{ id: "round-1", eventId, name: assignment.roundName, round: assignment.round, status: "active", rubric: assignment.rubric, submittedReviews: demo.reviews.filter((review) => review.status === "submitted").length, updatedAt: new Date().toISOString() }] : [] } });
+    const reviewerId = demo.actors.find((actor) => actor.role === "reviewer")?.id;
+    return c.json({ data: { plans: assignment ? [
+      { id: "round-1", eventId, name: "Initial Review", round: 1, status: "active", rubric: assignment.rubric, opensAt: "2026-08-01T00:00:00.000Z", closesAt: "2026-10-15T23:59:00.000Z", anonymized: true, reviewerIds: reviewerId ? [reviewerId] : [], reviewerCaps: reviewerId ? { [reviewerId]: 5 } : {}, submittedReviews: demo.reviews.filter((review) => review.status === "submitted").length, updatedAt: new Date().toISOString() },
+      { id: "round-2", eventId, name: "Final Review", round: 2, status: "draft", rubric: [{ id: "final-score", label: "Final Score", type: "numeric", weight: 1, maxScore: 10, required: true }, { id: "final-comments", label: "Comments", type: "text", weight: 1, maxScore: 5, required: true }], opensAt: "2026-10-16T00:00:00.000Z", closesAt: "2026-11-30T23:59:00.000Z", anonymized: false, reviewerIds: [], reviewerCaps: {}, submittedReviews: 0, updatedAt: new Date().toISOString() },
+    ] : [] } });
   }
   const rows = await c.env.DB.prepare(`SELECT rr.*,
-      (SELECT COUNT(*) FROM review_assignments ra WHERE ra.round_id = rr.id AND ra.status = 'submitted') AS submitted_reviews
+      (SELECT COUNT(*) FROM review_assignments ra WHERE ra.round_id = rr.id AND ra.status = 'submitted') AS submitted_reviews,
+      COALESCE((SELECT json_group_array(reviewer_user_id) FROM review_round_reviewers WHERE round_id = rr.id), '[]') AS reviewer_ids,
+      COALESCE((SELECT json_group_object(reviewer_user_id, assignment_cap) FROM review_round_reviewers WHERE round_id = rr.id), '{}') AS reviewer_caps
     FROM review_rounds rr WHERE rr.event_id = ? ORDER BY rr.round`)
     .bind(eventId).all<Record<string, unknown>>();
   return c.json({ data: { plans: rows.results.map((row) => reviewPlanFromRow(row, eventId)) } });
+});
+
+async function validateRoundReviewerPool(db: D1Database, eventId: string, reviewerIds: string[]) {
+  const unique = [...new Set(reviewerIds)];
+  if (!unique.length) return true;
+  const result = await db.prepare(`SELECT COUNT(DISTINCT em.user_id) AS count FROM event_memberships em
+    WHERE em.event_id = ? AND em.role = 'reviewer' AND em.accepted_at IS NOT NULL AND em.user_id IN (${unique.map(() => "?").join(",")})`)
+    .bind(eventId, ...unique).first<{ count: number }>();
+  return Number(result?.count ?? 0) === unique.length;
+}
+
+app.post("/api/v1/events/:eventId/review-plans", zValidator("json", reviewPlanSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  const body = c.req.valid("json");
+  const reviewerIds = [...new Set(body.reviewerIds ?? [])];
+  if (c.get("actor")?.demo) return c.json({ data: { id: `round-${crypto.randomUUID()}`, eventId, round: 3, submittedReviews: 0, reviewerIds, reviewerCaps: body.reviewerCaps ?? {}, updatedAt: new Date().toISOString(), ...body } }, 201);
+  if (!await validateRoundReviewerPool(c.env.DB, eventId, reviewerIds)) return jsonError(c, 422, "REVIEW_POOL_INVALID", "Every round reviewer must be an accepted reviewer for this event.");
+  const nextRound = await c.env.DB.prepare("SELECT COALESCE(MAX(round), 0) + 1 AS round FROM review_rounds WHERE event_id = ?").bind(eventId).first<{ round: number }>();
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const statements = [
+    ...(body.status === "active" ? [c.env.DB.prepare("UPDATE review_rounds SET status = 'closed', updated_at = ? WHERE event_id = ? AND status = 'active'").bind(now, eventId)] : []),
+    c.env.DB.prepare(`INSERT INTO review_rounds (id, event_id, name, round, rubric, opens_at, closes_at, anonymized, status, created_at, updated_at)
+      SELECT ?, e.id, ?, ?, ?, ?, ?, ?, ?, ?, ? FROM events e WHERE e.id = ? AND e.deleted_at IS NULL`)
+      .bind(id, body.name, Number(nextRound?.round ?? 1), JSON.stringify(body.rubric), body.opensAt ? Date.parse(body.opensAt) : null, body.closesAt ? Date.parse(body.closesAt) : null, body.anonymized ? 1 : 0, body.status, now, now, eventId),
+    ...reviewerIds.map((reviewerId) => c.env.DB.prepare(`INSERT INTO review_round_reviewers (round_id, reviewer_user_id, assignment_cap, created_at)
+      SELECT ?, em.user_id, ?, ? FROM event_memberships em WHERE em.event_id = ? AND em.user_id = ? AND em.role = 'reviewer' AND em.accepted_at IS NOT NULL`)
+      .bind(id, body.reviewerCaps?.[reviewerId] ?? 25, now, eventId, reviewerId)),
+  ];
+  const results = await c.env.DB.batch(statements);
+  if (!results[body.status === "active" ? 1 : 0]?.meta.changes) return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
+  return c.json({ data: { id, eventId, round: Number(nextRound?.round ?? 1), submittedReviews: 0, reviewerIds, reviewerCaps: body.reviewerCaps ?? {}, updatedAt: new Date(now).toISOString(), ...body } }, 201);
 });
 
 app.get("/api/v1/events/:eventId/integrations/airtable/status", async (c) => {
@@ -983,7 +1117,9 @@ app.put("/api/v1/events/:eventId/review-plans/:planId", zValidator("json", revie
   const eventId = c.req.param("eventId");
   const planId = c.req.param("planId");
   const body = c.req.valid("json");
-  if (c.get("actor")?.demo) return c.json({ data: { id: planId, eventId, round: 1, submittedReviews: 0, updatedAt: new Date().toISOString(), ...body } });
+  const reviewerIds = [...new Set(body.reviewerIds ?? [])];
+  if (c.get("actor")?.demo) return c.json({ data: { id: planId, eventId, round: Number(planId.replace("round-", "")) || 1, submittedReviews: 0, reviewerIds, reviewerCaps: body.reviewerCaps ?? {}, updatedAt: new Date().toISOString(), ...body } });
+  if (!await validateRoundReviewerPool(c.env.DB, eventId, reviewerIds)) return jsonError(c, 422, "REVIEW_POOL_INVALID", "Every round reviewer must be an accepted reviewer for this event.");
   const existing = await c.env.DB.prepare(`SELECT rr.*,
       (SELECT COUNT(*) FROM review_assignments ra WHERE ra.round_id = rr.id AND ra.status = 'submitted') AS submitted_reviews
     FROM review_rounds rr WHERE rr.id = ? AND rr.event_id = ?`)
@@ -995,14 +1131,234 @@ app.put("/api/v1/events/:eventId/review-plans/:planId", zValidator("json", revie
     return jsonError(c, 409, "REVIEW_RUBRIC_LOCKED", "This rubric has submitted reviews. Create a future round before changing its scoring contract.");
   }
   const now = Date.now();
+  const removedReviewerClause = reviewerIds.length
+    ? `AND reviewer_user_id NOT IN (${reviewerIds.map(() => "?").join(",")})`
+    : "";
   const statements = [
     ...(body.status === "active" ? [c.env.DB.prepare("UPDATE review_rounds SET status = 'closed', updated_at = ? WHERE event_id = ? AND id <> ? AND status = 'active'").bind(now, eventId, planId)] : []),
-    c.env.DB.prepare("UPDATE review_rounds SET name = ?, status = ?, rubric = ?, updated_at = ? WHERE id = ? AND event_id = ?")
-      .bind(body.name, body.status, nextRubric, now, planId, eventId),
+    c.env.DB.prepare("UPDATE review_rounds SET name = ?, status = ?, rubric = ?, opens_at = ?, closes_at = ?, anonymized = ?, updated_at = ? WHERE id = ? AND event_id = ?")
+      .bind(body.name, body.status, nextRubric, body.opensAt ? Date.parse(body.opensAt) : null, body.closesAt ? Date.parse(body.closesAt) : null, body.anonymized ? 1 : 0, now, planId, eventId),
+    c.env.DB.prepare(`DELETE FROM review_assignments
+      WHERE round_id = ? AND status IN ('pending', 'in_progress') ${removedReviewerClause}
+        AND EXISTS (SELECT 1 FROM review_rounds rr WHERE rr.id = review_assignments.round_id AND rr.event_id = ?)`)
+      .bind(planId, ...reviewerIds, eventId),
+    c.env.DB.prepare("DELETE FROM review_round_reviewers WHERE round_id = ? AND EXISTS (SELECT 1 FROM review_rounds rr WHERE rr.id = ? AND rr.event_id = ?)").bind(planId, planId, eventId),
+    ...reviewerIds.map((reviewerId) => c.env.DB.prepare(`INSERT INTO review_round_reviewers (round_id, reviewer_user_id, assignment_cap, created_at)
+      SELECT rr.id, em.user_id, ?, ? FROM review_rounds rr JOIN event_memberships em ON em.event_id = rr.event_id
+      WHERE rr.id = ? AND rr.event_id = ? AND em.user_id = ? AND em.role = 'reviewer' AND em.accepted_at IS NOT NULL`)
+      .bind(body.reviewerCaps?.[reviewerId] ?? 25, now, planId, eventId, reviewerId)),
   ];
   const result = await c.env.DB.batch(statements);
-  if (!result[result.length - 1]?.meta.changes) return jsonError(c, 409, "REVIEW_PLAN_CONFLICT", "The review plan changed before it could be saved.");
-  return c.json({ data: { id: planId, eventId, round: Number(existing.round), submittedReviews: Number(existing.submitted_reviews), updatedAt: new Date(now).toISOString(), ...body } });
+  const updateIndex = body.status === "active" ? 1 : 0;
+  if (!result[updateIndex]?.meta.changes) return jsonError(c, 409, "REVIEW_PLAN_CONFLICT", "The review plan changed before it could be saved.");
+  return c.json({ data: { id: planId, eventId, round: Number(existing.round), submittedReviews: Number(existing.submitted_reviews), reviewerIds, reviewerCaps: body.reviewerCaps ?? {}, updatedAt: new Date(now).toISOString(), ...body } });
+});
+
+app.delete("/api/v1/events/:eventId/review-plans/:planId", async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  if (c.get("actor")?.demo) return c.json({ data: { id: c.req.param("planId"), deleted: true } });
+  const result = await c.env.DB.prepare(`DELETE FROM review_rounds WHERE id = ? AND event_id = ?
+    AND NOT EXISTS (SELECT 1 FROM review_assignments ra WHERE ra.round_id = review_rounds.id AND ra.status = 'submitted')`)
+    .bind(c.req.param("planId"), c.req.param("eventId")).run();
+  if (!result.meta.changes) return jsonError(c, 409, "REVIEW_PLAN_DELETE_LOCKED", "Rounds with submitted reviews cannot be deleted.");
+  return c.json({ data: { id: c.req.param("planId"), deleted: true } });
+});
+
+// Abstract-management depth: targeted assignment, progress, reminders, exports,
+// recusal, and bounded AI triage. These routes never mutate submitted reviews.
+app.get("/api/v1/events/:eventId/abstract-review", async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  if (c.get("actor")?.demo) {
+    const workspace = createDemoWorkspace(c.get("actor")!.id);
+    const reviewers = workspace.actors.filter((actor) => actor.role === "reviewer");
+    return c.json({ data: {
+      reviewers,
+      assignments: workspace.reviews.map((review) => ({ id: review.id, proposalId: review.proposalId, roundId: `round-${review.round}`, reviewerId: review.reviewerId, reviewerName: reviewers.find((reviewer) => reviewer.id === review.reviewerId)?.name ?? "Reviewer", status: review.status, recusedAt: review.recusedAt, recusalReason: review.recusalReason })),
+      aiEvaluations: [{ id: "ai-demo-1", proposalId: "proposal-2", roundId: "round-1", score: 4.1, effectiveScore: 4.1, rationale: "Bounded first-pass for Agents in production: the abstract gives concrete signals around observability, progress, retries, and handoffs. A program chair must review and may override this signal.", modelLabel: "Conference Ops bounded evaluator v1" }],
+      results: workspace.reviews.filter((review) => review.status === "submitted" && review.score !== undefined).map((review) => ({ proposalId: review.proposalId, roundId: `round-${review.round}`, aggregateScore: review.score!, reviewCount: 1 })),
+    } });
+  }
+  const [reviewers, assignments, aiEvaluations, results] = await Promise.all([
+    c.env.DB.prepare(`SELECT u.id, u.name, u.email FROM event_memberships em JOIN user u ON u.id = em.user_id
+      WHERE em.event_id = ? AND em.role = 'reviewer' AND em.accepted_at IS NOT NULL ORDER BY u.name`).bind(eventId).all<Record<string, unknown>>(),
+    c.env.DB.prepare(`SELECT ra.id, ra.proposal_id, ra.round_id, ra.reviewer_user_id, u.name AS reviewer_name,
+        ra.status, ra.recused_at, ra.recusal_reason
+      FROM review_assignments ra JOIN review_rounds rr ON rr.id = ra.round_id
+      JOIN user u ON u.id = ra.reviewer_user_id
+      WHERE rr.event_id = ? ORDER BY rr.round, u.name, ra.created_at`).bind(eventId).all<Record<string, unknown>>(),
+    c.env.DB.prepare(`SELECT ai.id, ai.proposal_id, ai.round_id, ai.score, ai.rationale, ai.model_label,
+        ai.overridden_score, ai.override_reason, ai.overridden_at
+      FROM ai_review_evaluations ai WHERE ai.event_id = ? ORDER BY ai.updated_at DESC`).bind(eventId).all<Record<string, unknown>>(),
+    c.env.DB.prepare(`SELECT ra.proposal_id, ra.round_id, AVG(ra.total_score) AS aggregate_score, COUNT(*) AS review_count
+      FROM review_assignments ra JOIN review_rounds rr ON rr.id = ra.round_id
+      JOIN proposals p ON p.id = ra.proposal_id AND p.event_id = rr.event_id
+      WHERE rr.event_id = ? AND ra.status = 'submitted' AND ra.total_score IS NOT NULL AND ra.review_cycle = p.review_cycle
+      GROUP BY ra.proposal_id, ra.round_id`).bind(eventId).all<Record<string, unknown>>(),
+  ]);
+  return c.json({ data: {
+    reviewers: reviewers.results.map((row) => ({ id: String(row.id), name: String(row.name), email: String(row.email), role: "reviewer" as const })),
+    assignments: assignments.results.map((row) => ({ id: String(row.id), proposalId: String(row.proposal_id), roundId: String(row.round_id), reviewerId: String(row.reviewer_user_id), reviewerName: String(row.reviewer_name), status: String(row.status), recusedAt: row.recused_at ? new Date(Number(row.recused_at)).toISOString() : undefined, recusalReason: row.recusal_reason ? String(row.recusal_reason) : undefined })),
+    aiEvaluations: aiEvaluations.results.map((row) => ({ id: String(row.id), proposalId: String(row.proposal_id), roundId: String(row.round_id), score: Number(row.score), effectiveScore: row.overridden_score === null || row.overridden_score === undefined ? Number(row.score) : Number(row.overridden_score), rationale: String(row.rationale), modelLabel: String(row.model_label), overriddenScore: row.overridden_score === null || row.overridden_score === undefined ? undefined : Number(row.overridden_score), overrideReason: row.override_reason ? String(row.override_reason) : undefined, overriddenAt: row.overridden_at ? new Date(Number(row.overridden_at)).toISOString() : undefined })),
+    results: results.results.map((row) => ({ proposalId: String(row.proposal_id), roundId: String(row.round_id), aggregateScore: Number(row.aggregate_score), reviewCount: Number(row.review_count) })),
+  } });
+});
+
+const reviewAssignmentSchema = z.object({
+  roundId: z.string().min(1),
+  reviewerId: z.string().min(1),
+  proposalIds: z.array(z.string().min(1)).max(500),
+  assignmentCap: z.number().int().min(1).max(500).default(25),
+});
+app.put("/api/v1/events/:eventId/abstract-review/assignments", zValidator("json", reviewAssignmentSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const body = c.req.valid("json");
+  const eventId = c.req.param("eventId");
+  const proposalIds = [...new Set(body.proposalIds)];
+  if (c.get("actor")?.demo) {
+    if (proposalIds.length > body.assignmentCap) return jsonError(c, 422, "REVIEW_ASSIGNMENT_CAP", `This reviewer is capped at ${body.assignmentCap} assignments for the round.`);
+    return c.json({ data: { roundId: body.roundId, reviewerId: body.reviewerId, assigned: proposalIds.length, assignmentCap: body.assignmentCap } });
+  }
+  const poolMember = await c.env.DB.prepare(`SELECT pool.assignment_cap AS assignmentCap FROM review_round_reviewers pool JOIN review_rounds rr ON rr.id = pool.round_id
+    WHERE pool.round_id = ? AND pool.reviewer_user_id = ? AND rr.event_id = ?`).bind(body.roundId, body.reviewerId, eventId).first<{ assignmentCap: number }>();
+  if (!poolMember) return jsonError(c, 422, "REVIEWER_NOT_IN_ROUND", "Add this reviewer to the round pool before assigning submissions.");
+  const assignmentCap = Number(poolMember.assignmentCap);
+  if (proposalIds.length > assignmentCap) return jsonError(c, 422, "REVIEW_ASSIGNMENT_CAP", `This reviewer is capped at ${assignmentCap} assignments for the round.`);
+  const submittedOmissionClause = proposalIds.length
+    ? `AND proposal_id NOT IN (${proposalIds.map(() => "?").join(",")})`
+    : "";
+  const submittedOmission = await c.env.DB.prepare(`SELECT 1 AS immutable FROM review_assignments
+    WHERE round_id = ? AND reviewer_user_id = ? AND status = 'submitted' ${submittedOmissionClause} LIMIT 1`)
+    .bind(body.roundId, body.reviewerId, ...proposalIds).first();
+  if (submittedOmission) return jsonError(c, 409, "REVIEW_ASSIGNMENT_IMMUTABLE", "Submitted reviews are immutable. Keep those submissions selected or create a new review round.");
+  if (proposalIds.length) {
+    const eligible = await c.env.DB.prepare(`SELECT COUNT(*) AS count FROM proposals p WHERE p.event_id = ?
+      AND p.id IN (${proposalIds.map(() => "?").join(",")}) AND p.status IN ('submitted', 'under_review') AND p.owner_user_id <> ?
+      AND NOT EXISTS (SELECT 1 FROM proposal_speakers ps JOIN speaker_profiles sp ON sp.id = ps.speaker_profile_id AND sp.event_id = p.event_id WHERE ps.proposal_id = p.id AND sp.user_id = ?)`)
+      .bind(eventId, ...proposalIds, body.reviewerId, body.reviewerId).first<{ count: number }>();
+    if (Number(eligible?.count ?? 0) !== proposalIds.length) return jsonError(c, 422, "REVIEW_ASSIGNMENT_INELIGIBLE", "Every selected submission must be reviewable and free of reviewer ownership conflicts.");
+  }
+  const now = Date.now();
+  const keepClause = proposalIds.length ? `AND proposal_id NOT IN (${proposalIds.map(() => "?").join(",")})` : "";
+  await c.env.DB.batch([
+    c.env.DB.prepare(`DELETE FROM review_assignments WHERE round_id = ? AND reviewer_user_id = ? AND status IN ('pending', 'in_progress') ${keepClause}`)
+      .bind(body.roundId, body.reviewerId, ...proposalIds),
+    ...proposalIds.map((proposalId) => c.env.DB.prepare(`INSERT OR IGNORE INTO review_assignments
+      (id, proposal_id, round_id, reviewer_user_id, review_cycle, status, scores, created_at, updated_at)
+      SELECT ?, p.id, rr.id, ?, p.review_cycle, 'pending', '{}', ?, ? FROM proposals p JOIN review_rounds rr ON rr.id = ? AND rr.event_id = p.event_id
+      WHERE p.id = ? AND p.event_id = ? AND p.status IN ('submitted', 'under_review')
+        AND EXISTS (SELECT 1 FROM review_round_reviewers pool WHERE pool.round_id = rr.id AND pool.reviewer_user_id = ?)`)
+      .bind(crypto.randomUUID(), body.reviewerId, now, now, body.roundId, proposalId, eventId, body.reviewerId)),
+  ]);
+  return c.json({ data: { roundId: body.roundId, reviewerId: body.reviewerId, assigned: proposalIds.length, assignmentCap } });
+});
+
+const reviewerReminderSchema = z.object({ roundId: z.string().min(1), reviewerIds: z.array(z.string().min(1)).min(1).max(100) });
+app.post("/api/v1/events/:eventId/abstract-review/reminders", zValidator("json", reviewerReminderSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const body = c.req.valid("json");
+  const eventId = c.req.param("eventId");
+  const reviewerIds = [...new Set(body.reviewerIds)];
+  if (c.get("actor")?.demo) return c.json({ data: { queued: reviewerIds.length, dispatched: reviewerIds.length } }, 202);
+  const reviewers = await c.env.DB.prepare(`SELECT u.id, u.name, u.email, e.name AS event_name, rr.name AS round_name,
+      COUNT(ra.id) AS outstanding FROM review_round_reviewers pool JOIN review_rounds rr ON rr.id = pool.round_id
+      JOIN events e ON e.id = rr.event_id JOIN user u ON u.id = pool.reviewer_user_id
+      JOIN review_assignments ra ON ra.round_id = rr.id AND ra.reviewer_user_id = u.id AND ra.status IN ('pending', 'in_progress') AND ra.recused_at IS NULL
+      WHERE rr.id = ? AND rr.event_id = ? AND u.id IN (${reviewerIds.map(() => "?").join(",")}) GROUP BY u.id, u.name, u.email, e.name, rr.name`)
+    .bind(body.roundId, eventId, ...reviewerIds).all<{ id: string; name: string; email: string; event_name: string; round_name: string; outstanding: number }>();
+  if (!reviewers.results.length) return jsonError(c, 422, "NO_OUTSTANDING_REVIEWS", "Select at least one reviewer with outstanding reviews.");
+  const day = new Date().toISOString().slice(0, 10);
+  const jobs: OutboxJob[] = reviewers.results.map((reviewer) => ({
+    kind: "email",
+    idempotencyKey: `review-reminder:${body.roundId}:${reviewer.id}:${day}`,
+    payload: {
+      kind: "communication", communicationKind: "reviewer_reminder", eventId, recipient: reviewer.email, recipientName: reviewer.name,
+      subject: `${reviewer.round_name}: ${reviewer.outstanding} review${reviewer.outstanding === 1 ? "" : "s"} awaiting you`,
+      text: `Hi ${reviewer.name},\n\n${reviewer.event_name} has ${reviewer.outstanding} outstanding review${reviewer.outstanding === 1 ? "" : "s"} assigned to you in ${reviewer.round_name}. Sign in to Conference Ops to complete them.`,
+      html: `<p>Hi ${escapeHtml(reviewer.name)},</p><p><strong>${escapeHtml(reviewer.event_name)}</strong> has ${reviewer.outstanding} outstanding review${reviewer.outstanding === 1 ? "" : "s"} assigned to you in ${escapeHtml(reviewer.round_name)}.</p><p>Sign in to Conference Ops to complete them.</p>`,
+    },
+  }));
+  await persistOutboxJobs(c.env.DB, jobs);
+  const dispatched = c.env.JOBS_QUEUE ? await dispatchPersistedJobs(c.env.JOBS_QUEUE, jobs) : 0;
+  return c.json({ data: { queued: jobs.length, dispatched } }, 202);
+});
+
+const recusalSchema = z.object({ reason: z.string().trim().min(3).max(1000) });
+app.post("/api/v1/events/:eventId/proposals/:proposalId/review/recuse", zValidator("json", recusalSchema), async (c) => {
+  const denied = requireRole(c, ["reviewer"]);
+  if (denied) return denied;
+  const actor = c.get("actor")!;
+  const body = c.req.valid("json");
+  if (actor.demo) return c.json({ data: { proposalId: c.req.param("proposalId"), recused: true, reason: body.reason } });
+  const now = Date.now();
+  const result = await c.env.DB.prepare(`UPDATE review_assignments SET recused_at = ?, recusal_reason = ?, updated_at = ?
+    WHERE proposal_id = ? AND reviewer_user_id = ? AND status IN ('pending', 'in_progress') AND recused_at IS NULL
+      AND EXISTS (SELECT 1 FROM review_rounds rr WHERE rr.id = review_assignments.round_id AND rr.event_id = ? AND rr.status = 'active')`)
+    .bind(now, body.reason, now, c.req.param("proposalId"), actor.id, c.req.param("eventId")).run();
+  if (!result.meta.changes) return jsonError(c, 409, "REVIEW_RECUSAL_INVALID", "This review can no longer be recused.");
+  return c.json({ data: { proposalId: c.req.param("proposalId"), recused: true, reason: body.reason } });
+});
+
+const aiEvaluationSchema = z.object({ roundId: z.string().min(1) });
+app.post("/api/v1/events/:eventId/proposals/:proposalId/ai-evaluation", zValidator("json", aiEvaluationSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const body = c.req.valid("json");
+  const eventId = c.req.param("eventId");
+  const proposalId = c.req.param("proposalId");
+  if (c.get("actor")?.demo) {
+    const proposal = createDemoWorkspace().proposals.find((candidate) => candidate.id === proposalId);
+    if (!proposal) return jsonError(c, 404, "PROPOSAL_NOT_FOUND", "Proposal not found.");
+    const evaluation = boundedProposalEvaluation({ title: proposal.title, summary: proposal.summary, category: proposal.category, rubric: createDemoWorkspace().reviews[0]?.rubric ?? [] });
+    return c.json({ data: { id: `ai-${proposalId}`, proposalId, roundId: body.roundId, effectiveScore: evaluation.score, ...evaluation } }, 201);
+  }
+  const row = await c.env.DB.prepare(`SELECT p.title, p.summary, p.category, rr.rubric FROM proposals p JOIN review_rounds rr ON rr.id = ? AND rr.event_id = p.event_id
+    WHERE p.id = ? AND p.event_id = ?`).bind(body.roundId, proposalId, eventId).first<Record<string, unknown>>();
+  if (!row) return jsonError(c, 404, "AI_EVALUATION_TARGET_NOT_FOUND", "Choose a proposal and review round from this event.");
+  const evaluation = boundedProposalEvaluation({ title: String(row.title), summary: String(row.summary), category: String(row.category), rubric: parseJson(row.rubric, []) });
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  await c.env.DB.prepare(`INSERT INTO ai_review_evaluations (id, event_id, proposal_id, round_id, score, rationale, model_label, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(proposal_id, round_id) DO UPDATE SET score = excluded.score, rationale = excluded.rationale, model_label = excluded.model_label, updated_at = excluded.updated_at`)
+    .bind(id, eventId, proposalId, body.roundId, evaluation.score, evaluation.rationale, evaluation.modelLabel, now, now).run();
+  const stored = await c.env.DB.prepare("SELECT id, overridden_score FROM ai_review_evaluations WHERE proposal_id = ? AND round_id = ?").bind(proposalId, body.roundId).first<{ id: string; overridden_score: number | null }>();
+  return c.json({ data: { id: stored?.id ?? id, proposalId, roundId: body.roundId, effectiveScore: stored?.overridden_score ?? evaluation.score, ...evaluation } }, 201);
+});
+
+const aiOverrideSchema = z.object({ score: z.number().min(1).max(5), reason: z.string().trim().min(3).max(1000) });
+app.put("/api/v1/events/:eventId/ai-evaluations/:evaluationId/override", zValidator("json", aiOverrideSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const body = c.req.valid("json");
+  if (c.get("actor")?.demo) return c.json({ data: { id: c.req.param("evaluationId"), effectiveScore: body.score, overriddenScore: body.score, overrideReason: body.reason } });
+  const now = Date.now();
+  const result = await c.env.DB.prepare(`UPDATE ai_review_evaluations SET overridden_score = ?, override_reason = ?, overridden_by = ?, overridden_at = ?, updated_at = ?
+    WHERE id = ? AND event_id = ?`).bind(body.score, body.reason, c.get("actor")!.id, now, now, c.req.param("evaluationId"), c.req.param("eventId")).run();
+  if (!result.meta.changes) return jsonError(c, 404, "AI_EVALUATION_NOT_FOUND", "AI evaluation not found.");
+  return c.json({ data: { id: c.req.param("evaluationId"), effectiveScore: body.score, overriddenScore: body.score, overrideReason: body.reason, overriddenAt: new Date(now).toISOString() } });
+});
+
+app.get("/api/v1/events/:eventId/exports/reviews.csv", async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  if (c.get("actor")?.demo) {
+    const workspace = createDemoWorkspace();
+    const csv = reviewResultsCsv(workspace.reviews.map((review) => ({ proposalId: review.proposalId, title: workspace.proposals.find((proposal) => proposal.id === review.proposalId)?.title ?? review.proposalId, category: workspace.proposals.find((proposal) => proposal.id === review.proposalId)?.category ?? "", round: review.roundName, reviewer: workspace.actors.find((actor) => actor.id === review.reviewerId)?.name ?? "Reviewer", status: review.status, aggregateScore: review.score, responses: review.scores, recommendation: review.recommendation, notes: review.notes })));
+    c.header("content-type", "text/csv; charset=utf-8"); c.header("content-disposition", 'attachment; filename="review-results.csv"'); return c.body(csv);
+  }
+  const rows = await c.env.DB.prepare(`SELECT p.id AS proposal_id, p.title, p.category, rr.name AS round_name, u.name AS reviewer_name,
+      ra.status, ra.total_score, ra.scores, ra.recommendation, ra.notes FROM review_assignments ra
+      JOIN proposals p ON p.id = ra.proposal_id JOIN review_rounds rr ON rr.id = ra.round_id AND rr.event_id = p.event_id
+      JOIN user u ON u.id = ra.reviewer_user_id WHERE p.event_id = ? ORDER BY p.title, rr.round, u.name`).bind(eventId).all<Record<string, unknown>>();
+  const csv = reviewResultsCsv(rows.results.map((row) => ({ proposalId: String(row.proposal_id), title: String(row.title), category: String(row.category), round: String(row.round_name), reviewer: String(row.reviewer_name), status: String(row.status), aggregateScore: row.total_score === null || row.total_score === undefined ? undefined : Number(row.total_score), responses: parseJson(row.scores, {}), recommendation: row.recommendation ? String(row.recommendation) : undefined, notes: row.notes ? String(row.notes) : undefined })));
+  c.header("content-type", "text/csv; charset=utf-8");
+  c.header("content-disposition", 'attachment; filename="review-results.csv"');
+  return c.body(csv);
 });
 
 const enrollSchema = z.object({ eventId: z.string().min(1) });
@@ -1230,9 +1586,9 @@ app.post("/api/v1/events/:eventId/submissions", zValidator("json", submissionSch
       c.req.param("eventId"),
       actor.id,
     );
-  for (const [index, speakerId] of speakerIds.entries()) dependentStatements.push(c.env.DB.prepare(`INSERT INTO proposal_speakers (proposal_id, speaker_profile_id, sort_order)
-    SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ?)`)
-    .bind(proposalId, speakerId, index, proposalId, c.req.param("eventId"), actor.id));
+  for (const [index, speakerId] of speakerIds.entries()) dependentStatements.push(c.env.DB.prepare(`INSERT INTO proposal_speakers (proposal_id, speaker_profile_id, participant_role, sort_order)
+    SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ?)`)
+    .bind(proposalId, speakerId, index === 0 ? "Primary presenter" : "Co-presenter", index, proposalId, c.req.param("eventId"), actor.id));
   for (const group of routing.groups) dependentStatements.push(c.env.DB.prepare(`INSERT OR IGNORE INTO proposal_reviewer_groups (proposal_id, reviewer_group_id)
     SELECT ?, ? WHERE EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ?)`)
     .bind(proposalId, group.id, proposalId, c.req.param("eventId"), actor.id));
@@ -1398,9 +1754,9 @@ app.put("/api/v1/events/:eventId/submissions/:proposalId", zValidator("json", su
     c.env.DB.prepare(`DELETE FROM proposal_speakers WHERE proposal_id = ?
       AND EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ? AND p.version = ? AND p.updated_at = ?)`)
       .bind(proposal.id, proposal.id, c.req.param("eventId"), actor.id, body.expectedVersion + 1, now),
-    ...speakerIds.map((speakerId, index) => c.env.DB.prepare(`INSERT INTO proposal_speakers (proposal_id, speaker_profile_id, sort_order)
-      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ? AND p.version = ? AND p.updated_at = ?)`)
-      .bind(proposal.id, speakerId, index, proposal.id, c.req.param("eventId"), actor.id, body.expectedVersion + 1, now)),
+    ...speakerIds.map((speakerId, index) => c.env.DB.prepare(`INSERT INTO proposal_speakers (proposal_id, speaker_profile_id, participant_role, sort_order)
+      SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ? AND p.version = ? AND p.updated_at = ?)`)
+      .bind(proposal.id, speakerId, index === 0 ? "Primary presenter" : "Co-presenter", index, proposal.id, c.req.param("eventId"), actor.id, body.expectedVersion + 1, now)),
     c.env.DB.prepare(`DELETE FROM proposal_reviewer_groups WHERE proposal_id = ?
       AND EXISTS (SELECT 1 FROM proposals p WHERE p.id = ? AND p.event_id = ? AND p.owner_user_id = ? AND p.version = ? AND p.updated_at = ?)`)
       .bind(proposal.id, proposal.id, c.req.param("eventId"), actor.id, body.expectedVersion + 1, now),
@@ -1906,7 +2262,7 @@ app.post("/api/v1/events/:eventId/agenda/publish", zValidator("json", publishAge
           endsAt: session.endsAt ? new Date(session.endsAt).getTime() : null,
         })),
       );
-      return c.json({ data: { eventId: c.req.param("eventId"), status: "agenda_published", publishedSessions: sessionIds.length, newlyPublishedSessions: sessionIds.filter((sessionId) => workspace.sessions.find((session) => session.id === sessionId)?.status === "scheduled").length, publishedAt: new Date().toISOString() } });
+      return c.json({ data: { eventId: c.req.param("eventId"), status: "agenda_published", publishedSessions: sessionIds.length, newlyPublishedSessions: sessionIds.filter((sessionId) => workspace.sessions.find((session) => session.id === sessionId)?.status === "scheduled").length, approvedSessions: sessionIds.length, publishedAt: new Date().toISOString() } });
     }
     const result = await publishAgendaAtomically(c.env.DB, c.req.param("eventId"), body.sessionIds);
     return c.json({ data: { ...result, status: "agenda_published" } });
@@ -1918,7 +2274,7 @@ app.post("/api/v1/events/:eventId/agenda/publish", zValidator("json", publishAge
   }
 });
 
-const reviewSchema = z.object({ scores: z.record(z.string(), z.number()), recommendation: z.enum(["strong_yes", "yes", "maybe", "no"]), notes: z.string().min(10).max(5000), submit: z.boolean() });
+const reviewSchema = z.object({ scores: z.record(z.string(), z.union([z.number(), z.string()])), recommendation: z.enum(["strong_yes", "yes", "maybe", "no"]), notes: z.string().max(5000), submit: z.boolean() });
 app.post("/api/v1/events/:eventId/proposals/:proposalId/review", zValidator("json", reviewSchema), async (c) => {
   const denied = requireRole(c, ["reviewer", "organizer"]);
   if (denied) return denied;
@@ -1934,7 +2290,8 @@ app.post("/api/v1/events/:eventId/proposals/:proposalId/review", zValidator("jso
     : await c.env.DB.prepare(`SELECT ra.id, ra.status, rr.rubric, p.status AS proposalStatus FROM review_assignments ra
       JOIN review_rounds rr ON rr.id = ra.round_id
       JOIN proposals p ON p.id = ra.proposal_id AND p.event_id = rr.event_id
-      WHERE ra.proposal_id = ? AND ra.reviewer_user_id = ? AND rr.event_id = ? AND rr.status = 'active'
+      WHERE ra.proposal_id = ? AND ra.reviewer_user_id = ? AND rr.event_id = ? AND rr.status = 'active' AND ra.recused_at IS NULL
+        AND EXISTS (SELECT 1 FROM review_round_reviewers pool WHERE pool.round_id = ra.round_id AND pool.reviewer_user_id = ra.reviewer_user_id)
         AND ra.review_cycle = p.review_cycle
         AND p.owner_user_id <> ?
         AND NOT EXISTS (
@@ -1976,6 +2333,7 @@ app.post("/api/v1/events/:eventId/proposals/:proposalId/review", zValidator("jso
         SELECT 1 FROM proposals p
         JOIN review_rounds rr ON rr.id = review_assignments.round_id AND rr.event_id = p.event_id AND rr.status = 'active'
         WHERE p.id = review_assignments.proposal_id AND p.event_id = ? AND p.status = ?
+          AND EXISTS (SELECT 1 FROM review_round_reviewers pool WHERE pool.round_id = review_assignments.round_id AND pool.reviewer_user_id = review_assignments.reviewer_user_id)
           AND review_assignments.review_cycle = p.review_cycle
           AND p.owner_user_id <> ?
           AND NOT EXISTS (
@@ -2048,6 +2406,10 @@ const profileSchema = z.object({
 app.put("/api/v1/events/:eventId/speakers/:speakerId/profile", zValidator("json", profileSchema), async (c) => {
   const actor = c.get("actor")!;
   const body = c.req.valid("json");
+  if (body.publish !== undefined) {
+    const denied = requireRole(c, ["organizer"]);
+    if (denied) return denied;
+  }
   if (actor.demo) return c.json({ data: { id: c.req.param("speakerId"), ...body, profileComplete: Boolean(body.bio && body.headshotUploadId) } });
   const existing = await c.env.DB.prepare("SELECT headshot_upload_id AS headshotUploadId FROM speaker_profiles WHERE id = ? AND event_id = ? AND (user_id = ? OR ? = 'organizer')")
     .bind(c.req.param("speakerId"), c.req.param("eventId"), actor.id, actor.role)
@@ -2060,7 +2422,7 @@ app.put("/api/v1/events/:eventId/speakers/:speakerId/profile", zValidator("json"
   }
   const profileComplete = isProfileComplete(body.bio, body.headshotUploadId, existing.headshotUploadId);
   const result = await c.env.DB.prepare("UPDATE speaker_profiles SET name = ?, title = ?, company = ?, bio = ?, pronouns = ?, city = ?, headshot_upload_id = COALESCE(?, headshot_upload_id), profile_complete = ?, published = CASE WHEN ? IS NULL THEN published ELSE ? END, updated_at = ? WHERE id = ? AND event_id = ? AND (user_id = ? OR ? = 'organizer')")
-    .bind(body.name, body.title, body.company, body.bio, body.pronouns ?? null, body.city ?? null, body.headshotUploadId ?? null, profileComplete ? 1 : 0, body.publish ?? null, body.publish ? 1 : 0, Date.now(), c.req.param("speakerId"), c.req.param("eventId"), actor.id, actor.role)
+    .bind(body.name, body.title, body.company, body.bio, body.pronouns ?? null, body.city ?? null, body.headshotUploadId ?? null, profileComplete ? 1 : 0, body.publish === undefined ? null : body.publish ? 1 : 0, body.publish ? 1 : 0, Date.now(), c.req.param("speakerId"), c.req.param("eventId"), actor.id, actor.role)
     .run();
   if (!result.meta.changes) return jsonError(c, 404, "SPEAKER_NOT_FOUND", "Speaker profile not found or not editable by you.");
   return c.json({ data: { id: c.req.param("speakerId"), ...body, profileComplete } });
@@ -2943,10 +3305,10 @@ app.get("/api/v1/events/:eventId/exports/:kind", async (c) => {
   c.header("content-type", "text/csv; charset=utf-8");
   if (kind === "speakers.csv") {
     c.header("content-disposition", `attachment; filename="${workspace.event.slug}-speakers.csv"`);
-    return c.body(["id,name,email,title,company,bio", ...projection.speakers.map((speaker) => [speaker.id, speaker.name, speaker.email, speaker.title, speaker.company, speaker.bio].map(csvCell).join(","))].join("\r\n"));
+    return c.body(["id,name,email,title,company,bio", ...projection.speakers.map((speaker) => [speaker.id, speaker.name, speaker.email, speaker.title, speaker.company, speaker.bio].map(spreadsheetSafeCsvCell).join(","))].join("\r\n"));
   }
   c.header("content-disposition", `attachment; filename="${workspace.event.slug}-sessions.csv"`);
-  return c.body(["id,title,speakers,track,room,starts_at,ends_at,status", ...projection.sessions.map((session) => [session.id, session.title, session.speakerNames.join("; "), workspace.tracks.find((track) => track.id === session.trackId)?.name, workspace.rooms.find((room) => room.id === session.roomId)?.name, session.startsAt, session.endsAt, session.status].map(csvCell).join(","))].join("\r\n"));
+  return c.body(["id,title,speakers,track,room,starts_at,ends_at,status", ...projection.sessions.map((session) => [session.id, session.title, session.speakerNames.join("; "), workspace.tracks.find((track) => track.id === session.trackId)?.name, workspace.rooms.find((room) => room.id === session.roomId)?.name, session.startsAt, session.endsAt, session.status].map(spreadsheetSafeCsvCell).join(","))].join("\r\n"));
 });
 
 app.post("/api/v1/events/:eventId/uploads", async (c) => {

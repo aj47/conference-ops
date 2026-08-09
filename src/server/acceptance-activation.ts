@@ -1,6 +1,22 @@
 export const createAcceptedProposalSessionSql = `INSERT OR IGNORE INTO program_sessions
-  (id, event_id, proposal_id, origin, title, description, format, status, calendar_uid, calendar_sequence, version, created_at, updated_at)
-  SELECT ?, p.event_id, p.id, 'proposal', p.title, p.summary, p.format, 'unscheduled', ?, 0, 1, ?, ?
+  (id, event_id, proposal_id, origin, title, description, format, track_id, status, calendar_uid, calendar_sequence, version, created_at, updated_at)
+  SELECT ?, p.event_id, p.id, 'proposal', p.title, p.summary, p.format,
+    COALESCE(
+      (SELECT track.id
+        FROM tracks track
+        WHERE track.event_id = p.event_id
+          AND lower(track.name) = lower(trim(substr(p.category, 1, instr(p.category || ',', ',') - 1)))
+        ORDER BY lower(track.name), track.id
+        LIMIT 1),
+      (SELECT min(track.id)
+        FROM tracks track
+        WHERE track.event_id = p.event_id
+          AND instr(
+            ',' || lower(replace(p.category, ', ', ',')) || ',',
+            ',' || lower(track.name) || ','
+          ) > 0)
+    ),
+    'unscheduled', ?, 0, 1, ?, ?
   FROM proposals p
   WHERE p.id = ? AND p.event_id = ? AND p.status = 'accepted'
     AND NOT EXISTS (SELECT 1 FROM program_sessions existing WHERE existing.proposal_id = p.id)`;

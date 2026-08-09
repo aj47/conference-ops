@@ -142,4 +142,22 @@ describe("public submission contract states", () => {
     expect(container.textContent).not.toContain("Agents in production");
     expect(container.textContent).not.toContain("March 1");
   });
+
+  it("replaces the wizard with a clear closed-state handoff after the pinned deadline", async () => {
+    const closedForm: FormDefinition = {
+      ...form,
+      closesAt: "2026-02-01T20:00:00.000Z",
+    };
+    vi.spyOn(conferenceApi, "publicEvent").mockResolvedValue(payload(closedForm));
+    await renderWizard();
+
+    expect(container.textContent).toContain("This submission window has ended.");
+    expect(container.textContent).toContain("February 1 at 12:00 PM PST");
+    expect(container.textContent).toMatch(/new proposals, account drafts, and revisions are now locked/i);
+    expect(container.querySelector('[aria-label="Submission progress"]')).toBeNull();
+    expect(container.querySelector("input, select, textarea")).toBeNull();
+    expect(container.querySelector('a[href*="/auth"]')?.textContent).toMatch(/sign in/i);
+    expect([...container.querySelectorAll('a[href="/events/practical-ai-2027/agenda"]')]
+      .some((link) => /public agenda/i.test(link.textContent ?? ""))).toBe(true);
+  });
 });

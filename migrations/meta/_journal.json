@@ -85,6 +85,20 @@
       "when": 1786259261228,
       "tag": "0011_review_cycle_assignments",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1786295882837,
+      "tag": "0012_abstract_review_depth",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786296593071,
+      "tag": "0013_plain_wallow",
+      "breakpoints": true
     }
   ]
 }

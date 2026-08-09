@@ -18,7 +18,7 @@ import type {
   Track,
   WorkspaceSnapshot,
 } from "../shared/domain";
-import { projectCustomFormResponses } from "../shared/form-fields";
+import { formFieldSection, projectCustomFormResponses } from "../shared/form-fields";
 import { normalizeFormVersionSettings } from "../shared/form-settings";
 import { formVersionControlsFromSettings } from "../shared/form-version-controls";
 import { parseReviewRubric } from "../shared/review-rubric";
@@ -172,9 +172,14 @@ export function workspaceReviewFromRow(row: Record<string, unknown>): ReviewAssi
     // Keep the workspace available so reviewers can see that the round needs organizer repair.
   }
   const storedScores = jsonRecord(row.scores);
-  const scores = Object.fromEntries(
-    Object.entries(storedScores).filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1])),
-  );
+  const criterionById = new Map(rubric.map((criterion) => [criterion.id, criterion]));
+  const scores = Object.fromEntries(Object.entries(storedScores).filter((entry): entry is [string, number | string] => {
+    const criterion = criterionById.get(entry[0]);
+    if (!criterion) return false;
+    return (criterion.type ?? "numeric") === "numeric"
+      ? typeof entry[1] === "number" && Number.isFinite(entry[1])
+      : typeof entry[1] === "string";
+  }));
   return {
     id: String(row.id),
     proposalId: String(row.proposal_id),
@@ -188,6 +193,9 @@ export function workspaceReviewFromRow(row: Record<string, unknown>): ReviewAssi
     score: row.total_score === null || row.total_score === undefined ? undefined : Number(row.total_score),
     recommendation: row.recommendation ? String(row.recommendation) as ReviewAssignment["recommendation"] : undefined,
     notes: row.notes ? String(row.notes) : undefined,
+    ...(row.anonymized ? { anonymized: true } : {}),
+    ...(row.recused_at ? { recusedAt: iso(row.recused_at) } : {}),
+    ...(row.recusal_reason ? { recusalReason: String(row.recusal_reason) } : {}),
     submittedAt: row.submitted_at ? iso(row.submitted_at) : undefined,
   };
 }
@@ -205,11 +213,26 @@ export function workspaceResourceFromRow(row: Record<string, unknown>): Resource
   };
 }
 
-export function workspaceProposalForRole(proposal: Proposal, role: Actor["role"]): Proposal {
+export function workspaceProposalForRole(proposal: Proposal, role: Actor["role"], anonymizedReview = false): Proposal {
   const projected = { ...proposal };
   if (role === "organizer") return projected;
   if (role === "reviewer") {
     delete projected.revisionRequest;
+    if (anonymizedReview) {
+      projected.speakers = [];
+      // Raw submission payloads may contain canonical and custom participant
+      // answers (email, phone, biography, and other identifying details). Blind
+      // reviewers only receive proposal-section projections; the organizer keeps
+      // the complete immutable submission.
+      delete projected.responses;
+      projected.customResponses = projected.customResponses?.filter((response) => response.section === "proposal");
+      if (projected.form) {
+        projected.form = {
+          ...projected.form,
+          fields: projected.form.fields.filter((field) => formFieldSection(field) === "proposal"),
+        };
+      }
+    }
     return projected;
   }
   delete projected.score;
@@ -217,7 +240,7 @@ export function workspaceProposalForRole(proposal: Proposal, role: Actor["role"]
   return projected;
 }
 
-export const workspaceReviewRowsSql = `SELECT ra.*, rr.round, rr.name AS round_name, rr.rubric
+export const workspaceReviewRowsSql = `SELECT ra.*, rr.round, rr.name AS round_name, rr.rubric, rr.anonymized
   FROM review_assignments ra
   JOIN review_rounds rr ON rr.id = ra.round_id
   JOIN proposals p ON p.id = ra.proposal_id AND p.event_id = rr.event_id
@@ -225,6 +248,12 @@ export const workspaceReviewRowsSql = `SELECT ra.*, rr.round, rr.name AS round_n
     AND (
       ? = 'organizer' OR (
         ra.reviewer_user_id = ?
+        AND EXISTS (
+          SELECT 1 FROM review_round_reviewers active_pool
+          WHERE active_pool.round_id = ra.round_id
+            AND active_pool.reviewer_user_id = ra.reviewer_user_id
+        )
+        AND ra.recused_at IS NULL
         AND ra.review_cycle = p.review_cycle
         AND p.status IN ('submitted', 'under_review')
         AND NOT (
@@ -290,7 +319,7 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
       FROM proposals p JOIN form_versions response_version ON response_version.id = p.form_version_id
       JOIN submission_forms response_form ON response_form.id = response_version.form_id AND response_form.event_id = p.event_id
       LEFT JOIN reviewer_groups rg ON rg.id = p.reviewer_group_id WHERE p.event_id = ? ORDER BY p.submitted_at DESC, p.updated_at DESC`).bind(eventId).all<Record<string, unknown>>(),
-    env.DB.prepare("SELECT ps.proposal_id, ps.speaker_profile_id FROM proposal_speakers ps JOIN proposals p ON p.id = ps.proposal_id WHERE p.event_id = ? ORDER BY ps.sort_order").bind(eventId).all<Record<string, unknown>>(),
+    env.DB.prepare("SELECT ps.proposal_id, ps.speaker_profile_id, ps.participant_role FROM proposal_speakers ps JOIN proposals p ON p.id = ps.proposal_id WHERE p.event_id = ? ORDER BY ps.sort_order").bind(eventId).all<Record<string, unknown>>(),
     env.DB.prepare(workspaceReviewRowsSql).bind(eventId, role, authActor.id, authActor.id, authActor.id).all<Record<string, unknown>>(),
     env.DB.prepare(`SELECT st.*, tt.target_type, tt.completion_mode, tt.file_request_id,
       fv.id AS linked_form_version_id, fv.form_id AS linked_form_id, fv.version AS linked_form_version,
@@ -376,7 +405,7 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
   const proposalSpeakers = new Map<string, SpeakerProfile[]>();
   for (const row of proposalSpeakerRows.results) {
     const speaker = speakerById.get(String(row.speaker_profile_id));
-    if (speaker) proposalSpeakers.set(String(row.proposal_id), [...(proposalSpeakers.get(String(row.proposal_id)) ?? []), speaker]);
+    if (speaker) proposalSpeakers.set(String(row.proposal_id), [...(proposalSpeakers.get(String(row.proposal_id)) ?? []), { ...speaker, participantRole: String(row.participant_role ?? "Presenter") }]);
   }
   const sessionSpeakerIds = new Map<string, string[]>();
   for (const row of sessionSpeakerRows.results) sessionSpeakerIds.set(String(row.session_id), [...(sessionSpeakerIds.get(String(row.session_id)) ?? []), String(row.speaker_profile_id)]);
@@ -520,8 +549,11 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
   const reviewerProposalIds = new Set(reviews.filter((review) => review.reviewerId === authActor.id).map((review) => review.proposalId));
   const ownedProposalIds = new Set(proposalRows.results.filter((row) => String(row.owner_user_id) === authActor.id).map((row) => String(row.id)));
   for (const [proposalId, speakers] of proposalSpeakers) if (speakers.some((speaker) => actorSpeakerIds.has(speaker.id))) ownedProposalIds.add(proposalId);
+  const anonymizedProposalIds = new Set(reviews.filter((review) => review.reviewerId === authActor.id && review.anonymized).map((review) => review.proposalId));
   const visibleProposals = (role === "organizer" ? proposals : role === "reviewer" ? proposals.filter((proposal) => reviewerProposalIds.has(proposal.id)) : proposals.filter((proposal) => ownedProposalIds.has(proposal.id)))
-    .map((proposal) => workspaceProposalForRole(proposal, role));
+    .map((proposal) => {
+      return workspaceProposalForRole(proposal, role, anonymizedProposalIds.has(proposal.id));
+    });
   const visibleReviews = role === "organizer" ? reviews : role === "reviewer" ? reviews.filter((review) => review.reviewerId === authActor.id) : [];
   const visibleTasks = role === "organizer" ? tasks : role === "speaker" || role === "applicant" ? tasks.filter((task) => actorSpeakerIds.has(task.speakerId)) : [];
   const visibleSessions = role === "organizer" ? sessions : role === "reviewer" ? sessions.filter((session) => session.status === "published") : sessions.filter((session) => session.status === "published" || session.speakerIds.some((speakerId) => actorSpeakerIds.has(speakerId)));

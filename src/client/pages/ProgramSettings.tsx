@@ -4,6 +4,7 @@ import {
   Bot,
   Check,
   ClipboardList,
+  Code2,
   Database,
   ExternalLink,
   Mail,
@@ -23,8 +24,6 @@ import type {
   MessageTemplateDefinition,
   ReadinessInsight,
   ReminderRule,
-  ReviewPlanDefinition,
-  ReviewRubricCriterion,
   ResourcePage,
   ReviewerGroupConfig,
   TaskTemplateDefinition,
@@ -32,19 +31,22 @@ import type {
 import { submissionCategoryField } from "../../shared/form-fields";
 import { CommunicationDeliveryHistory } from "../CommunicationDeliveryHistory";
 import { AirtablePanel } from "../AirtableOperatorStatus";
+import { EmbedStudioPanel } from "../EmbedStudioPanel";
+import { EvaluationPlanStudio } from "../EvaluationPlanStudio";
 import { conferenceApi, type ResourcePageDraft } from "../api";
 import { EmptyState, Field, InlineAlert, PageHeader, StatusPill } from "../components";
 import { useDialogA11y } from "../dialog-a11y";
 import { privateEventPath } from "../private-routes";
 import { useWorkspace } from "../workspace";
 
-type SettingsSection = "routing" | "onboarding" | "communications" | "resources" | "data" | "assistant";
+type SettingsSection = "routing" | "onboarding" | "communications" | "resources" | "embeds" | "data" | "assistant";
 
 const sections: Array<{ id: SettingsSection; label: string; detail: string; icon: typeof MapPinned }> = [
   { id: "routing", label: "Review routing", detail: "Tracks → reviewers", icon: MapPinned },
   { id: "onboarding", label: "Onboarding plan", detail: "Forms, files, profile", icon: ClipboardList },
   { id: "communications", label: "Communications", detail: "Templates & reminders", icon: Mail },
   { id: "resources", label: "Participant resources", detail: "Guides & policies", icon: BookOpen },
+  { id: "embeds", label: "Public widgets", detail: "Embeds, feeds & branding", icon: Code2 },
   { id: "data", label: "Airtable source", detail: "Authority & sync health", icon: Database },
   { id: "assistant", label: "Readiness assistant", detail: "Grounded next actions", icon: Bot },
 ];
@@ -230,89 +232,7 @@ function RoutingPanel() {
         ))}
       </div>
       {categories.length > 0 && <div className="program-config-actions"><p>Saving replaces pending/in-progress assignments with this mapping. Submitted review evidence is preserved.</p><button type="button" className="button button--primary" disabled={saving} onClick={() => void save()}><Save size={16} /> {saving ? "Saving routing…" : "Save routing"}</button></div>}
-      <ReviewPlanPanel />
-    </section>
-  );
-}
-
-function ReviewPlanPanel() {
-  const { workspace, setNotice } = useWorkspace();
-  const [plans, setPlans] = useState<ReviewPlanDefinition[]>([]);
-  const [draft, setDraft] = useState<ReviewPlanDefinition | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    conferenceApi.reviewPlans(workspace.actor.id, workspace.event.id)
-      .then(({ plans: next }) => {
-        if (!active) return;
-        setPlans(next);
-        setDraft(next.find((plan) => plan.status === "active") ?? next[0] ?? null);
-      })
-      .catch((caught: unknown) => active && setError(caught instanceof Error ? caught.message : "The review plan could not be loaded."))
-      .finally(() => active && setLoading(false));
-    return () => { active = false; };
-  }, [workspace.actor.id, workspace.event.id]);
-
-  const updateCriterion = (id: string, patch: Partial<ReviewRubricCriterion>) => {
-    setDraft((current) => current ? { ...current, rubric: current.rubric.map((criterion) => criterion.id === id ? { ...criterion, ...patch } : criterion) } : current);
-  };
-  const totalWeight = draft?.rubric.reduce((sum, criterion) => sum + criterion.weight, 0) ?? 0;
-  const locked = Boolean(draft?.submittedReviews);
-
-  const save = async () => {
-    if (!draft) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const saved = await conferenceApi.updateReviewPlan(workspace.actor.id, workspace.event.id, draft.id, {
-        name: draft.name,
-        status: draft.status,
-        rubric: draft.rubric,
-      });
-      setPlans((current) => current.map((plan) => plan.id === saved.id ? saved : plan.status === "active" && saved.status === "active" ? { ...plan, status: "closed" } : plan));
-      setDraft(saved);
-      setNotice(`${saved.name} saved. Reviewer queues now use this scoring contract.`);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "The review plan could not be saved.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <section className="review-plan-editor" aria-labelledby="review-plan-title">
-      <div className="section-heading"><div><p className="eyebrow">Evaluation contract</p><h3 id="review-plan-title">Review plan & rubric</h3><p>Keep the minimum workflow legible: every routed talk moves from unreviewed to Approve, Maybe, or Deny against the same weighted evidence.</p></div>{draft && <StatusPill status={draft.status} />}</div>
-      {loading && <p className="muted">Loading the active review plan…</p>}
-      {error && <InlineAlert tone="danger">{error}</InlineAlert>}
-      {!loading && !draft && <EmptyState title="No review plan" detail="Fresh events include one active program-review round. Re-run event setup defaults before accepting proposals." />}
-      {draft && (
-        <div className="form-stack">
-          <div className="field-grid field-grid--2">
-            <Field label="Plan name"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
-            <Field label="Availability"><select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as ReviewPlanDefinition["status"] })}><option value="draft">Draft · view only</option><option value="active">Open for review</option><option value="closed">Closed</option></select></Field>
-          </div>
-          {locked && <InlineAlert tone="info"><strong>Scoring contract locked.</strong> {draft.submittedReviews} final {draft.submittedReviews === 1 ? "review uses" : "reviews use"} this rubric. You can rename or close the plan, but its criteria cannot change.</InlineAlert>}
-          <div className="review-plan-editor__criteria">
-            {draft.rubric.map((criterion, index) => (
-              <article key={criterion.id}>
-                <span className="review-plan-editor__index">{String(index + 1).padStart(2, "0")}</span>
-                <div className="review-plan-editor__copy">
-                  <input aria-label={`Criterion ${index + 1} name`} disabled={locked} value={criterion.label} onChange={(event) => updateCriterion(criterion.id, { label: event.target.value })} />
-                  <input aria-label={`${criterion.label} guidance`} disabled={locked} placeholder="What should reviewers look for?" value={criterion.description ?? ""} onChange={(event) => updateCriterion(criterion.id, { description: event.target.value })} />
-                </div>
-                <label><span>Weight</span><input aria-label={`${criterion.label} weight`} disabled={locked} type="number" min={1} max={1000} value={criterion.weight} onChange={(event) => updateCriterion(criterion.id, { weight: Number(event.target.value) })} /></label>
-                <label><span>Scale</span><select aria-label={`${criterion.label} maximum score`} disabled={locked} value={criterion.maxScore} onChange={(event) => updateCriterion(criterion.id, { maxScore: Number(event.target.value) })}>{[3, 5, 10, 20].map((value) => <option key={value} value={value}>1–{value}</option>)}</select></label>
-                <button type="button" className="icon-button icon-button--danger" disabled={locked || draft.rubric.length === 1} aria-label={`Remove ${criterion.label}`} onClick={() => setDraft({ ...draft, rubric: draft.rubric.filter((candidate) => candidate.id !== criterion.id) })}><Trash2 size={15} /></button>
-              </article>
-            ))}
-          </div>
-          <div className="program-config-actions"><p>Relative weight total: <strong>{totalWeight}</strong>. Reviewer recommendations remain Approve, Maybe, or Deny; the weighted score is decision evidence, not an automatic decision.</p><span><button type="button" className="button button--quiet" disabled={locked || draft.rubric.length >= 12} onClick={() => setDraft({ ...draft, rubric: [...draft.rubric, { id: `criterion-${crypto.randomUUID()}`, label: "New criterion", description: "", weight: 1, maxScore: 5 }] })}><Plus size={15} /> Add criterion</button><button type="button" className="button button--primary" disabled={saving || !draft.name.trim() || draft.rubric.some((criterion) => !criterion.label.trim() || criterion.weight <= 0)} onClick={() => void save()}><Save size={15} /> {saving ? "Saving plan…" : "Save review plan"}</button></span></div>
-          {plans.length > 1 && <p className="form-hint">This event has {plans.length} historical rounds. Conference Ops exposes the active plan here; submitted evidence from closed rounds remains in the audit record.</p>}
-        </div>
-      )}
+      <EvaluationPlanStudio />
     </section>
   );
 }
@@ -643,6 +563,7 @@ export function ProgramSettings() {
         {section === "onboarding" && <OnboardingPanel />}
         {section === "communications" && <CommunicationsPanel />}
         {section === "resources" && <ResourcesPanel />}
+        {section === "embeds" && <EmbedStudioPanel />}
         {section === "data" && <AirtablePanel />}
         {section === "assistant" && <AssistantPanel onOpenRouting={() => setSection("routing")} />}
       </div>

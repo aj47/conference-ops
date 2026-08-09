@@ -20,9 +20,12 @@ const SpeakerOperations = lazy(() => import("./pages/SpeakerOps").then((module) 
 const PublishCenter = lazy(() => import("./pages/Publish").then((module) => ({ default: module.PublishCenter })));
 const PublicSubmissionWizard = lazy(() => import("./pages/PublicSubmission").then((module) => ({ default: module.PublicSubmissionWizard })));
 const SpeakerPortal = lazy(() => import("./pages/Portal").then((module) => ({ default: module.SpeakerPortal })));
-const AgendaEmbed = lazy(() => import("./pages/PublicProgram").then((module) => ({ default: module.AgendaEmbed })));
-const PublicAgenda = lazy(() => import("./pages/PublicProgram").then((module) => ({ default: module.PublicAgenda })));
-const SpeakerGallery = lazy(() => import("./pages/PublicProgram").then((module) => ({ default: module.SpeakerGallery })));
+const PublicSessionsList = lazy(() => import("./pages/PublicWidgets").then((module) => ({ default: module.PublicSessionsList })));
+const PublicSpeakersList = lazy(() => import("./pages/PublicWidgets").then((module) => ({ default: module.PublicSpeakersList })));
+const PublicAgendaGrid = lazy(() => import("./pages/PublicWidgets").then((module) => ({ default: module.PublicAgendaGrid })));
+const PublicItinerary = lazy(() => import("./pages/PublicWidgets").then((module) => ({ default: module.PublicItinerary })));
+const PublicSpeakerGallery = lazy(() => import("./pages/PublicWidgets").then((module) => ({ default: module.PublicSpeakerGallery })));
+const PublicWidgetEmbed = lazy(() => import("./pages/PublicWidgets").then((module) => ({ default: module.PublicWidgetEmbed })));
 const PublicResources = lazy(() => import("./pages/PublicProgram").then((module) => ({ default: module.PublicResources })));
 const AuthPage = lazy(() => import("./pages/Auth").then((module) => ({ default: module.AuthPage })));
 const InvitationPage = lazy(() => import("./pages/Invitation").then((module) => ({ default: module.InvitationPage })));
@@ -137,10 +140,13 @@ export default function App() {
         <Route path="/speaker/claim/:eventId" element={<SpeakerClaimPage />} />
         <Route path="/portal" element={<PortalRedirect />} />
         <Route path="/portal/:section" element={<ProtectedPortal />} />
-        <Route path="/events/:slug/agenda" element={<PublicProgramRoute><PublicAgenda /></PublicProgramRoute>} />
-        <Route path="/events/:slug/speakers" element={<PublicProgramRoute><SpeakerGallery /></PublicProgramRoute>} />
+        <Route path="/events/:slug/sessions" element={<PublicProgramRoute><PublicSessionsList /></PublicProgramRoute>} />
+        <Route path="/events/:slug/speakers" element={<PublicProgramRoute><PublicSpeakersList /></PublicProgramRoute>} />
+        <Route path="/events/:slug/agenda" element={<PublicProgramRoute><PublicAgendaGrid /></PublicProgramRoute>} />
+        <Route path="/events/:slug/itinerary" element={<PublicProgramRoute><PublicItinerary /></PublicProgramRoute>} />
+        <Route path="/events/:slug/gallery" element={<PublicProgramRoute><PublicSpeakerGallery /></PublicProgramRoute>} />
         <Route path="/events/:slug/resources" element={<PublicProgramRoute><PublicResources /></PublicProgramRoute>} />
-        <Route path="/events/:slug/embed/agenda" element={<PublicProgramRoute><AgendaEmbed /></PublicProgramRoute>} />
+        <Route path="/events/:slug/embed/:widget" element={<PublicProgramRoute><PublicWidgetEmbed /></PublicProgramRoute>} />
         <Route path="/agenda" element={<LegacyPublicRedirect section="agenda" />} />
         <Route path="/speakers" element={<LegacyPublicRedirect section="speakers" />} />
         <Route path="/embed/agenda" element={<LegacyPublicRedirect section="embed" />} />

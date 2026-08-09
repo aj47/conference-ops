@@ -33,6 +33,7 @@ export interface AgendaPublishResult {
   sessionIds: string[];
   publishedSessions: number;
   newlyPublishedSessions: number;
+  approvedSessions: number;
   publishedAt: string;
 }
 
@@ -72,6 +73,34 @@ export const publishAgendaSessionsSql = `UPDATE program_sessions
         AND candidate.ends_at > candidate.starts_at
     ) = json_array_length(?)`;
 
+/** Publishing is the organizer's explicit content-approval action. The same
+ * guarded selection that becomes public is approved atomically; an invalid or
+ * cross-event selection cannot partially approve content. */
+export const approveAgendaContentSql = `INSERT INTO session_content_status
+  (session_id, event_id, status, created_at, updated_at)
+  SELECT candidate.id, candidate.event_id, 'approved', ?, ?
+  FROM json_each(?) selected
+  JOIN program_sessions candidate ON candidate.id = CAST(selected.value AS TEXT)
+  WHERE candidate.event_id = ?
+    AND candidate.status = 'published'
+    AND candidate.starts_at IS NOT NULL
+    AND candidate.ends_at IS NOT NULL
+    AND candidate.ends_at > candidate.starts_at
+    AND (
+      SELECT COUNT(*)
+      FROM json_each(?) required
+      JOIN program_sessions required_session ON required_session.id = CAST(required.value AS TEXT)
+      WHERE required_session.event_id = ?
+        AND required_session.status = 'published'
+        AND required_session.starts_at IS NOT NULL
+        AND required_session.ends_at IS NOT NULL
+        AND required_session.ends_at > required_session.starts_at
+    ) = json_array_length(?)
+  ON CONFLICT(session_id) DO UPDATE SET
+    event_id = excluded.event_id,
+    status = 'approved',
+    updated_at = excluded.updated_at`;
+
 /**
  * Run after publishAgendaSessionsSql in the same D1 batch. It advances the public
  * revision only when every requested session is now published for this event.
@@ -87,6 +116,10 @@ export const publishAgendaEventSql = `UPDATE events
       SELECT COUNT(*)
       FROM json_each(?) selected
       JOIN program_sessions candidate ON candidate.id = CAST(selected.value AS TEXT)
+      JOIN session_content_status content_status
+        ON content_status.session_id = candidate.id
+        AND content_status.event_id = candidate.event_id
+        AND content_status.status = 'approved'
       WHERE candidate.event_id = ?
         AND candidate.status = 'published'
         AND candidate.starts_at IS NOT NULL
@@ -167,6 +200,11 @@ export function agendaEventPublishBindings(now: number, eventId: string, session
   return [now, eventId, encoded, encoded, eventId, encoded] as const;
 }
 
+export function agendaContentApprovalBindings(now: number, eventId: string, sessionIds: readonly string[]) {
+  const encoded = JSON.stringify(sessionIds);
+  return [now, now, encoded, eventId, encoded, eventId, encoded] as const;
+}
+
 export async function publishAgendaAtomically(
   db: D1Database,
   eventId: string,
@@ -180,8 +218,9 @@ export async function publishAgendaAtomically(
     : await session.prepare(selectScheduledAgendaSessionsSql).bind(eventId).all<AgendaPublishSessionRow>();
   const sessionIds = validateAgendaPublishSelection(eventId, requested, rows.results);
 
-  const [sessionResult, eventResult] = await session.batch([
+  const [sessionResult, , eventResult] = await session.batch([
     session.prepare(publishAgendaSessionsSql).bind(...agendaSessionPublishBindings(now, eventId, sessionIds)),
+    session.prepare(approveAgendaContentSql).bind(...agendaContentApprovalBindings(now, eventId, sessionIds)),
     session.prepare(publishAgendaEventSql).bind(...agendaEventPublishBindings(now, eventId, sessionIds)),
   ]);
 
@@ -199,6 +238,7 @@ export async function publishAgendaAtomically(
     sessionIds,
     publishedSessions: sessionIds.length,
     newlyPublishedSessions: Number(sessionResult?.meta.changes ?? 0),
+    approvedSessions: sessionIds.length,
     publishedAt: new Date(now).toISOString(),
   };
 }

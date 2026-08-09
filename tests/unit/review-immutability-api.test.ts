@@ -90,6 +90,12 @@ function createDatabase() {
       rubric TEXT NOT NULL,
       status TEXT NOT NULL
     );
+    CREATE TABLE review_round_reviewers (
+      round_id TEXT NOT NULL,
+      reviewer_user_id TEXT NOT NULL,
+      assignment_cap INTEGER NOT NULL DEFAULT 25,
+      PRIMARY KEY (round_id, reviewer_user_id)
+    );
     CREATE TABLE review_assignments (
       id TEXT PRIMARY KEY,
       proposal_id TEXT NOT NULL,
@@ -115,11 +121,14 @@ function createDatabase() {
     INSERT INTO speaker_profiles VALUES ('speaker-reviewer-a', 'event-a', 'reviewer-a');
     INSERT INTO proposal_speakers VALUES ('proposal-self-speaking', 'speaker-reviewer-a');
     INSERT INTO review_rounds VALUES ('round-a', 'event-a', 1, '[{"id":"fit","label":"Program fit","weight":1,"maxScore":5}]', 'active');
+    INSERT INTO review_round_reviewers VALUES ('round-a', 'reviewer-a', 25);
     INSERT INTO review_assignments VALUES
       ('review-reviewable', 'proposal-reviewable', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1),
       ('review-final', 'proposal-final', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1),
       ('review-self-owned', 'proposal-self-owned', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1),
       ('review-self-speaking', 'proposal-self-speaking', 'round-a', 'reviewer-a', 'pending', '{}', NULL, NULL, NULL, NULL, 1, 1);
+    ALTER TABLE review_assignments ADD COLUMN recused_at INTEGER;
+    ALTER TABLE review_assignments ADD COLUMN recusal_reason TEXT;
   `);
   return d1;
 }

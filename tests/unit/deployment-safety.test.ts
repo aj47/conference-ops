@@ -45,7 +45,7 @@ function generatedConfig(environment: DeployEnvironment) {
     r2_buckets: [{ binding: "UPLOADS", bucket_name: `conference-ops-${environment}-uploads` }],
     queues: { producers: [{ binding: "JOBS_QUEUE", queue: `conference-ops-${environment}-jobs` }] },
     services: [{ binding: "REALTIME", service: `conference-ops-${environment}-realtime` }],
-    assets: { binding: "ASSETS", directory: "../client", not_found_handling: "single-page-application", run_worker_first: ["/api/*", "/events/*/embed/agenda"] },
+    assets: { binding: "ASSETS", directory: "../client", not_found_handling: "single-page-application", run_worker_first: ["/api/*", "/events/*/embed/*"] },
   };
 }
 
@@ -130,22 +130,35 @@ describe("generated Vite deployment configuration", () => {
     expect(() => validateGeneratedViteConfig(unresolved, "staging")).toThrow();
   });
 
-  it("requires event-scoped agenda embeds to run through the Worker", () => {
+  it("requires every event-scoped widget embed to run through the Worker", () => {
     const config = generatedConfig("staging");
     config.assets.run_worker_first = ["/api/*"];
-    expect(() => validateGeneratedViteConfig(config, "staging")).toThrow(/agenda embeds through the Worker/);
+    expect(() => validateGeneratedViteConfig(config, "staging")).toThrow(/public widget embed/);
   });
 
-  it("allows framing for both legacy and event-scoped agenda embeds", () => {
+  it("allows framing for both legacy and event-scoped widget embeds", () => {
     const headers = readFileSync("public/_headers", "utf8");
     expect(validateStaticAssetHeaders(headers)).toBe(true);
 
-    expect(() => validateStaticAssetHeaders(headers.replace("/events/:slug/embed/agenda", "/events/:slug/agenda")))
-      .toThrow(/\/events\/:slug\/embed\/agenda/);
+    expect(() => validateStaticAssetHeaders(headers.replace("/events/:slug/embed/*", "/events/:slug/agenda")))
+      .toThrow(/\/events\/:slug\/embed\/\*/);
   });
 });
 
-describe("event-scoped agenda embed assets", () => {
+describe("event-scoped public widget embed assets", () => {
+  it.each(["sessions", "speakers", "agenda", "itinerary", "gallery"])("allows cross-origin framing for the %s widget", async (widget) => {
+    const assetFetch = vi.fn(async () => new Response("embedded app shell", {
+      headers: { "content-security-policy": "frame-ancestors 'self'", "x-frame-options": "SAMEORIGIN" },
+    }));
+    const bindings = readinessBindings({ ASSETS: { fetch: assetFetch } as unknown as Fetcher });
+
+    const response = await app.request(`https://conference.example.com/events/summit-2026/embed/${widget}`, undefined, bindings);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toContain("frame-ancestors *");
+    expect(response.headers.get("x-frame-options")).toBeNull();
+  });
+
   it.each(["GET", "HEAD"] as const)("applies the framing policy at the Worker boundary for %s", async (method) => {
     const assetFetch = vi.fn(async (request: Request) => {
       expect(request.method).toBe(method);
@@ -164,7 +177,7 @@ describe("event-scoped agenda embed assets", () => {
     });
     const bindings = readinessBindings({ ASSETS: { fetch: assetFetch } as unknown as Fetcher });
 
-    const response = await app.request("https://conference.example.com/events/summit-2026/embed/agenda", { method }, bindings);
+    const response = await app.request("https://conference.example.com/events/summit-2026/embed/gallery", { method }, bindings);
 
     expect(assetFetch).toHaveBeenCalledOnce();
     expect(response.status).toBe(206);

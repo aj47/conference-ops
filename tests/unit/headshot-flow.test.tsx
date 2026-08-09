@@ -81,8 +81,8 @@ describe("speaker headshot workspace flow", () => {
           bio: "Works on observability for long-running AI workflows.",
           city: "London, UK",
           headshotUploadId: "upload-leah",
-          publish: true,
         });
+        expect(payload).not.toHaveProperty("publish");
         return response({ data: { id: "speaker-leah", profileComplete: true } });
       }
       throw new Error(`Unexpected request: ${path}`);
@@ -106,6 +106,32 @@ describe("speaker headshot workspace flow", () => {
       profileComplete: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("saves speaker-owned biography edits without requesting publication", async () => {
+    const workspace = { ...createDemoWorkspace("user-speaker"), demoMode: false };
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/v1/bootstrap") return response({ data: workspace });
+      if (path.endsWith("/speakers/speaker-leah/profile")) {
+        const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        expect(payload.bio).toBe("Updated speaker biography with production evidence.");
+        expect(payload).not.toHaveProperty("publish");
+        return response({ data: { id: "speaker-leah", profileComplete: true } });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await renderProvider();
+
+    await act(async () => {
+      await context!.updateProfile("speaker-leah", {
+        bio: "Updated speaker biography with production evidence.",
+      });
+    });
+
+    expect(currentSpeaker("speaker-leah").bio).toBe("Updated speaker biography with production evidence.");
+    expect(context?.notice).toBe("Profile saved. Public speaker details are up to date.");
   });
 
   it("does not update the preview or completion when the production profile save fails", async () => {

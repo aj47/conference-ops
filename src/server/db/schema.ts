@@ -271,6 +271,7 @@ export const proposalSpeakers = sqliteTable(
   {
     proposalId: text("proposal_id").notNull().references(() => proposals.id, { onDelete: "cascade" }),
     speakerProfileId: text("speaker_profile_id").notNull().references(() => speakerProfiles.id, { onDelete: "cascade" }),
+    participantRole: text("participant_role").notNull().default("Presenter"),
     sortOrder: integer("sort_order").notNull().default(0),
   },
   (table) => [primaryKey({ columns: [table.proposalId, table.speakerProfileId] })],
@@ -281,10 +282,24 @@ export const reviewRounds = sqliteTable("review_rounds", {
   eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   round: integer("round").notNull(),
-  rubric: text("rubric", { mode: "json" }).$type<Array<{ id: string; label: string; weight: number; maxScore: number }>>().notNull(),
+  rubric: text("rubric", { mode: "json" }).$type<Array<{ id: string; label: string; type?: "numeric" | "dropdown" | "text"; weight: number; maxScore?: number; options?: string[]; required?: boolean }>>().notNull(),
+  opensAt: integer("opens_at", { mode: "timestamp" }),
+  closesAt: integer("closes_at", { mode: "timestamp" }),
+  anonymized: integer("anonymized", { mode: "boolean" }).notNull().default(false),
   status: text("status", { enum: ["draft", "active", "closed"] }).notNull().default("draft"),
   ...timestamps,
 });
+
+export const reviewRoundReviewers = sqliteTable(
+  "review_round_reviewers",
+  {
+    roundId: text("round_id").notNull().references(() => reviewRounds.id, { onDelete: "cascade" }),
+    reviewerUserId: text("reviewer_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    assignmentCap: integer("assignment_cap").notNull().default(25),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.roundId, table.reviewerUserId] }), index("review_round_reviewer_user_idx").on(table.reviewerUserId)],
+);
 
 export const reviewAssignments = sqliteTable(
   "review_assignments",
@@ -299,10 +314,31 @@ export const reviewAssignments = sqliteTable(
     totalScore: integer("total_score"),
     recommendation: text("recommendation", { enum: ["strong_yes", "yes", "maybe", "no"] }),
     notes: text("notes"),
+    recusedAt: integer("recused_at", { mode: "timestamp" }),
+    recusalReason: text("recusal_reason"),
     submittedAt: integer("submitted_at", { mode: "timestamp" }),
     ...timestamps,
   },
   (table) => [uniqueIndex("review_assignment_unique").on(table.proposalId, table.roundId, table.reviewerUserId, table.reviewCycle), index("reviewer_queue_idx").on(table.reviewerUserId, table.status)],
+);
+
+export const aiReviewEvaluations = sqliteTable(
+  "ai_review_evaluations",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    proposalId: text("proposal_id").notNull().references(() => proposals.id, { onDelete: "cascade" }),
+    roundId: text("round_id").notNull().references(() => reviewRounds.id, { onDelete: "cascade" }),
+    score: integer("score").notNull(),
+    rationale: text("rationale").notNull(),
+    modelLabel: text("model_label").notNull().default("Conference Ops bounded evaluator"),
+    overriddenScore: integer("overridden_score"),
+    overrideReason: text("override_reason"),
+    overriddenBy: text("overridden_by").references(() => users.id, { onDelete: "set null" }),
+    overriddenAt: integer("overridden_at", { mode: "timestamp" }),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex("ai_review_evaluation_unique").on(table.proposalId, table.roundId), index("ai_review_event_idx").on(table.eventId)],
 );
 
 export const tracks = sqliteTable("tracks", {
@@ -706,4 +742,68 @@ export const airtableCommands = sqliteTable(
     uniqueIndex("airtable_command_idempotency_unique").on(table.connectionId, table.idempotencyKey),
     index("airtable_command_status_idx").on(table.connectionId, table.status, table.requestedAt),
   ],
+);
+
+export const speakerOperations = sqliteTable(
+  "speaker_operations",
+  {
+    speakerProfileId: text("speaker_profile_id").primaryKey().references(() => speakerProfiles.id, { onDelete: "cascade" }),
+    eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    workflowStatus: text("workflow_status", { enum: ["invited", "confirmed", "onboarding", "ready", "declined"] }).notNull().default("invited"),
+    socialLinks: text("social_links", { mode: "json" }).$type<{ linkedin?: string; x?: string; website?: string }>().notNull().default({}),
+    travelDetails: text("travel_details").notNull().default(""),
+    ...timestamps,
+  },
+  (table) => [index("speaker_operations_event_status_idx").on(table.eventId, table.workflowStatus)],
+);
+
+export const sessionContentStatus = sqliteTable(
+  "session_content_status",
+  {
+    sessionId: text("session_id").primaryKey().references(() => programSessions.id, { onDelete: "cascade" }),
+    eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    status: text("status", { enum: ["draft", "in_review", "approved"] }).notNull().default("draft"),
+    ...timestamps,
+  },
+  (table) => [index("session_content_event_status_idx").on(table.eventId, table.status)],
+);
+
+export const contentRevisions = sqliteTable(
+  "content_revisions",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    entityType: text("entity_type", { enum: ["session", "speaker"] }).notNull(),
+    entityId: text("entity_id").notNull(),
+    version: integer("version").notNull(),
+    snapshot: text("snapshot", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+    editorUserId: text("editor_user_id").references(() => users.id, { onDelete: "set null" }),
+    editorName: text("editor_name").notNull(),
+    restoredFromVersion: integer("restored_from_version"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("content_revision_entity_version_unique").on(table.eventId, table.entityType, table.entityId, table.version),
+    index("content_revision_entity_time_idx").on(table.eventId, table.entityType, table.entityId, table.createdAt),
+  ],
+);
+
+export const speakerCommunicationLogs = sqliteTable(
+  "speaker_communication_logs",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull().references(() => events.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["invitation", "general", "task_reminder"] }).notNull(),
+    recipientIds: text("recipient_ids", { mode: "json" }).$type<string[]>().notNull().default([]),
+    recipientNames: text("recipient_names", { mode: "json" }).$type<string[]>().notNull().default([]),
+    subject: text("subject").notNull(),
+    bodyTemplate: text("body_template").notNull(),
+    renderedPreviews: text("rendered_previews", { mode: "json" }).$type<Array<{ speakerId: string; speakerName: string; body: string }>>().notNull().default([]),
+    deliveryMode: text("delivery_mode", { enum: ["queue", "sandbox"] }).notNull(),
+    status: text("status", { enum: ["queued", "recorded"] }).notNull(),
+    actorUserId: text("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    actorName: text("actor_name").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => [index("speaker_communication_event_time_idx").on(table.eventId, table.createdAt)],
 );

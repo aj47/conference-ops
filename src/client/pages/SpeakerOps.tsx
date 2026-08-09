@@ -26,6 +26,7 @@ import { TaskArtifactEvidence } from "../TaskArtifactEvidence";
 import { TaskDiscussion } from "../TaskDiscussion";
 import { taskFormResponseItems } from "../task-form-model";
 import { resolveSpeakerOpsTarget } from "../speaker-ops-target";
+import { SpeakerContentOperations } from "../speaker-content/SpeakerContentOperations";
 import { useWorkspace } from "../workspace";
 
 function AddTaskDialog({ speaker, onClose }: { speaker: SpeakerProfile; onClose: () => void }) {
@@ -144,6 +145,7 @@ export function SpeakerOperations() {
     <>
       <PageHeader eyebrow="Accepted speaker onboarding" title="Turn acceptance into readiness." description="Profiles, files, forms, and calendar acknowledgement stay visible as one operational queue." actions={<button type="button" className="button button--primary" disabled={sendingReminders || overdueSpeakerIds.length === 0} onClick={() => void queueOverdueReminders()}><BellRing size={16} /> {sendingReminders ? "Queuing reminders…" : `Send overdue reminders (${overdueSpeakerIds.length})`}</button>} />
       {reminderError && <InlineAlert tone="danger">{reminderError}</InlineAlert>}
+      <SpeakerContentOperations />
       <div className="readiness-strip">
         <ProgressBar label="All onboarding tasks" value={completeCount} max={acceptedTasks.length} />
         <div><strong>{speakers.filter((speaker) => speaker.profileComplete).length}/{speakers.length}</strong><span>profiles ready</span></div>

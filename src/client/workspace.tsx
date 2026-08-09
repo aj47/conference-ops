@@ -22,6 +22,7 @@ import type {
   ProposalStatus,
   PublicEventLoadState,
   ReviewAssignment,
+  ReviewResponseValue,
   Role,
   Room,
   ScheduleConflict,
@@ -96,7 +97,7 @@ export interface ApplicantSubmission {
 }
 
 interface ReviewPayload {
-  scores: Record<string, number>;
+  scores: Record<string, ReviewResponseValue>;
   recommendation: "strong_yes" | "yes" | "maybe" | "no";
   notes: string;
   submit: boolean;
@@ -494,6 +495,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
             eventId: data.event.id,
             title: session.title,
             description: session.description,
+            format: session.format,
             speakerIds: session.speakerIds ?? [],
             speakerNames: session.speakerNames ?? [],
             trackId: session.trackId,
@@ -1270,13 +1272,8 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
         if (!existing) return current;
         const evaluation = evaluateReviewScores(existing.rubric, payload.scores, payload.submit);
         const review: ReviewAssignment = {
-          id: existing.id,
-          proposalId,
-          reviewerId: current.actor.id,
-          round: existing.round,
-          roundName: existing.roundName,
+          ...existing,
           status: payload.submit ? "submitted" : "in_progress",
-          rubric: existing.rubric,
           scores: saved?.scores ?? evaluation.scores,
           score: saved?.score ?? evaluation.totalScore,
           recommendation: payload.recommendation,
@@ -1348,7 +1345,6 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
           bio: nextProfile.bio,
           pronouns: nextProfile.pronouns,
           city: nextProfile.city,
-          publish: true,
         },
       );
       profileComplete = saved.profileComplete
@@ -1413,7 +1409,6 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
           pronouns: currentProfile.pronouns,
           city: currentProfile.city,
           headshotUploadId: uploaded.id,
-          publish: true,
         },
       );
       profileComplete = saved.profileComplete;
@@ -1543,12 +1538,14 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       .filter((session) => session.status === "scheduled" || session.status === "published")
       .map((session) => session.id);
     if (!scheduledIds.length) throw new Error("Schedule at least one session before publishing.");
+    let approvedSessions = scheduledIds.length;
     try {
-      await conferenceApi.publishAgenda(
+      const published = await conferenceApi.publishAgenda(
         workspace.actor.id,
         workspace.event.id,
         scheduledIds,
       );
+      approvedSessions = published.approvedSessions;
     } catch (error) {
       if (!mayUseDemoFallback(error, source)) {
         setNotice(error instanceof Error ? error.message : "The agenda could not be published.");
@@ -1562,7 +1559,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
         scheduledIds.includes(session.id) ? { ...session, status: "published" } : session,
       ),
     }));
-    setNotice(`Agenda published with ${scheduledIds.length} sessions.`);
+    setNotice(`Agenda published with ${scheduledIds.length} sessions. ${approvedSessions} approved for public view.`);
   }, [source, workspace.actor.id, workspace.event.id, workspace.sessions]);
 
   const convertProposalToSession = useCallback(async (proposalId: string) => {
