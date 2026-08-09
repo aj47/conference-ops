@@ -587,12 +587,13 @@ async function applyRemoteRecord(env: Bindings, connection: ConnectionRow, remot
       await enqueueAirtableRestore(env.DB, connection.id, entity.entityType, localKey, now);
       return;
     }
-    await env.DB.prepare(`INSERT INTO airtable_record_maps
-      (connection_id, entity_type, local_key, airtable_record_id, last_local_hash, last_remote_hash, last_synced_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(connection_id, entity_type, local_key) DO UPDATE SET airtable_record_id = excluded.airtable_record_id,
-        last_remote_hash = excluded.last_remote_hash, last_synced_at = excluded.last_synced_at, updated_at = excluded.updated_at`)
-      .bind(connection.id, entity.entityType, localKey, remote.id, localHash, remoteHash, now, now).run();
+    // A self-echo observes the Last Synced At value written by the prior push.
+    // Advancing last_synced_at to pull time without also rewriting that protected
+    // Airtable field would make the next legitimate remote edit look like drift.
+    await env.DB.prepare(`UPDATE airtable_record_maps
+      SET airtable_record_id = ?, last_remote_hash = ?, updated_at = ?
+      WHERE connection_id = ? AND entity_type = ? AND local_key = ?`)
+      .bind(remote.id, remoteHash, now, connection.id, entity.entityType, localKey).run();
     return;
   }
   if (action === "restore_airtable") {

@@ -8,6 +8,7 @@ test("organizer can author, publish, unpublish, and delete a participant resourc
   const browserErrors: string[] = [];
   page.on("console", (message) => { if (message.type() === "error") browserErrors.push(message.text()); });
   page.on("pageerror", (error) => browserErrors.push(error.message));
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/program-settings?eventId=event-aie-2026&role=organizer");
   await page.getByRole("button", { name: /Participant resources/ }).click();
   await expect(page.getByRole("heading", { name: "Publish the answers speakers need without another email." })).toBeVisible();

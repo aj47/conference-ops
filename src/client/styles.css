@@ -1107,6 +1107,7 @@ h3 { font-size: 1.06rem; line-height: 1.2; }
   .queue-toolbar__result { margin: 0; }
   .data-table th:nth-child(2), .data-table td:nth-child(2) { display: none; }
   .proposal-table th:nth-child(3), .proposal-table td:nth-child(3) { display: none; }
+  .proposal-table .status-pill { width: min-content; white-space: normal; }
   .proposal-detail { padding: 16px; }
   .proposal-detail__head { flex-direction: column; }
   .review-canvas { display: block; }

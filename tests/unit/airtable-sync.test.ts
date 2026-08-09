@@ -461,6 +461,39 @@ describe("Airtable synchronization", () => {
     }
   });
 
+  it("preserves the pushed sync timestamp across a self-echo before an Airtable-authored edit", async () => {
+    const d1 = fixture("airtable");
+    const priorHash = await seedMappedTrack(d1);
+    const editedPayload = { ...originalTrackPayload, name: "Airtable name", color: "#445566" };
+    let pull = 0;
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes("/webhooks/achWebhook123/payloads")) {
+        pull += 1;
+        return Response.json({ cursor: pull, mightHaveMore: false, changedTablesById: { tblRecords123: { changedRecordsById: { recTrack123: {} } } } });
+      }
+      if (url.includes("/tblRecords123/recTrack123")) {
+        return Response.json({ id: "recTrack123", fields: trackRemoteFields(pull === 1 ? originalTrackPayload : editedPayload, priorHash) });
+      }
+      if (url.includes("/tblCommands123?")) return Response.json({ records: [] });
+      throw new Error(`Unexpected Airtable request: ${url}`);
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetcher as typeof fetch;
+    try {
+      expect(await pullAirtableChanges(bindings(d1), "connection-a", 100)).toEqual({ records: 1, commands: 0 });
+      expect(d1.sqlite.prepare("SELECT last_synced_at FROM airtable_record_maps WHERE connection_id = 'connection-a'").get())
+        .toEqual({ last_synced_at: 10 });
+
+      expect(await pullAirtableChanges(bindings(d1), "connection-a", 200)).toEqual({ records: 1, commands: 0 });
+      expect(d1.sqlite.prepare("SELECT name, color, updated_at FROM tracks WHERE id = 'track-a'").get())
+        .toEqual({ name: "Airtable name", color: "#445566", updated_at: 200 });
+      expect(d1.sqlite.prepare("SELECT COUNT(*) AS count FROM airtable_conflicts").get()).toEqual({ count: 0 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("advances version, calendar sequence, and updated time for Airtable-authored session content", async () => {
     const d1 = fixture("airtable");
     const localKey = JSON.stringify(["session-a"]);

@@ -80,4 +80,35 @@ describe("Jobs scheduled failure isolation", () => {
     expect(scheduledMocks.refreshWebhook).toHaveBeenCalledWith(env, "connection-a", 123_456);
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: "scheduled-recovery-a" }));
   });
+
+  it("drains Airtable work queued by reminder triggers after the invocation timestamp", async () => {
+    const invocationNow = 123_456;
+    const triggerAvailableAt = 124_000;
+    const postReminderNow = 124_001;
+    vi.mocked(Date.now)
+      .mockReturnValueOnce(invocationNow)
+      .mockReturnValueOnce(postReminderNow)
+      .mockReturnValue(postReminderNow);
+    scheduledMocks.prepareReminders.mockResolvedValue({ created: 0, rules: 1 });
+    let drained = false;
+    scheduledMocks.drainAirtable.mockImplementation(async (_env, options: { now?: number }) => {
+      drained = (options.now ?? 0) >= triggerAvailableAt;
+      return { claimed: drained ? 1 : 0 };
+    });
+    const env = {
+      DB: { prepare: (sql: string) => new ScheduledStatement(sql) } as unknown as D1Database,
+      JOBS_QUEUE: { send: vi.fn().mockResolvedValue(undefined) } as unknown as Queue,
+      AIRTABLE_ENABLED: "true",
+    } as Bindings;
+
+    await jobsWorker.scheduled({} as ScheduledController, env);
+
+    expect(scheduledMocks.prepareReminders).toHaveBeenCalledWith(env, invocationNow);
+    expect(scheduledMocks.drainAirtable).toHaveBeenCalledWith(env, {
+      connectionId: "connection-a",
+      now: postReminderNow,
+    });
+    expect(drained).toBe(true);
+    expect(scheduledMocks.refreshWebhook).toHaveBeenCalledWith(env, "connection-a", postReminderNow);
+  });
 });

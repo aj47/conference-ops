@@ -194,12 +194,16 @@ export default {
   },
   async scheduled(_controller: ScheduledController, env: Bindings) {
     if (!env.JOBS_QUEUE) return;
-    const now = Date.now();
+    const scheduledAt = Date.now();
     try {
-      await prepareScheduledReminders(env, now);
+      await prepareScheduledReminders(env, scheduledAt);
     } catch (error) {
       console.error(JSON.stringify({ event: "reminders.scheduled_prepare_failed", error: error instanceof Error ? error.message : String(error) }));
     }
+    // Reminder preparation updates communication_schedules. Its D1 trigger uses
+    // the database clock, so work queued during a slow or second-boundary run can
+    // be newer than the timestamp captured when this scheduled invocation began.
+    const now = Date.now();
     if (env.AIRTABLE_ENABLED === "true") {
       const connections = await enabledAirtableConnections(env.DB);
       for (const connection of connections) {
