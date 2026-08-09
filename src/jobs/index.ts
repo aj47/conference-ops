@@ -195,7 +195,11 @@ export default {
   async scheduled(_controller: ScheduledController, env: Bindings) {
     if (!env.JOBS_QUEUE) return;
     const now = Date.now();
-    await prepareScheduledReminders(env, now);
+    try {
+      await prepareScheduledReminders(env, now);
+    } catch (error) {
+      console.error(JSON.stringify({ event: "reminders.scheduled_prepare_failed", error: error instanceof Error ? error.message : String(error) }));
+    }
     if (env.AIRTABLE_ENABLED === "true") {
       const connections = await enabledAirtableConnections(env.DB);
       for (const connection of connections) {
