@@ -573,6 +573,9 @@ test("organizer requests a controlled proposal revision with an auditable note",
   await expect(page.getByText(/Clarify the benchmark, select the correct track/)).toBeVisible();
   await expect(page.getByLabel("Details for Observability for agents that run all afternoon").getByText("changes requested", { exact: true })).toBeVisible();
   await expect(page.getByText(/Revision requested\./)).toBeVisible();
+  if ((page.viewportSize()?.width ?? 0) <= 680) {
+    expect(await page.getByLabel("Proposal queue").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
