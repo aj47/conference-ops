@@ -235,7 +235,7 @@ budget approval, and a clean reset before each scenario chain.
 ## Release-owner completion steps
 
 1. Implementation is frozen at commit
-   `2c9d4c31ea88a410f644250c146adbdc967b7154`; keep the evidence bundle tied
+   `1a077fa6d0a1ef66bbc5546dadc67aeb547bc2f6`; keep the evidence bundle tied
    to that source revision.
 2. Deploy only to a disposable evaluation environment.
 3. Capture the missing `SPK-16` scheduled-reminder inbox receipt.

@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "subject": {
     "name": "Conference Ops v0.3.0",
-    "commit": "2c9d4c31ea88a410f644250c146adbdc967b7154",
+    "commit": "1a077fa6d0a1ef66bbc5546dadc67aeb547bc2f6",
     "sourceState": "Versioned v0.3.0 implementation commit"
   },
   "evaluator": {

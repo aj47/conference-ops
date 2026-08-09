@@ -9,7 +9,7 @@ after the tagged 0.2.0 pilot release.
 
 | Item | Verified state |
 | --- | --- |
-| Version | `package.json` is 0.3.0 at source commit `2c9d4c31ea88a410f644250c146adbdc967b7154`. The release tag is recorded only after required CI completes. |
+| Version | `package.json` is 0.3.0 at source commit `1a077fa6d0a1ef66bbc5546dadc67aeb547bc2f6`. The release tag is recorded only after required CI completes. |
 | Product status | Release candidate. This audit does not claim that the 0.3.0 code or migrations have been deployed to the existing pilot. |
 | KillMySaaS | **100.0% required implementation projection** across 84 required items. This is not an official judge score. |
 | Manual evidence | CFP confirmation delivery has a safe redacted receipt. The fresh post-deploy scheduled speaker-reminder inbox receipt (`SPK-16`) remains pending. |
@@ -112,7 +112,7 @@ Before using v0.3 against an existing authoritative base, the operator must:
 | Gate | Result |
 | --- | --- |
 | `git diff --check` | Pass. |
-| `pnpm verify` | Pass: lint, typecheck, **105 test files / 540 tests**, and production build. |
+| `pnpm verify` | Pass: lint, typecheck, **105 test files / 541 tests**, and production build. |
 | Full Playwright | Pass: **52 journeys passed / 6 intentional viewport skips** at desktop 1440 px and mobile 375 px. |
 | Former mobile-overflow regression | Pass: 3/3 sequential focused journeys. |
 | `pnpm db:generate` | Pass: 48 tables; no schema changes; pre/post migration hashes unchanged. |
@@ -166,5 +166,5 @@ Commit intentional source, tests, docs, public PDFs, migrations 0012/0013, both
 snapshots, and the migration journal. Keep `.wrangler/`, `artifacts/`, `output/`,
 `videos/`, `test-results/`, `playwright-report/`, secrets, state, backups, and raw
 private evidence outside version control. The implementation commit is
-`2c9d4c31ea88a410f644250c146adbdc967b7154`. Push and tag 0.3.0 only after
+`1a077fa6d0a1ef66bbc5546dadc67aeb547bc2f6`. Push and tag 0.3.0 only after
 required CI is green.
