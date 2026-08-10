@@ -11,13 +11,14 @@ import {
   MoveRight,
   Plus,
   Radio,
+  RotateCcw,
   Settings2,
   ShieldAlert,
   Sparkles,
   UserRound,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import type { ProgramSession, Proposal, Room, ScheduleConflict, Track } from "../../shared/domain";
 import { buildAutoSchedulePlan, type AutoSchedulePlan } from "../auto-schedule";
@@ -257,7 +258,7 @@ function ScheduleConflictsView({
 }
 
 export function ScheduleBoard() {
-  const { workspace, detectConflicts, scheduleSession, addDirectSession, setNotice, privateWorkspaceEventId } = useWorkspace();
+  const { workspace, detectConflicts, scheduleSession, unscheduleSession, addDirectSession, setNotice, privateWorkspaceEventId } = useWorkspace();
   const eventId = privateWorkspaceEventId ?? workspace.event.id;
   const [searchParams, setSearchParams] = useSearchParams();
   const view = scheduleViewFromValue(searchParams.get("view"));
@@ -282,6 +283,9 @@ export function ScheduleBoard() {
   const [directSaving, setDirectSaving] = useState(false);
   const [autoPlan, setAutoPlan] = useState<AutoSchedulePlan | null>(null);
   const [autoApplying, setAutoApplying] = useState(false);
+  const [undoPlacementIds, setUndoPlacementIds] = useState<string[]>([]);
+  const [undoing, setUndoing] = useState(false);
+  const actionHandledRef = useRef(false);
   const [direct, setDirect] = useState({
     title: "",
     description: "",
@@ -372,7 +376,7 @@ export function ScheduleBoard() {
     return durationMinutesForSession(session, workspace.proposals);
   };
 
-  const previewAutoSchedule = () => {
+  const previewAutoSchedule = useCallback(() => {
     if (!unscheduled.length) {
       setNotice("Every session is already placed. Move an existing card when the run of show changes.");
       return;
@@ -397,12 +401,22 @@ export function ScheduleBoard() {
       durationMinutes,
       preferredTrackIds,
     }));
-  };
+  }, [autoScheduleSlots, setNotice, unscheduled, workspace.proposals, workspace.rooms, workspace.sessions, workspace.tracks]);
+
+  useEffect(() => {
+    if (searchParams.get("action") !== "auto-plan" || actionHandledRef.current) return;
+    actionHandledRef.current = true;
+    previewAutoSchedule();
+    const next = new URLSearchParams(searchParams);
+    next.delete("action");
+    setSearchParams(next, { replace: true });
+  }, [previewAutoSchedule, searchParams, setSearchParams]);
 
   const applyAutoSchedule = async () => {
     if (!autoPlan?.placements.length || autoApplying) return;
     setAutoApplying(true);
     let applied = 0;
+    const appliedIds: string[] = [];
     try {
       for (const placement of autoPlan.placements) {
         await scheduleSession(placement.sessionId, {
@@ -412,15 +426,34 @@ export function ScheduleBoard() {
           endsAt: placement.endsAt,
         });
         applied += 1;
+        appliedIds.push(placement.sessionId);
       }
+      setUndoPlacementIds(appliedIds);
       setAutoPlan(null);
       changeView("board");
       setNotice(`Assisted placement scheduled ${applied} conflict-free ${applied === 1 ? "session" : "sessions"}.${autoPlan.unplaced.length ? ` ${autoPlan.unplaced.length} still need a manual decision.` : ""}`);
     } catch {
+      setUndoPlacementIds(appliedIds);
       setNotice(`${applied} placements were saved before the schedule changed. Refresh the preview and apply the remaining sessions.`);
     } finally {
       setAutoApplying(false);
     }
+  };
+
+  const undoAutoSchedule = async () => {
+    if (!undoPlacementIds.length || undoing) return;
+    setUndoing(true);
+    let restored = 0;
+    try {
+      for (const sessionId of [...undoPlacementIds].reverse()) {
+        await unscheduleSession(sessionId);
+        restored += 1;
+      }
+      setUndoPlacementIds([]);
+      setNotice(`Draft placement undone. ${restored} ${restored === 1 ? "session is" : "sessions are"} back in Ready to place.`);
+    } catch {
+      setNotice(`${restored} draft placements were undone before the schedule changed. Review the remaining sessions manually.`);
+    } finally { setUndoing(false); }
   };
 
   const openPlacement = (sessionId: string) => {
@@ -501,7 +534,7 @@ export function ScheduleBoard() {
         eyebrow={`Stage call sheet · ${activeDay?.label ?? "Event day"}`}
         title="Every room, track, and speaker gets one place."
         description="Scan the run of show in List or Week, place sessions by room, and keep every active overlap visible in the conflict docket."
-        actions={<><button type="button" className="button button--quiet" onClick={previewAutoSchedule}><Sparkles size={16} /> Auto-place safe sessions</button><button type="button" className="button button--quiet" onClick={() => setVenueOpen(true)}><Settings2 size={16} /> Rooms & tracks</button><button type="button" className="button button--quiet" onClick={() => setDirectOpen(true)}><Plus size={16} /> Add direct session</button>{view === "board" && <label className="select-control"><CalendarDays size={16} /><span className="sr-only">Schedule day</span><select value={activeDay?.key ?? ""} onChange={(event) => changeDay(event.target.value)}>{dayOptions.map((day, index) => <option key={day.key} value={day.key}>Day {index + 1} · {day.label}</option>)}</select></label>}<Link to={privateEventPath("/publish", eventId)} className="button button--primary"><Radio size={16} /> Review & publish</Link></>}
+        actions={<><button type="button" className="button button--quiet" aria-label="Auto-place safe sessions" onClick={previewAutoSchedule}><Sparkles size={16} /> Draft my schedule</button>{undoPlacementIds.length > 0 && <button type="button" className="button button--quiet schedule-undo" disabled={undoing} onClick={() => void undoAutoSchedule()}><RotateCcw size={15} />{undoing ? "Undoing…" : `Undo ${undoPlacementIds.length} draft ${undoPlacementIds.length === 1 ? "placement" : "placements"}`}</button>}<button type="button" className="button button--quiet" onClick={() => setVenueOpen(true)}><Settings2 size={16} /> Rooms & tracks</button><button type="button" className="button button--quiet" onClick={() => setDirectOpen(true)}><Plus size={16} /> Add direct session</button>{view === "board" && <label className="select-control"><CalendarDays size={16} /><span className="sr-only">Schedule day</span><select value={activeDay?.key ?? ""} onChange={(event) => changeDay(event.target.value)}>{dayOptions.map((day, index) => <option key={day.key} value={day.key}>Day {index + 1} · {day.label}</option>)}</select></label>}<Link to={privateEventPath("/publish", eventId)} className="button button--primary"><Radio size={16} /> Review & publish</Link></>}
       />
 
       <ScheduleViewSwitcher active={view} conflictCount={conflictCount} onChange={changeView} />
@@ -590,9 +623,9 @@ export function ScheduleBoard() {
       {autoPlan && (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!autoApplying) setAutoPlan(null); }}>
           <aside ref={autoDialogRef} className="drawer drawer--wide auto-schedule-dialog" role="dialog" aria-modal="true" aria-labelledby="auto-schedule-title" aria-busy={autoApplying} tabIndex={-1} onMouseDown={(event) => event.stopPropagation()}>
-            <div className="drawer__head"><div><p className="eyebrow">Deterministic schedule assist</p><h2 id="auto-schedule-title">Preview safe placements</h2></div><button type="button" className="icon-button" disabled={autoApplying} onClick={() => setAutoPlan(null)} aria-label="Close assisted placement preview"><X size={18} /></button></div>
+            <div className="drawer__head"><div><p className="eyebrow">Supervised schedule draft</p><h2 id="auto-schedule-title">Preview safe placements</h2></div><button type="button" className="icon-button" disabled={autoApplying} onClick={() => setAutoPlan(null)} aria-label="Close assisted placement preview"><X size={18} /></button></div>
             <div className="drawer__body auto-schedule-dialog__body">
-              <InlineAlert tone="info"><Sparkles size={16} /><span><strong>No black box and no silent overrides.</strong> Longer sessions are placed first. Every suggestion is checked against room, track, and speaker conflicts before anything is saved.</span></InlineAlert>
+              <InlineAlert tone="info"><Sparkles size={16} /><span><strong>No black box and no silent overrides.</strong> Longer sessions are placed first. Every suggestion is conflict-checked, nothing saves before confirmation, and this applied draft can be undone until you leave the page.</span></InlineAlert>
               <dl className="auto-schedule-summary"><div><dt>Safe to place</dt><dd>{autoPlan.placements.length}</dd></div><div><dt>Needs judgment</dt><dd>{autoPlan.unplaced.length}</dd></div></dl>
               {autoPlan.placements.length ? <ol className="auto-schedule-plan" aria-label="Proposed session placements">{autoPlan.placements.map((placement) => {
                 const session = workspace.sessions.find((item) => item.id === placement.sessionId);

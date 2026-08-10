@@ -17,6 +17,9 @@ export function readinessInsights(workspace: WorkspaceSnapshot): ReadinessInsigh
     count: unassigned,
     actionLabel: "Fix reviewer routing",
     actionPath: eventPath("/program-settings", workspace.event.id),
+    effectSummary: "Opens track routing. No reviewer assignment changes until you save the mapping.",
+    reversible: true,
+    requiresConfirmation: true,
   });
 
   const pendingDecisions = workspace.proposals.filter((proposal) => proposal.status === "accept_queue" || proposal.status === "decline_queue").length;
@@ -28,6 +31,9 @@ export function readinessInsights(workspace: WorkspaceSnapshot): ReadinessInsigh
     count: pendingDecisions,
     actionLabel: "Work proposal decisions",
     actionPath: eventPath("/proposals", workspace.event.id),
+    effectSummary: "Opens staged decisions. A final approve or deny can send email and acceptance creates the session and speaker tasks.",
+    reversible: false,
+    requiresConfirmation: true,
   });
 
   const unscheduled = workspace.sessions.filter((session) => session.status === "unscheduled").length;
@@ -38,7 +44,10 @@ export function readinessInsights(workspace: WorkspaceSnapshot): ReadinessInsigh
     detail: "Place each session on the day-and-room board; room, track, and speaker overlap checks run before the move commits.",
     count: unscheduled,
     actionLabel: "Open schedule board",
-    actionPath: eventPath("/schedule", workspace.event.id),
+    actionPath: `${eventPath("/schedule", workspace.event.id)}&action=auto-plan`,
+    effectSummary: "Builds a conflict-free draft for review. Nothing moves until you confirm; the applied draft can be undone in this session.",
+    reversible: true,
+    requiresConfirmation: true,
   });
 
   const overdue = workspace.tasks.filter((task) => task.status === "overdue").length;
@@ -51,6 +60,9 @@ export function readinessInsights(workspace: WorkspaceSnapshot): ReadinessInsigh
     count: overdue || outstanding,
     actionLabel: "Open speaker operations",
     actionPath: eventPath("/speaker-ops", workspace.event.id),
+    effectSummary: "Opens the exact speakers and tasks needing attention. Sending reminders remains a separate confirmed action.",
+    reversible: true,
+    requiresConfirmation: true,
   });
 
   const incompleteProfiles = new Map(
@@ -68,6 +80,9 @@ export function readinessInsights(workspace: WorkspaceSnapshot): ReadinessInsigh
     count: incompleteProfiles,
     actionLabel: "Review speaker profiles",
     actionPath: eventPath("/speaker-ops", workspace.event.id),
+    effectSummary: "Opens profile readiness. Public visibility changes only after an organizer saves the record.",
+    reversible: true,
+    requiresConfirmation: true,
   });
 
   const scheduled = workspace.sessions.filter((session) => session.status === "scheduled").length;
@@ -79,6 +94,9 @@ export function readinessInsights(workspace: WorkspaceSnapshot): ReadinessInsigh
     count: scheduled,
     actionLabel: "Open publish center",
     actionPath: eventPath("/publish", workspace.event.id),
+    effectSummary: "Opens the release checklist and public preview. Publishing is a separate explicit confirmation.",
+    reversible: false,
+    requiresConfirmation: true,
   });
 
   if (!insights.length) insights.push({
@@ -89,6 +107,9 @@ export function readinessInsights(workspace: WorkspaceSnapshot): ReadinessInsigh
     count: 0,
     actionLabel: "Review the control room",
     actionPath: eventPath("/workspace", workspace.event.id),
+    effectSummary: "Returns to the read-only operational summary.",
+    reversible: true,
+    requiresConfirmation: false,
   });
   return insights;
 }

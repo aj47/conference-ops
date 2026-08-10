@@ -35,6 +35,7 @@ export function publicEventFromRow(row: Record<string, unknown>): EventRecord {
     venue: String(row.venue ?? ""),
     websiteUrl: String(row.websiteUrl ?? ""),
     accent: String(row.accent),
+    ...(row.logoUploadId ? { logoUrl: `/api/v1/public/events/${encodeURIComponent(String(row.slug))}/brand/logo` } : {}),
     status: row.status,
   };
 }

@@ -565,6 +565,7 @@ export async function loadWorkspace(env: Bindings, authActor: AuthActor, request
       id: eventId, slug: String(membership.slug), name: String(membership.name), shortName: String(membership.short_name), description: String(membership.description), timezone: String(membership.timezone),
       startsAt: iso(membership.starts_at), endsAt: iso(membership.ends_at), venue: String(membership.venue), websiteUrl: String(membership.website_url ?? ""), status: String(membership.status) as WorkspaceSnapshot["event"]["status"],
       cfpClosesAt: membership.cfp_closes_at ? iso(membership.cfp_closes_at) : iso(membership.starts_at), accent: String(membership.accent),
+      ...(membership.logo_upload_id ? { logoUrl: `/api/v1/events/${encodeURIComponent(eventId)}/brand/logo` } : {}),
     },
     forms: role === "organizer" ? forms : forms.filter((form) => form.status !== "draft"), proposals: visibleProposals, reviews: visibleReviews, tasks: visibleTasks, tracks, rooms, sessions: visibleSessions,
     resources: role === "organizer" ? resources : resources.filter((resource) => resource.status === "published"), embeds: role === "organizer" ? embeds : [],

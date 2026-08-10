@@ -31,7 +31,10 @@ describe("Airtable organizer status surface", () => {
     const markup = renderToStaticMarkup(<AirtableStatusCard status={status} timezone="America/Los_Angeles" refreshing={false} onRefresh={vi.fn()} />);
 
     expect(markup).toContain("Airtable is the current source of truth");
-    expect(markup).toContain("The guarded mirror is operating normally");
+    expect(markup).toContain("Airtable is connected and current");
+    expect(markup).toContain("Connected and current");
+    expect(markup).toContain("Most recent reflected workflow change");
+    expect(markup).toContain("Platform diagnostics");
     expect(markup).toContain("D1 workflow store");
     expect(markup).toContain("Airtable records");
     expect(markup).toContain("Environment connector");

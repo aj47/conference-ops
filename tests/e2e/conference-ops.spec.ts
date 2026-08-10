@@ -64,7 +64,12 @@ test("organizer can configure routing, onboarding, communications, and readiness
   await page.getByRole("button", { name: /Readiness assistant/ }).click();
   await page.getByRole("button", { name: "Publish readiness" }).click();
   await expect(page.getByText(/Before publishing, work these evidence-backed items/)).toBeVisible();
-  await page.getByRole("button", { name: "Fix reviewer routing" }).click();
+  const routingInsight = page.locator(".assistant-insights article").filter({ hasText: "no active review assignment" });
+  await routingInsight.getByRole("button", { name: "Preview action" }).click();
+  const actionPreview = page.getByRole("region", { name: "Preview action: Fix reviewer routing" });
+  await expect(actionPreview.getByText("None", { exact: true })).toBeVisible();
+  await expect(actionPreview.getByText("Required", { exact: true })).toBeVisible();
+  await actionPreview.getByRole("button", { name: "Continue to workflow" }).click();
   await expect(page.getByRole("heading", { name: "Route each submitted track to its reviewers." })).toBeVisible();
   await expect(page).toHaveURL(/role=organizer/);
 
@@ -442,6 +447,11 @@ test("organizer previews and applies an explainable conflict-free schedule plan"
   await expect(page.getByText("Assisted placement scheduled 1 conflict-free session.")).toBeVisible();
   const scheduled = page.locator(".schedule-card").filter({ hasText: "Designing the first ten minutes of an AI SDK" });
   await expect(scheduled.getByRole("button", { name: "Reschedule Designing the first ten minutes of an AI SDK" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Undo 1 draft placement" }).click();
+  await expect(page.getByText("Draft placement undone. 1 session is back in Ready to place.")).toBeVisible();
+  const restored = page.locator(".unscheduled-card").filter({ hasText: "Designing the first ten minutes of an AI SDK" });
+  await expect(restored.getByRole("button", { name: "Place with controls" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 

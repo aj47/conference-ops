@@ -47,7 +47,7 @@ function fixture() {
   const d1 = new TestD1();
   d1.sqlite.exec(`
     CREATE TABLE event_memberships (event_id TEXT NOT NULL, user_id TEXT NOT NULL, role TEXT NOT NULL);
-    CREATE TABLE events (id TEXT PRIMARY KEY, name TEXT NOT NULL, venue TEXT NOT NULL, timezone TEXT NOT NULL);
+    CREATE TABLE events (id TEXT PRIMARY KEY, name TEXT NOT NULL, venue TEXT NOT NULL, timezone TEXT NOT NULL, deleted_at INTEGER);
     CREATE TABLE speaker_profiles (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL);
     CREATE TABLE proposals (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL);
     CREATE TABLE proposal_speakers (proposal_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
@@ -56,7 +56,7 @@ function fixture() {
     CREATE TABLE program_sessions (
       id TEXT PRIMARY KEY, event_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL,
       starts_at INTEGER, ends_at INTEGER, calendar_uid TEXT NOT NULL, calendar_sequence INTEGER NOT NULL,
-      room_id TEXT, status TEXT NOT NULL
+      room_id TEXT, status TEXT NOT NULL, updated_at INTEGER NOT NULL
     );
     CREATE TABLE session_speakers (session_id TEXT NOT NULL, speaker_profile_id TEXT NOT NULL);
     CREATE TABLE message_templates (
@@ -70,13 +70,13 @@ function fixture() {
     );
 
     INSERT INTO event_memberships VALUES ('event-a', 'organizer-a', 'organizer');
-    INSERT INTO events VALUES ('event-a', 'Conference A', 'Harbor Hall', 'America/Los_Angeles');
+    INSERT INTO events VALUES ('event-a', 'Conference A', 'Harbor Hall', 'America/Los_Angeles', NULL);
     INSERT INTO speaker_profiles VALUES ('speaker-a', 'event-a', 'Speaker A', 'speaker@example.test');
     INSERT INTO proposals VALUES ('proposal-a', 'event-a', 'Operational agents', 'accepted', 10);
     INSERT INTO proposal_speakers VALUES ('proposal-a', 'speaker-a');
     INSERT INTO speaker_tasks VALUES ('task-a', 'event-a', 'speaker-a', 'overdue');
     INSERT INTO rooms VALUES ('room-a', 'event-a', 'Main room');
-    INSERT INTO program_sessions VALUES ('session-a', 'event-a', 'Operational agents', 'A useful session.', 1893456000000, 1893459600000, 'session-a@example.test', 3, 'room-a', 'scheduled');
+    INSERT INTO program_sessions VALUES ('session-a', 'event-a', 'Operational agents', 'A useful session.', 1893456000000, 1893459600000, 'session-a@example.test', 3, 'room-a', 'scheduled', 10);
     INSERT INTO session_speakers VALUES ('session-a', 'speaker-a');
     INSERT INTO message_templates VALUES
       ('template-acceptance', 'event-a', 'acceptance', 'Accepted: {{proposal.title}} · {{event.name}}', '<p>Hi {{speaker.name}}. Open {{speaker.portal_url}}; tasks {{task.count}}.</p>', 'Hi {{speaker.name}}. Open {{speaker.portal_url}}; tasks {{task.count}}.', 1),
@@ -114,6 +114,20 @@ async function history(d1: TestD1, sent: OutboxJob[], role = "organizer", eventI
   }, bindings(d1, sent));
 }
 
+async function testSend(d1: TestD1, sent: OutboxJob[], role = "organizer") {
+  return app.request("http://localhost/api/v1/events/event-a/communications/test-send", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-event-role": role },
+    body: JSON.stringify({
+      kind: "acceptance",
+      subject: "Welcome {{speaker.name}} to {{event.name}}",
+      text: "{{proposal.title}} has {{task.count}} tasks. Open {{speaker.portal_url}}.",
+      html: "<p>{{speaker.name}} in {{session.room}}</p>",
+      sampleSpeakerId: "speaker-a",
+    }),
+  }, bindings(d1, sent));
+}
+
 describe("MVP communication delivery API", () => {
   it("persists and dispatches rendered acceptance and RFC-calendar jobs", async () => {
     const d1 = fixture();
@@ -143,6 +157,40 @@ describe("MVP communication delivery API", () => {
       { kind: "email", status: "queued" },
       { kind: "calendar", status: "queued" },
     ]);
+  });
+
+  it("renders a sample speaker but sends the test only to the signed-in organizer", async () => {
+    const d1 = fixture();
+    const sent: OutboxJob[] = [];
+
+    const response = await testSend(d1, sent);
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ data: {
+      queued: 1,
+      recipient: "organizer@example.test",
+      subject: "[TEST] Welcome Speaker A to Conference A",
+    } });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].payload).toMatchObject({
+      recipient: "organizer@example.test",
+      recipientName: "Organizer A",
+      subject: "[TEST] Welcome Speaker A to Conference A",
+      text: expect.stringContaining("Operational agents has 1 tasks"),
+      html: "<p>Speaker A in Main room</p>",
+    });
+    expect(sent[0].payload.recipient).not.toBe("speaker@example.test");
+    expect(JSON.stringify(sent[0].payload)).not.toContain("{{");
+  });
+
+  it("rejects organizer test-send for a non-organizer event role", async () => {
+    const d1 = fixture();
+    d1.sqlite.prepare("INSERT INTO event_memberships VALUES ('event-a', 'organizer-a', 'reviewer')").run();
+
+    const response = await testSend(d1, [], "reviewer");
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "ROLE_REQUIRED" } });
   });
 
   it("returns only sanitized, event-scoped communication delivery evidence to organizers", async () => {

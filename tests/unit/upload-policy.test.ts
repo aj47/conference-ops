@@ -20,4 +20,10 @@ describe("upload policy", () => {
   it("does not allow document types through the headshot purpose", () => {
     expect(uploadContentTypeAllowed("headshot", "application/msword", "portrait.doc")).toBe(false);
   });
+
+  it("allows raster event logos but never executable SVG", () => {
+    expect(uploadContentTypeAllowed("event_logo", "image/png", "event-logo.png")).toBe(true);
+    expect(uploadContentTypeAllowed("event_logo", "image/svg+xml", "event-logo.svg")).toBe(false);
+    expect(uploadContentTypeAllowed("event_logo", "application/octet-stream", "event-logo.webp")).toBe(true);
+  });
 });

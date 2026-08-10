@@ -39,7 +39,7 @@ function fixture() {
     CREATE TABLE events (
       id TEXT PRIMARY KEY, slug TEXT NOT NULL, name TEXT NOT NULL, short_name TEXT NOT NULL,
       description TEXT NOT NULL, timezone TEXT NOT NULL, starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL,
-      cfp_closes_at INTEGER NOT NULL, venue TEXT NOT NULL, website_url TEXT, accent TEXT NOT NULL,
+      cfp_closes_at INTEGER NOT NULL, venue TEXT NOT NULL, website_url TEXT, accent TEXT NOT NULL, logo_upload_id TEXT,
       status TEXT NOT NULL, public_agenda_revision INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0,
       deleted_at INTEGER
     );
@@ -80,7 +80,7 @@ function fixture() {
 
     INSERT INTO events VALUES (
       'event-a', 'summit-2026', 'Summit 2026', 'SUMMIT', 'Field notes', 'America/Los_Angeles',
-      1787932800000, 1788019200000, 1787846400000, 'Fort Mason', NULL, '#e05b3f', 'agenda_published', 0, 0, NULL
+      1787932800000, 1788019200000, 1787846400000, 'Fort Mason', NULL, '#e05b3f', NULL, 'agenda_published', 0, 0, NULL
     );
     INSERT INTO program_sessions
       (id, event_id, proposal_id, title, description, format, starts_at, ends_at, track_id, room_id, status)

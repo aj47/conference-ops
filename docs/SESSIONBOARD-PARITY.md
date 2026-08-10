@@ -23,7 +23,9 @@ The linked pages and their tutorial videos are reference implementations, not a 
 | Communications | Editable confirmation, decision, reminder, and calendar templates; scheduled reminders; durable outbox/retries; real Cloudflare Email and RFC 5545 `REQUEST` delivery; organizer delivery history. | Implemented when Email is configured |
 | Scheduling | List, day/room, week, and conflict views; track filters; drag/drop and explicit placement controls; event-window and collision checks; audited conflict override; public agenda publication. | Implemented |
 | Public experience | Event-scoped agenda, speaker gallery, resources, and frameable agenda embed with public-only projections. | Implemented |
-| Organizer assistant | Read-only, event-grounded readiness recommendations and workflow deep links. It cannot send or mutate data. | Implemented |
+| Pilot onboarding | Guided starter blueprints, validated room/track CSV import, event brand kit, read-only persona previews, and a resettable organizer tour. | Implemented |
+| Organizer assistant | Event-grounded recommendations with a supervised impact/reversibility/human-gate preview before a workflow deep link. It cannot send or mutate data. | Implemented |
+| Proof and recovery | Control Room Now / Next / Proof, client activity timeline, organizer-only message test-send, client-readable Airtable status, speaker next action, and reversible draft scheduling. | Implemented |
 | Airtable | Every registered business record is projected into a canonical Airtable record. Airtable authority may drive allowed descriptive edits into the D1 workflow mirror; protected transitions use audited Workflow Commands. | Implemented; environment cutover is explicit |
 
 ## Deliberate scope decisions

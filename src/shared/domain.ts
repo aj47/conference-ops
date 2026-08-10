@@ -322,6 +322,9 @@ export interface ReadinessInsight {
   count: number;
   actionLabel: string;
   actionPath: string;
+  effectSummary?: string;
+  reversible?: boolean;
+  requiresConfirmation?: boolean;
 }
 
 export type AirtableOperatorHealth = "healthy" | "degraded" | "disabled";

@@ -5,6 +5,8 @@ import {
   ClipboardCheck,
   FileStack,
   Globe2,
+  Eye,
+  Compass,
   LayoutDashboard,
   Menu,
   PanelLeftClose,
@@ -22,6 +24,8 @@ import { formatEventTicket } from "./event-time";
 import { privateEventPath } from "./private-routes";
 import { publicAgendaPath, publicGalleryPath, publicItineraryPath, publicResourcesPath, publicSessionsPath, publicSpeakersPath, publicSubmissionPath } from "./public-routes";
 import { useWorkspace } from "./workspace";
+import { OrganizerPreview } from "./OrganizerPreview";
+import { PilotTour } from "./PilotTour";
 
 const navSections = [
   {
@@ -107,9 +111,13 @@ export function ProductShell({ children }: PropsWithChildren) {
   const eventId = privateWorkspaceEventId ?? workspace.event.id;
   const [mobileOpen, setMobileOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
   const [mobileViewport, setMobileViewport] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 900px)").matches);
   const mobileReturnFocusRef = useRef<HTMLElement | null>(null);
   const paletteReturnFocusRef = useRef<HTMLElement | null>(null);
+  const previewReturnFocusRef = useRef<HTMLElement | null>(null);
+  const tourReturnFocusRef = useRef<HTMLElement | null>(null);
   const mobileNavActive = mobileViewport && mobileOpen;
   const closePalette = () => {
     const returnTarget = paletteReturnFocusRef.current;
@@ -163,12 +171,12 @@ export function ProductShell({ children }: PropsWithChildren) {
         role={mobileNavActive ? "dialog" : undefined}
         aria-modal={mobileNavActive ? "true" : undefined}
         aria-label={mobileNavActive ? "Primary navigation" : undefined}
-        aria-hidden={paletteOpen || (mobileViewport && !mobileOpen) ? "true" : undefined}
-        inert={paletteOpen || (mobileViewport && !mobileOpen) ? true : undefined}
+        aria-hidden={paletteOpen || previewOpen || tourOpen || (mobileViewport && !mobileOpen) ? "true" : undefined}
+        inert={paletteOpen || previewOpen || tourOpen || (mobileViewport && !mobileOpen) ? true : undefined}
         tabIndex={mobileNavActive ? -1 : undefined}
       >
         <div className="sidebar__brand">
-          <LogoMark />
+          <LogoMark logoUrl={workspace.event.logoUrl} eventName={workspace.event.name} />
           <button type="button" className="icon-button sidebar__close" onClick={() => setMobileOpen(false)} aria-label="Close navigation">
             <PanelLeftClose size={18} />
           </button>
@@ -212,7 +220,7 @@ export function ProductShell({ children }: PropsWithChildren) {
         </div>
       </aside>
 
-      <div className="shell-main" inert={mobileNavActive || paletteOpen ? true : undefined}>
+      <div className="shell-main" inert={mobileNavActive || paletteOpen || previewOpen || tourOpen ? true : undefined}>
         <header className="topbar">
           <button type="button" className="icon-button mobile-menu" onClick={(event) => { mobileReturnFocusRef.current = event.currentTarget; setPaletteOpen(false); setMobileOpen(true); }} aria-label="Open navigation" aria-expanded={mobileNavActive}>
             <Menu size={20} />
@@ -223,8 +231,12 @@ export function ProductShell({ children }: PropsWithChildren) {
             <kbd>⌘ K</kbd>
           </button>
           <div className="topbar__meta">
+            {workspace.actor.role === "organizer" && <>
+              <button type="button" className="topbar-action" aria-label="Preview as…" onClick={(event) => { previewReturnFocusRef.current = event.currentTarget; setPaletteOpen(false); setTourOpen(false); setPreviewOpen(true); }}><Eye size={15} /><span>Preview as…</span></button>
+              <button type="button" className="topbar-action" aria-label="Guided tour" onClick={(event) => { tourReturnFocusRef.current = event.currentTarget; setPaletteOpen(false); setPreviewOpen(false); setTourOpen(true); }}><Compass size={15} /><span>Guided tour</span></button>
+            </>}
             <span className={`source-indicator${source === "api" ? " source-indicator--live" : ""}`}>
-              {loading ? "Connecting" : source === "api" ? "Live workspace" : "Demo fallback"}
+              {loading ? "Connecting" : source === "api" ? "Live workspace" : "Guided demo"}
             </span>
             <StatusPill status={workspace.event.status} />
           </div>
@@ -233,6 +245,8 @@ export function ProductShell({ children }: PropsWithChildren) {
       </div>
       <NoticeRegion />
       {paletteOpen && <CommandPalette onClose={closePalette} returnFocusRef={paletteReturnFocusRef} />}
+      {previewOpen && <OrganizerPreview onClose={() => setPreviewOpen(false)} returnFocusRef={previewReturnFocusRef} />}
+      {tourOpen && <PilotTour onClose={() => setTourOpen(false)} returnFocusRef={tourReturnFocusRef} />}
     </div>
   );
 }
@@ -249,7 +263,7 @@ export function PublicHeader({ active }: { active?: "sessions" | "speakers" | "a
   const portalPath = privateEventPath("/portal/home", privateWorkspaceEventId ?? workspace.event.id);
   return (
     <header className="public-header">
-      <NavLink to={agendaPath}><LogoMark /></NavLink>
+      <NavLink to={agendaPath}><LogoMark logoUrl={workspace.event.logoUrl} eventName={workspace.event.name} /></NavLink>
       <nav aria-label="Public event navigation">
         <NavLink className={active === "sessions" ? "active" : ""} to={sessionsPath}>Sessions</NavLink>
         <NavLink className={active === "speakers" ? "active" : ""} to={speakersPath}>Speakers</NavLink>

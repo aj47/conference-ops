@@ -10,6 +10,7 @@ import {
   Home,
   ListChecks,
   Save,
+  Sparkles,
   UserRound,
 } from "lucide-react";
 import { useId, useMemo, useState } from "react";
@@ -102,8 +103,20 @@ export function SpeakerPortal() {
 }
 
 function PortalHome({ speaker, proposals, tasks, completeTasks, eventId }: { speaker: SpeakerProfile; proposals: ReturnType<typeof useWorkspace>["workspace"]["proposals"]; tasks: ReturnType<typeof useWorkspace>["workspace"]["tasks"]; completeTasks: number; eventId: string }) {
+  const nextTask = [...tasks].filter((task) => isOutstandingTaskStatus(task.status)).sort((left, right) => new Date(left.dueAt).getTime() - new Date(right.dueAt).getTime())[0];
+  const revision = proposals.find((proposal) => ["changes_requested", "revision_open"].includes(proposal.status));
+  const nextAction = nextTask
+    ? { eyebrow: nextTask.status === "overdue" ? "Overdue · next action" : "Next action", title: nextTask.title, detail: `${nextTask.description} Due ${dueDate(nextTask.dueAt)}.`, to: privateEventPath("/portal/tasks", eventId), label: "Open task" }
+    : revision
+      ? { eyebrow: "Changes requested · next action", title: `Revise “${revision.title}”`, detail: revision.revisionRequest?.note ?? "Open the proposal, make the requested changes, and resubmit the pinned version.", to: privateEventPath("/portal/submissions", eventId), label: "Open submission" }
+      : !speaker.profileComplete
+        ? { eyebrow: "Profile · next action", title: "Finish the public speaker profile", detail: "Add the remaining profile details and headshot so the organizer can publish your speaker page.", to: privateEventPath("/portal/profile", eventId), label: "Finish profile" }
+        : null;
   return (
     <>
+      <section className={nextAction ? "portal-next-action" : "portal-next-action portal-next-action--clear"}>
+        <span><Sparkles size={20} /></span><div><p className="eyebrow">{nextAction?.eyebrow ?? "You’re ready"}</p><h2>{nextAction?.title ?? "Nothing needs your attention."}</h2><p>{nextAction?.detail ?? "Your submissions, profile, and assigned production work are current. We’ll put the next required action here."}</p></div>{nextAction ? <NavLink className="button button--primary" to={nextAction.to}>{nextAction.label} <ArrowRight size={14} /></NavLink> : <span className="portal-next-action__done"><Check size={16} /> Clear</span>}
+      </section>
       <div className="portal-overview-grid">
         <section className="portal-panel portal-panel--submissions"><SectionHeading title={`My submissions (${proposals.length})`} action={<NavLink to={privateEventPath("/portal/submissions", eventId)} className="text-link">View all <ArrowRight size={14} /></NavLink>} />{proposals.map((proposal) => <NavLink to={privateEventPath("/portal/submissions", eventId)} className="portal-proposal" key={proposal.id}><span className="portal-proposal__id">{proposal.id.slice(-6).toUpperCase()}</span><div><strong>{proposal.title}</strong><small>{proposal.format} · {proposal.category}</small></div><StatusPill status={proposal.status} /></NavLink>)}</section>
         <section className="portal-panel portal-panel--profile"><SectionHeading title="My public profile" action={<NavLink to={privateEventPath("/portal/profile", eventId)} className="text-link">Edit <ArrowRight size={14} /></NavLink>} /><div className="profile-summary"><SpeakerPortrait speaker={speaker} /><div><h3>{speaker.name}</h3><p>{speaker.title} · {speaker.company}</p><small>{speaker.email}</small></div></div><p>{speaker.bio || "Add a biography so attendees know the perspective behind your session."}</p><StatusPill status={speaker.profileComplete ? "profile ready" : "profile incomplete"} /></section>

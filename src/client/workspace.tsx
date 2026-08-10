@@ -174,6 +174,7 @@ interface WorkspaceContextValue {
     file: File,
   ) => Promise<Pick<SpeakerProfile, "headshotUrl" | "profileComplete">>;
   scheduleSession: (sessionId: string, payload: SchedulePayload) => Promise<void>;
+  unscheduleSession: (sessionId: string) => Promise<void>;
   detectConflicts: (sessionId: string, payload: SchedulePayload) => ScheduleConflict[];
   publishAgenda: () => Promise<void>;
   convertProposalToSession: (proposalId: string) => Promise<void>;
@@ -1533,6 +1534,28 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
     [source, workspace.actor.id, workspace.event.id, workspace.sessions],
   );
 
+  const unscheduleSession = useCallback(async (sessionId: string) => {
+    try {
+      await conferenceApi.unschedule(workspace.actor.id, workspace.event.id, sessionId);
+    } catch (error) {
+      if (!mayUseDemoFallback(error, source)) {
+        setNotice(error instanceof Error ? error.message : "The session could not be returned to Ready to place.");
+        throw error;
+      }
+    }
+    setWorkspace((current) => ({
+      ...current,
+      sessions: current.sessions.map((session) => session.id === sessionId ? {
+        ...session,
+        roomId: undefined,
+        trackId: undefined,
+        startsAt: undefined,
+        endsAt: undefined,
+        status: "unscheduled",
+      } : session),
+    }));
+  }, [source, workspace.actor.id, workspace.event.id]);
+
   const publishAgenda = useCallback(async () => {
     const scheduledIds = workspace.sessions
       .filter((session) => session.status === "scheduled" || session.status === "published")
@@ -1820,6 +1843,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       updateProfile,
       uploadHeadshot,
       scheduleSession,
+      unscheduleSession,
       detectConflicts,
       publishAgenda,
       convertProposalToSession,
@@ -1870,6 +1894,7 @@ function WorkspaceProviderCore({ children, pathname, search }: PropsWithChildren
       updateProfile,
       uploadHeadshot,
       scheduleSession,
+      unscheduleSession,
       detectConflicts,
       publishAgenda,
       convertProposalToSession,

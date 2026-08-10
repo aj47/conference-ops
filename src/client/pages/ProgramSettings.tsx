@@ -7,17 +7,20 @@ import {
   Code2,
   Database,
   ExternalLink,
+  Eye,
   Mail,
   MapPinned,
+  Palette,
   Pencil,
   Plus,
   Save,
+  Send,
   Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import type {
   CommunicationDelivery,
   FormField,
@@ -31,6 +34,7 @@ import type {
 import { submissionCategoryField } from "../../shared/form-fields";
 import { CommunicationDeliveryHistory } from "../CommunicationDeliveryHistory";
 import { AirtablePanel } from "../AirtableOperatorStatus";
+import { BrandKitPanel } from "../BrandKitPanel";
 import { EmbedStudioPanel } from "../EmbedStudioPanel";
 import { EvaluationPlanStudio } from "../EvaluationPlanStudio";
 import { conferenceApi, type ResourcePageDraft } from "../api";
@@ -39,9 +43,10 @@ import { useDialogA11y } from "../dialog-a11y";
 import { privateEventPath } from "../private-routes";
 import { useWorkspace } from "../workspace";
 
-type SettingsSection = "routing" | "onboarding" | "communications" | "resources" | "embeds" | "data" | "assistant";
+type SettingsSection = "brand" | "routing" | "onboarding" | "communications" | "resources" | "embeds" | "data" | "assistant";
 
 const sections: Array<{ id: SettingsSection; label: string; detail: string; icon: typeof MapPinned }> = [
+  { id: "brand", label: "Brand & previews", detail: "Identity across personas", icon: Palette },
   { id: "routing", label: "Review routing", detail: "Tracks → reviewers", icon: MapPinned },
   { id: "onboarding", label: "Onboarding plan", detail: "Forms, files, profile", icon: ClipboardList },
   { id: "communications", label: "Communications", detail: "Templates & reminders", icon: Mail },
@@ -444,6 +449,23 @@ function CommunicationsPanel() {
   const [deliveries, setDeliveries] = useState<CommunicationDelivery[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const speakerSamples = useMemo(() => [...new Map(workspace.proposals.flatMap((proposal) => proposal.speakers).map((speaker) => [speaker.id, speaker])).values()], [workspace.proposals]);
+  const [sampleSpeakerId, setSampleSpeakerId] = useState(() => speakerSamples[0]?.id ?? "");
+  const [testSending, setTestSending] = useState(false);
+  const sampleSpeaker = speakerSamples.find((speaker) => speaker.id === sampleSpeakerId) ?? speakerSamples[0];
+  const sampleProposal = workspace.proposals.find((proposal) => proposal.speakers.some((speaker) => speaker.id === sampleSpeaker?.id));
+  const sampleSession = workspace.sessions.find((session) => session.speakerIds.includes(sampleSpeaker?.id ?? ""));
+  const sampleVariables: Record<string, string> = {
+    "event.name": workspace.event.name,
+    "speaker.name": sampleSpeaker?.name ?? workspace.actor.name,
+    "proposal.title": sampleProposal?.title ?? "Example proposal",
+    "decision.feedback": "Example decision feedback",
+    "speaker.portal_url": `${window.location.origin}/portal/home?eventId=${encodeURIComponent(workspace.event.id)}`,
+    "task.count": String(workspace.tasks.filter((task) => task.speakerId === sampleSpeaker?.id && ["not_started", "in_progress", "overdue"].includes(task.status)).length),
+    "session.title": sampleSession?.title ?? sampleProposal?.title ?? "Example session",
+    "session.room": workspace.rooms.find((room) => room.id === sampleSession?.roomId)?.name ?? "Room to be confirmed",
+  };
+  const renderPreview = (value: string) => value.replace(/{{\s*([\w.]+)\s*}}/g, (_match, key: string) => sampleVariables[key] ?? `{{${key}}}`);
   const historyRequest = useRef(0);
   const loadHistory = useCallback(async () => {
     const request = ++historyRequest.current;
@@ -485,6 +507,15 @@ function CommunicationsPanel() {
       setNotice(`${rule.kind === "task_overdue" ? "Overdue task" : "Unfinished draft"} reminder rule saved.`);
     } catch (caught) { setError(caught instanceof Error ? caught.message : "The reminder rule could not be saved."); }
   };
+  const sendTest = async () => {
+    setTestSending(true); setError(null);
+    try {
+      const sent = await conferenceApi.sendCommunicationTest(workspace.actor.id, workspace.event.id, { kind, subject: draft.subject, text: draft.text, html: draft.html, ...(sampleSpeaker?.id ? { sampleSpeakerId: sampleSpeaker.id } : {}) });
+      setNotice(`Test queued to ${sent.recipient}. The subject starts with [TEST].`);
+      void loadHistory();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "The test message could not be queued."); }
+    finally { setTestSending(false); }
+  };
   return (
     <section className="program-config-panel">
       <div className="program-config-panel__head"><div><p className="eyebrow">Cloudflare Email + durable outbox</p><h2>Write the messages the workflow actually sends.</h2><p>Submission confirmations, decisions, task reminders, and calendar REQUEST invites are persisted before queue delivery. Supported variables are shown beside the editor.</p></div><StatusPill status="durable queue" /></div>
@@ -499,6 +530,11 @@ function CommunicationsPanel() {
           <div className="program-config-actions"><p>{selected ? `Last saved ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(selected.updatedAt))}` : "No saved template yet; the server fallback remains available."}</p><button type="button" className="button button--primary" onClick={() => void saveTemplate()} disabled={saving || !draft.subject.trim() || !draft.text.trim() || !draft.html.trim()}><Save size={16} /> {saving ? "Saving…" : "Save template"}</button></div>
         </div>
       </div>
+      <section className="communication-proof" aria-labelledby="communication-proof-title">
+        <div className="communication-proof__head"><div><p className="eyebrow">Recipient proof</p><h3 id="communication-proof-title">Preview one personalized message before it can send.</h3><p>Choose an event speaker to resolve merge fields. The test always goes to your signed-in organizer address, never the speaker.</p></div><label><span>Preview as recipient</span><select value={sampleSpeaker?.id ?? ""} onChange={(event) => setSampleSpeakerId(event.target.value)}>{speakerSamples.length ? speakerSamples.map((speaker) => <option key={speaker.id} value={speaker.id}>{speaker.name} · {speaker.email}</option>) : <option value="">Organizer sample</option>}</select></label></div>
+        <div className="communication-proof__message"><div><Eye size={15} /><span><small>To</small><strong>{sampleSpeaker?.name ?? workspace.actor.name}</strong></span><span><small>Subject</small><strong>{renderPreview(draft.subject || "Add a subject to preview it")}</strong></span></div><pre>{renderPreview(draft.text || "Add a plain-text body to preview it here.")}</pre></div>
+        <footer><span><strong>Test recipient:</strong> {workspace.actor.email}</span><button type="button" className="button button--dark" disabled={testSending || !draft.subject.trim() || !draft.text.trim() || !draft.html.trim()} onClick={() => void sendTest()}><Send size={15} />{testSending ? "Queueing test…" : "Send test to me"}</button></footer>
+      </section>
       <div className="reminder-rules">
         <div className="section-heading"><div><p className="eyebrow">Scheduled automation</p><h3>Reminder rules</h3></div></div>
         {rules.map((rule) => (
@@ -524,6 +560,7 @@ function AssistantPanel({ onOpenRouting }: { onOpenRouting: () => void }) {
   const [insights, setInsights] = useState<ReadinessInsight[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ReadinessInsight | null>(null);
   const ask = async (nextQuestion = question) => {
     setLoading(true); setError(null);
     try {
@@ -534,31 +571,42 @@ function AssistantPanel({ onOpenRouting }: { onOpenRouting: () => void }) {
   };
   return (
     <section className="program-config-panel assistant-panel">
-      <div className="program-config-panel__head"><div><p className="eyebrow">Small, useful agent · read-only</p><h2>Ask what the program needs next.</h2><p>The assistant uses the event’s actual proposal, review, session, and task state. It recommends a workflow and deep-links you there; it never sends or changes data on its own.</p></div><span className="assistant-sigil"><Sparkles size={22} /></span></div>
+      <div className="program-config-panel__head"><div><p className="eyebrow">Conference Ops Copilot · supervised</p><h2>Inspect, preview, then choose what happens.</h2><p>The copilot grounds every recommendation in current event state. It previews impact and reversibility first; sending, publishing, and final decisions always remain explicit organizer actions.</p></div><span className="assistant-sigil"><Sparkles size={22} /></span></div>
       <form className="assistant-ask" onSubmit={(event) => { event.preventDefault(); void ask(); }}><input aria-label="Ask the readiness assistant" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="What needs attention before we publish?" /><button type="submit" className="button button--primary" disabled={loading || !question.trim()}>{loading ? "Inspecting…" : "Inspect event"}</button></form>
       <div className="assistant-prompts"><button type="button" onClick={() => { const prompt = "What review work is blocked?"; setQuestion(prompt); void ask(prompt); }}>Review bottlenecks</button><button type="button" onClick={() => { const prompt = "What needs attention before we publish?"; setQuestion(prompt); void ask(prompt); }}>Publish readiness</button><button type="button" onClick={() => { const prompt = "What should I do next?"; setQuestion(prompt); void ask(prompt); }}>Next best action</button></div>
       {error && <InlineAlert tone="danger">{error}</InlineAlert>}
       {answer && <div className="assistant-answer" aria-live="polite"><Bot size={19} /><p>{answer}</p></div>}
-      <div className="assistant-insights">{insights.map((insight) => <article key={insight.id} data-priority={insight.priority}><span>{insight.priority}</span><div><strong>{insight.title}</strong><p>{insight.detail}</p></div><button type="button" className="button button--quiet" onClick={() => {
-        const target = new URL(insight.actionPath, window.location.origin);
-        if (target.pathname === "/program-settings") {
-          onOpenRouting();
-          return;
-        }
-        navigate(privateEventPath(insight.actionPath, workspace.event.id, workspace.actor.role));
-      }}>{insight.actionLabel} <ArrowRight size={14} /></button></article>)}</div>
+      <div className="assistant-insights">{insights.map((insight) => <article key={insight.id} data-priority={insight.priority}><span>{insight.priority}</span><div><strong>{insight.title}</strong><p>{insight.detail}</p></div><button type="button" className="button button--quiet" onClick={() => setPreview(insight)}>Preview action <ArrowRight size={14} /></button></article>)}</div>
+      {preview && <div className="assistant-action-preview" role="region" aria-live="polite" aria-label={`Preview action: ${preview.actionLabel}`}>
+        <div><p className="eyebrow">Supervised action preview</p><h3>{preview.actionLabel}</h3><p>{preview.effectSummary ?? preview.detail}</p></div>
+        <dl><div><dt>Changes now</dt><dd>None</dd></div><div><dt>Reversible</dt><dd>{preview.reversible ? "Yes" : "Not after final confirmation"}</dd></div><div><dt>Human gate</dt><dd>{preview.requiresConfirmation === false ? "Not needed" : "Required"}</dd></div></dl>
+        <footer><button type="button" className="button button--quiet" onClick={() => setPreview(null)}>Cancel</button><button type="button" className="button button--primary" onClick={() => {
+          const target = new URL(preview.actionPath, window.location.origin);
+          if (target.pathname === "/program-settings") { onOpenRouting(); setPreview(null); return; }
+          navigate(`${target.pathname}${target.search}`);
+        }}>Continue to workflow <ArrowRight size={14} /></button></footer>
+      </div>}
       {!answer && !loading && <EmptyState title="Ready when you are" detail="Run a grounded inspection to see only the operational work supported by the current event snapshot." action={<button type="button" className="button button--dark" onClick={() => void ask()}><Bot size={15} /> Inspect now</button>} />}
     </section>
   );
 }
 
 export function ProgramSettings() {
-  const [section, setSection] = useState<SettingsSection>("routing");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requested = searchParams.get("section") as SettingsSection | null;
+  const [section, setSectionState] = useState<SettingsSection>(() => sections.some((item) => item.id === requested) ? requested! : "routing");
+  const setSection = (next: SettingsSection) => {
+    setSectionState(next);
+    const query = new URLSearchParams(searchParams);
+    query.set("section", next);
+    setSearchParams(query, { replace: true });
+  };
   return (
     <>
       <PageHeader eyebrow="Program operating system" title="Configure the workflow behind the forms." description="Map tracks to reviewers, define automatic speaker onboarding, write the emails that really send, and inspect readiness from one organizer workspace." />
       <div className="program-settings-layout">
         <aside className="program-settings-nav" aria-label="Program setup sections">{sections.map((item) => { const Icon = item.icon; return <button key={item.id} type="button" className={section === item.id ? "active" : ""} aria-current={section === item.id ? "page" : undefined} onClick={() => setSection(item.id)}><Icon size={17} /><span><strong>{item.label}</strong><small>{item.detail}</small></span><ArrowRight size={14} /></button>; })}</aside>
+        {section === "brand" && <BrandKitPanel />}
         {section === "routing" && <RoutingPanel />}
         {section === "onboarding" && <OnboardingPanel />}
         {section === "communications" && <CommunicationsPanel />}

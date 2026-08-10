@@ -2,6 +2,7 @@ import type { AuthActor, Bindings } from "./env";
 import { defaultFormVersionSettings } from "../shared/form-settings";
 import { formVersionSettingsWithControls } from "../shared/form-version-controls";
 import type { FormField } from "../shared/domain";
+import { launchConfigurationForTemplate, type LaunchConfiguration } from "../shared/launch-templates";
 
 export interface InitialEventInput {
   organizationName: string;
@@ -16,6 +17,7 @@ export interface InitialEventInput {
   venue: string;
   websiteUrl: string;
   accent: string;
+  launch?: LaunchConfiguration;
 }
 
 export interface InitialEventResult {
@@ -54,16 +56,18 @@ async function availableEventSlug(db: D1Database, requested: string) {
   return existing ? `${base}-${crypto.randomUUID().slice(0, 6)}` : base;
 }
 
-const initialFields: FormField[] = [
-  { id: "field-title", label: "Session title", description: "Clear, specific, and under 100 characters.", type: "short_text", required: true, section: "proposal" },
-  { id: "field-summary", label: "Abstract", description: "What will attendees learn, and what evidence will you share?", type: "long_text", required: true, section: "proposal" },
-  { id: "field-category", label: "Program category", type: "select", required: true, section: "proposal", options: ["General"] },
-  { id: "field-format", label: "Preferred format", type: "select", required: true, section: "proposal", options: ["Talk", "Workshop", "Panel", "Lightning talk"] },
-  { id: "speaker-first", label: "First name", type: "short_text", required: true, section: "participant" },
-  { id: "speaker-last", label: "Last name", type: "short_text", required: true, section: "participant" },
-  { id: "speaker-email", label: "Email", type: "email", required: true, section: "participant" },
-  { id: "speaker-bio", label: "Biography", type: "long_text", required: false, section: "participant" },
-];
+function initialFieldsForTracks(trackNames: string[]): FormField[] {
+  return [
+    { id: "field-title", label: "Session title", description: "Clear, specific, and under 100 characters.", type: "short_text", required: true, section: "proposal" },
+    { id: "field-summary", label: "Abstract", description: "What will attendees learn, and what evidence will you share?", type: "long_text", required: true, section: "proposal" },
+    { id: "field-category", label: trackNames.length > 1 ? "Program tracks" : "Program track", type: trackNames.length > 1 ? "multi_select" : "select", required: true, section: "proposal", options: trackNames },
+    { id: "field-format", label: "Preferred format", type: "select", required: true, section: "proposal", options: ["Talk", "Workshop", "Panel", "Lightning talk"] },
+    { id: "speaker-first", label: "First name", type: "short_text", required: true, section: "participant" },
+    { id: "speaker-last", label: "Last name", type: "short_text", required: true, section: "participant" },
+    { id: "speaker-email", label: "Email", type: "email", required: true, section: "participant" },
+    { id: "speaker-bio", label: "Biography", type: "long_text", required: false, section: "participant" },
+  ];
+}
 
 const initialRubric = [
   { id: "relevance", label: "Audience relevance", weight: 2, maxScore: 5 },
@@ -103,16 +107,17 @@ export async function createInitialEvent(
   const eventId = crypto.randomUUID();
   const formId = crypto.randomUUID();
   const formVersionId = crypto.randomUUID();
-  const trackId = crypto.randomUUID();
-  const roomId = crypto.randomUUID();
   const roundId = crypto.randomUUID();
-  const reviewerGroupId = crypto.randomUUID();
   const fileRequestId = crypto.randomUUID();
   const hotelFormId = crypto.randomUUID();
   const hotelFormVersionId = crypto.randomUUID();
   const flightFormId = crypto.randomUUID();
   const flightFormVersionId = crypto.randomUUID();
   const eventSlug = await availableEventSlug(env.DB, input.slug || input.name);
+  const launch = input.launch ?? launchConfigurationForTemplate("conference");
+  const tracks = [...new Map(launch.tracks.map((track) => [track.name.trim().toLocaleLowerCase(), { ...track, name: track.name.trim() }])).values()];
+  const rooms = [...new Map(launch.rooms.map((room) => [room.name.trim().toLocaleLowerCase(), { ...room, name: room.name.trim() }])).values()];
+  const initialFields = initialFieldsForTracks(tracks.map((track) => track.name));
   const existingOrganization = await env.DB.prepare(`SELECT o.id
     FROM organizations o
     JOIN organization_members om ON om.organization_id = o.id
@@ -164,14 +169,16 @@ export async function createInitialEvent(
       (id, form_id, version, public_title, page_heading, welcome_title, welcome_copy, confirmation_copy, max_speakers, allow_multiple_drafts, fields, settings, created_by, created_at)
       VALUES (?, ?, 1, ?, 'Apply', ?, ?, ?, 4, 1, ?, ?, ?, ?)`)
       .bind(formVersionId, formId, `Call for Speakers · ${input.name}`, "Share work your peers can use", "Tell the program team what you built, what you learned, and what attendees will take away.", "Your proposal is in. You can revise it until the call closes.", JSON.stringify(initialFields), JSON.stringify(initialFormSettings), actor.id, now),
-    env.DB.prepare("INSERT INTO reviewer_groups (id, event_id, name, category, created_at, updated_at) VALUES (?, ?, 'General committee', 'General', ?, ?)")
-      .bind(reviewerGroupId, eventId, now, now),
     env.DB.prepare("INSERT INTO review_rounds (id, event_id, name, round, rubric, status, created_at, updated_at) VALUES (?, ?, 'Program review', 1, ?, 'active', ?, ?)")
       .bind(roundId, eventId, JSON.stringify(initialRubric), now, now),
-    env.DB.prepare("INSERT INTO tracks (id, event_id, name, color, created_at, updated_at) VALUES (?, ?, 'General', ?, ?, ?)")
-      .bind(trackId, eventId, input.accent, now, now),
-    env.DB.prepare("INSERT INTO rooms (id, event_id, name, capacity, created_at, updated_at) VALUES (?, ?, 'Main room', 100, ?, ?)")
-      .bind(roomId, eventId, now, now),
+    ...tracks.flatMap((track) => [
+      env.DB.prepare("INSERT INTO reviewer_groups (id, event_id, name, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(crypto.randomUUID(), eventId, `${track.name} committee`, track.name, now, now),
+      env.DB.prepare("INSERT INTO tracks (id, event_id, name, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .bind(crypto.randomUUID(), eventId, track.name, track.color, now, now),
+    ]),
+    ...rooms.map((room) => env.DB.prepare("INSERT INTO rooms (id, event_id, name, capacity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), eventId, room.name, room.capacity, now, now)),
     env.DB.prepare("INSERT INTO file_requests (id, event_id, title, instructions_html, target_type, required, status, created_at, updated_at) VALUES (?, ?, 'Upload final slides', '<p>Upload a PDF or PPTX file, up to 50 MB.</p>', 'submission', 1, 'published', ?, ?)")
       .bind(fileRequestId, eventId, now, now),
     env.DB.prepare("INSERT INTO task_templates (id, event_id, title, description, type, target_type, completion_mode, relative_due_days, created_at, updated_at) VALUES (?, ?, 'Confirm speaker profile', 'Review your title, company, bio, and public headshot.', 'profile', 'contact', 'manual', 14, ?, ?)")
@@ -210,8 +217,8 @@ export async function createInitialEvent(
       .bind(crypto.randomUUID(), eventId, now, now),
     env.DB.prepare("INSERT INTO communication_schedules (id, event_id, kind, enabled, offset_days, created_at, updated_at) VALUES (?, ?, 'task_overdue', 1, 2, ?, ?)")
       .bind(crypto.randomUUID(), eventId, now, now),
-    env.DB.prepare("INSERT INTO audit_logs (id, organization_id, event_id, actor_user_id, action, entity_type, entity_id, summary, metadata, request_id, created_at) VALUES (?, ?, ?, ?, 'event.created', 'event', ?, ?, '{}', ?, ?)")
-      .bind(crypto.randomUUID(), organizationId, eventId, actor.id, eventId, input.name, crypto.randomUUID(), now),
+    env.DB.prepare("INSERT INTO audit_logs (id, organization_id, event_id, actor_user_id, action, entity_type, entity_id, summary, metadata, request_id, created_at) VALUES (?, ?, ?, ?, 'event.created', 'event', ?, ?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), organizationId, eventId, actor.id, eventId, input.name, JSON.stringify({ launchSource: launch.source, templateId: launch.templateId, tracks: tracks.length, rooms: rooms.length }), crypto.randomUUID(), now),
   );
 
   try {

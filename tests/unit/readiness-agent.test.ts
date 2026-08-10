@@ -20,6 +20,11 @@ describe("grounded readiness assistant", () => {
       "speaker-tasks",
     ]);
     expect(insights[0].actionPath).toBe(`/program-settings?eventId=${base.event.id}`);
+    expect(insights.find((insight) => insight.id === "unscheduled-sessions")).toEqual(expect.objectContaining({
+      reversible: true,
+      requiresConfirmation: true,
+      actionPath: `/schedule?eventId=${base.event.id}&action=auto-plan`,
+    }));
     expect(readinessAnswer(workspace, "What needs attention before we publish?")).toContain("accepted session needs a slot");
   });
 

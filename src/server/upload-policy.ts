@@ -1,7 +1,8 @@
-export type UploadPurpose = "headshot" | "slides" | "supporting_document";
+export type UploadPurpose = "headshot" | "event_logo" | "slides" | "supporting_document";
 
 const allowedContentTypes: Record<UploadPurpose, ReadonlySet<string>> = {
   headshot: new Set(["image/jpeg", "image/png", "image/webp"]),
+  event_logo: new Set(["image/jpeg", "image/png", "image/webp"]),
   slides: new Set([
     "application/pdf",
     "application/vnd.ms-powerpoint",
@@ -17,6 +18,7 @@ const allowedContentTypes: Record<UploadPurpose, ReadonlySet<string>> = {
 
 const fallbackExtensions: Record<UploadPurpose, ReadonlySet<string>> = {
   headshot: new Set([".jpg", ".jpeg", ".png", ".webp"]),
+  event_logo: new Set([".jpg", ".jpeg", ".png", ".webp"]),
   slides: new Set([".pdf", ".ppt", ".pptx"]),
   supporting_document: new Set([".pdf", ".txt", ".doc", ".docx"]),
 };

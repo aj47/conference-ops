@@ -5,11 +5,18 @@ candidate, prepared August 9, 2026. It covers the Sessionboard-aligned CFP,
 abstract-review, speaker/content, agenda, public-widget, and Airtable work added
 after the tagged 0.2.0 pilot release.
 
+The pilot-experience candidate additionally adds guided launch templates and
+CSV structure import, event branding, safe persona previews, a resettable tour,
+supervised copilot action previews, reversible schedule drafting, organizer-only
+message test-send, client-readable Airtable proof, a speaker next-action card,
+and a Now / Next / Proof control-room cockpit. See
+[`PILOT-WOW-GUIDE.md`](./PILOT-WOW-GUIDE.md) for the operating contract.
+
 ## Release status
 
 | Item | Verified state |
 | --- | --- |
-| Version | `package.json` is 0.3.0 at source commit `1a077fa6d0a1ef66bbc5546dadc67aeb547bc2f6`. The release tag is recorded only after required CI completes. |
+| Version | `package.json` remains 0.3.0. The pilot-experience candidate is based on released source `e7757a7aade48f9dcad5a906b6fdbbb80d770b1c`; its final commit, CI identity, and deployment identity must be recorded only after those actions complete. |
 | Product status | Release candidate. This audit does not claim that the 0.3.0 code or migrations have been deployed to the existing pilot. |
 | KillMySaaS | **100.0% required implementation projection** across 84 required items. This is not an official judge score. |
 | Manual evidence | CFP confirmation delivery has a safe redacted receipt. The fresh post-deploy scheduled speaker-reminder inbox receipt (`SPK-16`) remains pending. |
@@ -31,6 +38,7 @@ assessment in [`KILLMYSAAS-EVALUATION.md`](./KILLMYSAAS-EVALUATION.md).
 | Content Management | Organizer speaker/session editing, independent content approval, immutable attributed revisions and restore, calendar-sequence updates, file requests, constraints, retained upload versions, comments, central file library, and latest-version ZIP grouped by session. | Content approval/public fail-closed tests, task/file authorization, version/ZIP tests, speaker-content E2E. |
 | AI Agenda | Multi-day List/Day/Week/Conflict views, rooms/tracks, drag and explicit placement, event-window and room/track/speaker conflict checks, audited override, publish handoff, and a deterministic one-action safe auto-place assistant that never overrides conflicts. | Schedule units, audit/API tests, assisted-schedule desktop/mobile journey. |
 | Public Widgets | Anonymous Sessions, Speakers, Agenda, Itinerary, and Gallery surfaces; search/facets/details; favorites and reload persistence; ICS; accessible detail dialog; organizer Embed Studio; iframe/share links; JSON/XML/iCal feeds; theme, filters, and field selection. | Canonical public projection, framing/feed tests, five-widget component/E2E coverage. |
+| Pilot experience | Blueprint/CSV/Airtable launch paths; logo/accent brand kit; read-only persona preview; resettable guide; supervised copilot preview; reversible draft schedule; recipient proof/test-send; client-readable Airtable status; speaker next action; Control Room Now / Next / Proof. | Launch/parser, upload-policy, readiness, Airtable UI, communication, schedule/API, responsive browser, focus and reduced-motion evidence. |
 
 Accelevents remains explicitly out of scope under the customer's clarification.
 The optional CRM rubric is excluded from the required score by the evaluator's
@@ -112,8 +120,8 @@ Before using v0.3 against an existing authoritative base, the operator must:
 | Gate | Result |
 | --- | --- |
 | `git diff --check` | Pass. |
-| `pnpm verify` | Pass: lint, typecheck, **105 test files / 541 tests**, and production build. |
-| Full Playwright | Pass: **52 journeys passed / 6 intentional viewport skips** at desktop 1440 px and mobile 375 px. |
+| `pnpm verify` | Pass: lint, typecheck, **107 test files / 550 tests**, and production build. |
+| Full Playwright | Pass: **58 journeys passed / 6 intentional viewport skips** at desktop 1440 px and mobile 375 px. |
 | Former mobile-overflow regression | Pass: 3/3 sequential focused journeys. |
 | `pnpm db:generate` | Pass: 48 tables; no schema changes; pre/post migration hashes unchanged. |
 | Migration journal | Pass: sequential entries through 0012 and 0013; schema, SQL files, snapshots, and journal form one release unit. |

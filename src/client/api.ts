@@ -20,6 +20,7 @@ import type {
   Track,
   WorkspaceSnapshot,
 } from "../shared/domain";
+import type { LaunchConfiguration } from "../shared/launch-templates";
 
 export function publicEventApiPath(slug: string, form?: string) {
   const path = `/api/v1/public/events/${encodeURIComponent(slug)}`;
@@ -87,6 +88,7 @@ export interface CreateEventPayload {
   venue: string;
   websiteUrl: string;
   accent: string;
+  launch?: LaunchConfiguration;
 }
 
 export interface FormDraftPayload {
@@ -402,6 +404,14 @@ export const conferenceApi = {
       `/api/v1/events/${eventId}/sessions/${sessionId}/schedule`,
       actorId,
       { method: "POST", body: JSON.stringify(payload) },
+    );
+  },
+
+  unschedule(actorId: string, eventId: string, sessionId: string) {
+    return request<{ sessionId: string; status: "unscheduled" }>(
+      `/api/v1/events/${eventId}/sessions/${sessionId}/unschedule`,
+      actorId,
+      { method: "POST" },
     );
   },
 
@@ -743,6 +753,18 @@ export const conferenceApi = {
     );
   },
 
+  sendCommunicationTest(
+    actorId: string,
+    eventId: string,
+    payload: { kind: MessageTemplateDefinition["kind"]; subject: string; text: string; html: string; sampleSpeakerId?: string },
+  ) {
+    return request<{ queued: number; recipient: string; subject: string }>(
+      `/api/v1/events/${encodeURIComponent(eventId)}/communications/test-send`,
+      actorId,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+  },
+
   communicationHistory(actorId: string, eventId: string) {
     return request<{ deliveries: CommunicationDelivery[]; generatedAt: string }>(
       `/api/v1/events/${encodeURIComponent(eventId)}/communications/history`,
@@ -811,7 +833,7 @@ export const conferenceApi = {
     actorId: string,
     eventId: string,
     file: File,
-    purpose: "headshot" | "slides" | "supporting_document",
+    purpose: "headshot" | "event_logo" | "slides" | "supporting_document",
   ) {
     const query = new URLSearchParams({ purpose, filename: file.name });
     return uploadRequest<{ id: string; fileName: string; status: string }>(
@@ -819,6 +841,13 @@ export const conferenceApi = {
       actorId,
       file,
     );
+  },
+
+  saveEventBrand(actorId: string, eventId: string, payload: { accent: string; logoUploadId?: string | null }) {
+    return request<{ accent: string; logoUrl?: string }>(`/api/v1/events/${encodeURIComponent(eventId)}/brand`, actorId, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
   },
 
   attachTaskArtifact(actorId: string, eventId: string, taskId: string, uploadId: string) {

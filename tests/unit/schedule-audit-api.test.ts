@@ -158,6 +158,12 @@ function schedule(d1: TestD1Database) {
   }, bindings(d1));
 }
 
+function unschedule(d1: TestD1Database) {
+  return app.request("http://localhost/api/v1/events/event-a/sessions/session-target/unschedule", {
+    method: "POST",
+  }, bindings(d1));
+}
+
 function createDirectSession(d1: TestD1Database, format: "talk" | "break" | "networking", speakerIds: string[]) {
   return app.request("http://localhost/api/v1/events/event-a/sessions", {
     method: "POST",
@@ -208,6 +214,29 @@ describe("schedule conflict override audit", () => {
       version: 1,
     });
     expect(d1.database.prepare("SELECT COUNT(*) AS count FROM audit_logs").get()).toEqual({ count: 0 });
+  });
+
+  it("returns a scheduled draft to Ready to place and records its organization-scoped audit", async () => {
+    const placed = await schedule(d1);
+    expect(placed.status).toBe(200);
+
+    const response = await unschedule(d1);
+
+    expect(response.status).toBe(200);
+    expect(d1.database.prepare("SELECT room_id, track_id, starts_at, ends_at, status, version, calendar_sequence FROM program_sessions WHERE id = 'session-target'").get()).toEqual({
+      room_id: null,
+      track_id: null,
+      starts_at: null,
+      ends_at: null,
+      status: "unscheduled",
+      version: 3,
+      calendar_sequence: 2,
+    });
+    expect(d1.database.prepare("SELECT organization_id, action, entity_id FROM audit_logs WHERE action = 'schedule.session_unscheduled'").get()).toEqual({
+      organization_id: "org-a",
+      action: "schedule.session_unscheduled",
+      entity_id: "session-target",
+    });
   });
 
   it("requires an existing event speaker for direct content sessions", async () => {

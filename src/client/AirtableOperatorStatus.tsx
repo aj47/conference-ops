@@ -2,6 +2,7 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   CircleOff,
   Database,
   RefreshCw,
@@ -64,15 +65,23 @@ export function AirtableStatusCard({
   const copy = healthCopy[status.health];
   const HealthIcon = status.health === "healthy" ? CheckCircle2 : status.health === "degraded" ? AlertTriangle : CircleOff;
   const webhookLabel = status.sync.webhook.replaceAll("_", " ");
+  const clientTitle = status.health === "healthy" && status.authority === "airtable"
+    ? "Airtable is connected and current."
+    : status.health === "healthy"
+      ? "Airtable is a current, validated mirror."
+      : copy.title;
+  const clientDetail = status.health === "healthy"
+    ? "Client-safe business records are synchronized. Keep operating the event normally; Conference Ops handles validation, workflow actions, files, authentication, and delivery."
+    : copy.detail;
 
   return (
     <article className="airtable-operator" data-health={status.health} aria-labelledby="airtable-status-title">
       <header className="airtable-operator__status">
         <span className="airtable-operator__signal" aria-hidden="true"><HealthIcon size={20} /></span>
         <div>
-          <span className="airtable-health-label">{copy.label}</span>
-          <h3 id="airtable-status-title">{copy.title}</h3>
-          <p>{copy.detail}</p>
+          <span className="airtable-health-label">{status.health === "healthy" ? "Connected and current" : copy.label}</span>
+          <h3 id="airtable-status-title">{clientTitle}</h3>
+          <p>{clientDetail}</p>
         </div>
         <button type="button" className="button button--quiet" aria-busy={refreshing} onClick={() => { if (!refreshing) onRefresh(); }}>
           <RefreshCw className={refreshing ? "spin" : undefined} size={15} />
@@ -80,6 +89,15 @@ export function AirtableStatusCard({
         </button>
       </header>
 
+      <div className="airtable-client-proof" aria-label="Airtable synchronization proof">
+        <div><small>Business source</small><strong>{status.authority === "airtable" ? "Airtable" : "Conference Ops"}</strong><span>{status.authority === "airtable" ? "Edits flow into the event workflow" : "Airtable mirrors validated event records"}</span></div>
+        <div><small>Last app → Airtable</small><strong>{formatTime(status.sync.lastPushAt, timezone)}</strong><span>Most recent reflected workflow change</span></div>
+        <div><small>Last Airtable → app</small><strong>{formatTime(status.sync.lastPullAt, timezone)}</strong><span>Most recent accepted source edit</span></div>
+      </div>
+
+      <details className="airtable-diagnostics">
+        <summary><span><ShieldCheck size={16} /> Platform diagnostics</span><span>Authority rail, reconciliation, and webhook status <ChevronDown size={15} /></span></summary>
+        <div className="airtable-diagnostics__body">
       <div className="airtable-authority" aria-label={`${status.authority === "airtable" ? "Airtable" : "D1"} is the current source of truth`}>
         <div className={status.authority === "d1" ? "airtable-authority__node active" : "airtable-authority__node"}>
           <Database size={20} aria-hidden="true" />
@@ -126,6 +144,8 @@ export function AirtableStatusCard({
           <p className="airtable-guidance__boundary"><ShieldCheck size={15} aria-hidden="true" /> Tokens, webhook secrets, raw records, queue details, and cross-event totals are never returned to this screen. Event organizers escalate degraded states; they do not resolve connector work here.</p>
         </aside>
       </div>
+        </div>
+      </details>
       <footer>Generated {formatTime(status.generatedAt, timezone)} · Read-only operator status</footer>
     </article>
   );
@@ -159,7 +179,7 @@ export function AirtablePanel() {
 
   return (
     <section className="program-config-panel">
-      <div className="program-config-panel__head"><div><p className="eyebrow">Data authority</p><h2>Know exactly which system owns the event record.</h2><p>This read-only surface reports connector health and cutover evidence. Credentials and authority changes remain protected server operations.</p></div></div>
+      <div className="program-config-panel__head"><div><p className="eyebrow">Airtable source</p><h2>See that the event and the base agree.</h2><p>The client view leads with source-of-truth and last-sync proof. Platform diagnostics stay available below without exposing credentials, raw records, or cross-event operations.</p></div></div>
       {error && <InlineAlert tone="danger"><span className="delivery-history-error"><span>{error}</span><button type="button" className="button button--quiet" onClick={() => void load()}>Try again</button></span></InlineAlert>}
       {loading && !status && <div className="airtable-operator-loading" role="status"><RefreshCw className="spin" size={18} /> Reading protected connector status…</div>}
       {status && <AirtableStatusCard status={status} timezone={workspace.event.timezone} refreshing={loading} onRefresh={() => void load()} />}

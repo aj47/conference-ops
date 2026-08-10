@@ -274,7 +274,7 @@ app.get("/api/v1/public/events/:slug", async (c) => {
       && (!requestedForm || candidate.slug === requestedForm || candidate.id === requestedForm));
     return c.json({ data: { demoMode: true, event: workspace.event, form, sessions, speakers, resources: workspace.resources.filter((resource) => resource.status === "published") } });
   }
-  const eventRow = await c.env.DB.prepare("SELECT id, slug, name, short_name AS shortName, description, timezone, starts_at AS startsAt, ends_at AS endsAt, cfp_closes_at AS cfpClosesAt, venue, website_url AS websiteUrl, accent, status FROM events WHERE slug = ? AND deleted_at IS NULL AND status IN ('cfp_open', 'review', 'agenda_published', 'archived')")
+  const eventRow = await c.env.DB.prepare("SELECT id, slug, name, short_name AS shortName, description, timezone, starts_at AS startsAt, ends_at AS endsAt, cfp_closes_at AS cfpClosesAt, venue, website_url AS websiteUrl, accent, logo_upload_id AS logoUploadId, status FROM events WHERE slug = ? AND deleted_at IS NULL AND status IN ('cfp_open', 'review', 'agenda_published', 'archived')")
     .bind(c.req.param("slug"))
     .first<Record<string, unknown>>();
   if (!eventRow) return jsonError(c, 404, "EVENT_NOT_FOUND", "This public event is not available.");
@@ -356,7 +356,7 @@ app.get("/api/v1/public/events/:slug/widgets/:widget/:format", async (c) => {
       speakers: [...new Map(workspace.proposals.flatMap((proposal) => proposal.speakers).filter((speaker) => publishedSpeakerIds.has(speaker.id)).map((speaker) => [speaker.id, speaker])).values()].map(publicSpeakerFromProfile),
     };
   } else {
-    const eventRow = await c.env.DB.prepare("SELECT id, slug, name, short_name AS shortName, description, timezone, starts_at AS startsAt, ends_at AS endsAt, cfp_closes_at AS cfpClosesAt, venue, website_url AS websiteUrl, accent, status FROM events WHERE slug = ? AND deleted_at IS NULL AND status IN ('cfp_open', 'review', 'agenda_published', 'archived')")
+    const eventRow = await c.env.DB.prepare("SELECT id, slug, name, short_name AS shortName, description, timezone, starts_at AS startsAt, ends_at AS endsAt, cfp_closes_at AS cfpClosesAt, venue, website_url AS websiteUrl, accent, logo_upload_id AS logoUploadId, status FROM events WHERE slug = ? AND deleted_at IS NULL AND status IN ('cfp_open', 'review', 'agenda_published', 'archived')")
       .bind(c.req.param("slug")).first<Record<string, unknown>>();
     if (!eventRow) return jsonError(c, 404, "EVENT_NOT_FOUND", "This public event is not available.");
     const event = publicEventFromRow(eventRow);
@@ -419,6 +419,22 @@ app.get("/api/v1/public/events/:slug/speakers/:speakerId/headshot", async (c) =>
   return c.body(object.body);
 });
 
+app.get("/api/v1/public/events/:slug/brand/logo", async (c) => {
+  if (c.env.DEMO_MODE === "true") return jsonError(c, 404, "EVENT_LOGO_NOT_FOUND", "This event logo is not available.");
+  const upload = await c.env.DB.prepare(`SELECT up.object_key AS objectKey, up.content_type AS contentType
+    FROM events e JOIN uploads up ON up.id = e.logo_upload_id AND up.event_id = e.id AND up.purpose = 'event_logo' AND up.deleted_at IS NULL
+    WHERE e.slug = ? AND e.deleted_at IS NULL AND e.status IN ('cfp_open', 'review', 'agenda_published', 'archived')`)
+    .bind(c.req.param("slug")).first<{ objectKey: string; contentType: string }>();
+  if (!upload || !["image/jpeg", "image/png", "image/webp"].includes(upload.contentType.toLowerCase())) return jsonError(c, 404, "EVENT_LOGO_NOT_FOUND", "This event logo is not available.");
+  const object = await c.env.UPLOADS.get(upload.objectKey);
+  if (!object) return jsonError(c, 404, "EVENT_LOGO_NOT_FOUND", "This event logo is not available.");
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("cache-control", "public, max-age=3600, stale-while-revalidate=86400");
+  return new Response(object.body, { headers });
+});
+
 app.post("/api/v1/integrations/airtable/webhook", handleAirtableWebhook);
 
 app.use("/api/v1/*", requireActor);
@@ -465,6 +481,18 @@ const eventCreateSchema = eventDetailsSchema.extend({
   organizationName: z.string().trim().min(2).max(255),
   slug: z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(80),
   cfpClosesAt: z.iso.datetime(),
+  launch: z.object({
+    templateId: z.enum(["conference", "workshop", "internal_summit", "technical_multitrack"]),
+    source: z.enum(["template", "csv", "airtable"]),
+    tracks: z.array(z.object({
+      name: z.string().trim().min(1).max(100).refine((value) => !value.includes(","), "Track names cannot contain commas."),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+    })).min(1).max(12),
+    rooms: z.array(z.object({
+      name: z.string().trim().min(1).max(100),
+      capacity: z.number().int().min(1).max(100_000),
+    })).min(1).max(20),
+  }).optional(),
 });
 
 function eventDateError(body: { startsAt: string; endsAt: string; cfpClosesAt?: string }): { code: string; message: string; fields: Record<string, string> } | null {
@@ -542,6 +570,48 @@ app.put("/api/v1/events/:eventId", zValidator("json", eventDetailsSchema), async
   }
   if (!result.meta.changes) return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
   return c.json({ data: { id: c.req.param("eventId"), ...body, updatedAt: new Date(now).toISOString() } });
+});
+
+const eventBrandSchema = z.object({
+  accent: z.string().regex(/^#[0-9a-fA-F]{6}$/).transform((value) => value.toLowerCase()),
+  logoUploadId: z.string().uuid().nullable().optional(),
+});
+
+app.put("/api/v1/events/:eventId/brand", zValidator("json", eventBrandSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const body = c.req.valid("json");
+  const eventId = c.req.param("eventId");
+  if (c.get("actor")?.demo) return c.json({ data: { accent: body.accent, ...(body.logoUploadId ? { logoUrl: `/api/v1/events/${eventId}/brand/logo` } : {}) } });
+  if (body.logoUploadId) {
+    const allowed = await c.env.DB.prepare("SELECT id FROM uploads WHERE id = ? AND event_id = ? AND owner_user_id = ? AND purpose = 'event_logo' AND deleted_at IS NULL")
+      .bind(body.logoUploadId, eventId, c.get("actor")!.id).first();
+    if (!allowed) return jsonError(c, 422, "EVENT_LOGO_INVALID", "Choose a logo uploaded to this event by your organizer account.");
+  }
+  const now = Date.now();
+  const result = await c.env.DB.prepare("UPDATE events SET accent = ?, logo_upload_id = CASE WHEN ? = 1 THEN ? ELSE logo_upload_id END, updated_at = ? WHERE id = ? AND deleted_at IS NULL")
+    .bind(body.accent, body.logoUploadId !== undefined ? 1 : 0, body.logoUploadId ?? null, now, eventId).run();
+  if (!result.meta.changes) return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
+  await c.env.DB.prepare(`INSERT INTO audit_logs
+    (id, organization_id, event_id, actor_user_id, action, entity_type, entity_id, summary, metadata, request_id, created_at)
+    SELECT ?, e.organization_id, e.id, ?, 'event.brand_updated', 'event', e.id, 'Updated event brand kit', '{}', ?, ?
+    FROM events e WHERE e.id = ? AND e.deleted_at IS NULL`)
+    .bind(crypto.randomUUID(), c.get("actor")!.id, c.get("requestId"), now, eventId).run();
+  return c.json({ data: { accent: body.accent, ...(body.logoUploadId ? { logoUrl: `/api/v1/events/${eventId}/brand/logo` } : {}) } });
+});
+
+app.get("/api/v1/events/:eventId/brand/logo", async (c) => {
+  const upload = await c.env.DB.prepare(`SELECT up.object_key AS objectKey, up.content_type AS contentType
+    FROM events e JOIN uploads up ON up.id = e.logo_upload_id AND up.event_id = e.id AND up.purpose = 'event_logo' AND up.deleted_at IS NULL
+    WHERE e.id = ? AND e.deleted_at IS NULL`).bind(c.req.param("eventId")).first<{ objectKey: string; contentType: string }>();
+  if (!upload) return jsonError(c, 404, "EVENT_LOGO_NOT_FOUND", "This event logo is not available.");
+  const object = await c.env.UPLOADS.get(upload.objectKey);
+  if (!object) return jsonError(c, 404, "EVENT_LOGO_NOT_FOUND", "This event logo is not available.");
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("cache-control", "private, max-age=300");
+  return new Response(object.body, { headers });
 });
 
 // Venue resources -----------------------------------------------------------
@@ -2665,6 +2735,38 @@ app.post("/api/v1/events/:eventId/sessions/:sessionId/schedule", zValidator("jso
   return c.json({ data: { sessionId: target.id, ...body, status: target.status === "published" ? "published" : "scheduled", conflictsOverridden: conflicts.length } });
 });
 
+app.post("/api/v1/events/:eventId/sessions/:sessionId/unschedule", async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const eventId = c.req.param("eventId");
+  const sessionId = c.req.param("sessionId");
+  if (c.get("actor")?.demo) {
+    const target = createDemoWorkspace().sessions.find((session) => session.id === sessionId);
+    if (!target) return jsonError(c, 404, "SESSION_NOT_FOUND", "Session not found.");
+    if (target.status === "published") return jsonError(c, 409, "PUBLISHED_SESSION_LOCKED", "Unpublish the agenda before returning this session to Ready to place.");
+    return c.json({ data: { sessionId, status: "unscheduled" } });
+  }
+  const now = Date.now();
+  const [result] = await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE program_sessions
+      SET room_id = NULL, track_id = NULL, starts_at = NULL, ends_at = NULL, status = 'unscheduled', version = version + 1, calendar_sequence = calendar_sequence + 1, updated_at = ?
+      WHERE id = ? AND event_id = ? AND status = 'scheduled'`).bind(now, sessionId, eventId),
+    c.env.DB.prepare(`INSERT INTO audit_logs
+      (id, organization_id, event_id, actor_user_id, action, entity_type, entity_id, summary, metadata, request_id, created_at)
+      SELECT ?, e.organization_id, ps.event_id, ?, 'schedule.session_unscheduled', 'program_session', ps.id, ps.title, '{}', ?, ?
+      FROM program_sessions ps JOIN events e ON e.id = ps.event_id
+      WHERE ps.id = ? AND ps.event_id = ?`)
+      .bind(crypto.randomUUID(), c.get("actor")!.id, c.get("requestId"), now, sessionId, eventId),
+  ]);
+  if (!result.meta.changes) {
+    const current = await c.env.DB.prepare("SELECT status FROM program_sessions WHERE id = ? AND event_id = ?").bind(sessionId, eventId).first<{ status: string }>();
+    if (!current) return jsonError(c, 404, "SESSION_NOT_FOUND", "Session not found.");
+    if (current.status === "published") return jsonError(c, 409, "PUBLISHED_SESSION_LOCKED", "Unpublish the agenda before returning this session to Ready to place.");
+    return jsonError(c, 409, "SESSION_NOT_SCHEDULED", "Only a scheduled draft session can be returned to Ready to place.");
+  }
+  return c.json({ data: { sessionId, status: "unscheduled" } });
+});
+
 const formFieldSchema = z.object({
   id: z.string().min(1),
   label: z.string().trim().min(1).max(255),
@@ -3177,6 +3279,60 @@ app.get("/api/v1/events/:eventId/communications/history", async (c) => {
   return c.json({ data: { deliveries, generatedAt: new Date().toISOString() } });
 });
 
+const testCommunicationSchema = z.object({
+  kind: messageTemplateKindSchema,
+  subject: z.string().trim().min(2).max(255),
+  text: z.string().trim().min(2).max(20_000),
+  html: z.string().trim().min(2).max(40_000),
+  sampleSpeakerId: z.string().optional(),
+});
+app.post("/api/v1/events/:eventId/communications/test-send", zValidator("json", testCommunicationSchema), async (c) => {
+  const denied = requireRole(c, ["organizer"]);
+  if (denied) return denied;
+  const body = c.req.valid("json");
+  const actor = c.get("actor")!;
+  const eventId = c.req.param("eventId");
+  const event = actor.demo
+    ? createDemoWorkspace(actor.id).event
+    : await c.env.DB.prepare("SELECT name, venue FROM events WHERE id = ? AND deleted_at IS NULL").bind(eventId).first<{ name: string; venue: string }>();
+  if (!event) return jsonError(c, 404, "EVENT_NOT_FOUND", "Event not found.");
+  let sample: { id: string; name: string; proposalTitle?: string; taskCount: number; sessionTitle?: string; room?: string } | undefined;
+  if (actor.demo) {
+    const workspace = createDemoWorkspace(actor.id);
+    const speaker = workspace.proposals.flatMap((proposal) => proposal.speakers).find((candidate) => !body.sampleSpeakerId || candidate.id === body.sampleSpeakerId);
+    const proposal = workspace.proposals.find((candidate) => candidate.speakers.some((candidateSpeaker) => candidateSpeaker.id === speaker?.id));
+    const session = workspace.sessions.find((candidate) => candidate.speakerIds.includes(speaker?.id ?? ""));
+    if (speaker) sample = { id: speaker.id, name: speaker.name, proposalTitle: proposal?.title, taskCount: workspace.tasks.filter((task) => task.speakerId === speaker.id && ["not_started", "in_progress", "overdue"].includes(task.status)).length, sessionTitle: session?.title, room: workspace.rooms.find((room) => room.id === session?.roomId)?.name };
+  } else if (body.sampleSpeakerId) {
+    const foundSample = await c.env.DB.prepare(`SELECT sp.id, sp.name,
+      (SELECT p.title FROM proposal_speakers ps JOIN proposals p ON p.id = ps.proposal_id WHERE ps.speaker_profile_id = sp.id AND p.event_id = sp.event_id ORDER BY p.updated_at DESC LIMIT 1) AS proposalTitle,
+      (SELECT COUNT(*) FROM speaker_tasks st WHERE st.speaker_profile_id = sp.id AND st.event_id = sp.event_id AND st.status IN ('not_started','in_progress','overdue')) AS taskCount,
+      (SELECT prog.title FROM session_speakers ss JOIN program_sessions prog ON prog.id = ss.session_id WHERE ss.speaker_profile_id = sp.id AND prog.event_id = sp.event_id ORDER BY prog.updated_at DESC LIMIT 1) AS sessionTitle,
+      (SELECT r.name FROM session_speakers ss JOIN program_sessions prog ON prog.id = ss.session_id LEFT JOIN rooms r ON r.id = prog.room_id WHERE ss.speaker_profile_id = sp.id AND prog.event_id = sp.event_id ORDER BY prog.updated_at DESC LIMIT 1) AS room
+      FROM speaker_profiles sp WHERE sp.id = ? AND sp.event_id = ?`).bind(body.sampleSpeakerId, eventId).first<NonNullable<typeof sample>>();
+    sample = foundSample ?? undefined;
+    if (!sample) return jsonError(c, 422, "SAMPLE_SPEAKER_NOT_FOUND", "Choose a sample speaker from this event.");
+  }
+  const variables = {
+    "event.name": event.name,
+    "speaker.name": sample?.name ?? actor.name,
+    "proposal.title": sample?.proposalTitle ?? "Example proposal",
+    "decision.feedback": "Example decision feedback",
+    "speaker.portal_url": `${c.env.PUBLIC_APP_URL.replace(/\/$/, "")}/portal/home?eventId=${encodeURIComponent(eventId)}`,
+    "task.count": String(sample?.taskCount ?? 2),
+    "session.title": sample?.sessionTitle ?? "Example session",
+    "session.room": sample?.room ?? "Room to be confirmed",
+  };
+  const htmlVariables = Object.fromEntries(Object.entries(variables).map(([key, value]) => [key, escapeHtml(value)]));
+  const subject = `[TEST] ${renderMessageTemplate(body.subject, variables)}`;
+  const job: OutboxJob = { kind: "email", idempotencyKey: `communication-test:${eventId}:${actor.id}:${crypto.randomUUID()}`, payload: { kind: "communication", communicationKind: "test", eventId, recipient: actor.email, recipientName: actor.name, subject, text: renderMessageTemplate(body.text, variables), html: renderMessageTemplate(body.html, htmlVariables) } };
+  if (actor.demo) return c.json({ data: { queued: 1, recipient: actor.email, subject } }, 202);
+  if (!c.env.JOBS_QUEUE) return jsonError(c, 503, "QUEUE_UNAVAILABLE", "The communication queue is not configured.");
+  await persistOutboxJobs(c.env.DB, [job]);
+  await dispatchPersistedJobs(c.env.JOBS_QUEUE, [job]);
+  return c.json({ data: { queued: 1, recipient: actor.email, subject } }, 202);
+});
+
 const queueSchema = z.object({ kind: z.enum(["reminder", "acceptance", "calendar"]), recipientIds: z.array(z.string()).min(1).max(50), templateId: z.string().optional() });
 app.post("/api/v1/events/:eventId/communications/send", zValidator("json", queueSchema), async (c) => {
   const denied = requireRole(c, ["organizer"]);
@@ -3315,10 +3471,10 @@ app.post("/api/v1/events/:eventId/uploads", async (c) => {
   const actor = c.get("actor");
   if (!actor) return jsonError(c, 401, "AUTH_REQUIRED", "Sign in to upload files.");
   const purpose = c.req.query("purpose");
-  if (purpose !== "headshot" && purpose !== "slides" && purpose !== "supporting_document") return jsonError(c, 422, "UPLOAD_PURPOSE_REQUIRED", "Choose a supported upload purpose.");
+  if (purpose !== "headshot" && purpose !== "event_logo" && purpose !== "slides" && purpose !== "supporting_document") return jsonError(c, 422, "UPLOAD_PURPOSE_REQUIRED", "Choose a supported upload purpose.");
   const fileName = c.req.query("filename") ?? "upload";
   const contentLength = Number(c.req.header("content-length") ?? 0);
-  const maxBytes = purpose === "headshot" ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
+  const maxBytes = purpose === "event_logo" ? 5 * 1024 * 1024 : purpose === "headshot" ? 10 * 1024 * 1024 : 50 * 1024 * 1024;
   if (!contentLength || contentLength > maxBytes) return jsonError(c, 413, "UPLOAD_TOO_LARGE", `This ${purpose} exceeds the ${maxBytes / 1024 / 1024} MB limit.`);
   const contentType = (c.req.header("content-type") ?? "application/octet-stream").toLowerCase();
   if (!uploadContentTypeAllowed(purpose, contentType, fileName)) return jsonError(c, 422, "UPLOAD_TYPE_NOT_ALLOWED", `This file type is not supported for ${purpose.replace("_", " ")}.`);

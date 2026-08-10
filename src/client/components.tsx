@@ -6,17 +6,17 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useEffect, useId } from "react";
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import type { ProposalStatus, TaskStatus } from "../shared/domain";
 import { eventRoleLandingPath } from "./private-routes";
 import { actorForRoleOption, actorRoleOptionValue, selectablePersonaActors } from "./role-selection";
 import { useWorkspace } from "./workspace";
 
-export function LogoMark({ compact = false }: { compact?: boolean }) {
+export function LogoMark({ compact = false, logoUrl, eventName }: { compact?: boolean; logoUrl?: string; eventName?: string }) {
   return (
     <div className={`logo-mark${compact ? " logo-mark--compact" : ""}`} aria-label="Conference Ops">
-      <span className="logo-mark__monogram" aria-hidden="true">CO</span>
+      {logoUrl ? <span className="logo-mark__image"><img src={logoUrl} alt={eventName ? `${eventName} logo` : "Event logo"} /></span> : <span className="logo-mark__monogram" aria-hidden="true">CO</span>}
       {!compact && (
         <span className="logo-mark__wordmark">
           Conference <em>Ops</em>
@@ -43,17 +43,15 @@ export function Avatar({ name, size = "md" }: { name: string; size?: "sm" | "md"
 export function PersonaSwitcher({ compact = false }: { compact?: boolean }) {
   const { workspace, switchActor, privateWorkspaceEventId } = useWorkspace();
   const navigate = useNavigate();
-  const labelId = useId();
   const eventId = privateWorkspaceEventId ?? workspace.event.id;
   const selectableActors = selectablePersonaActors(workspace.actors, workspace.actor, workspace.demoMode === true);
 
   return (
     <label className={`persona-switcher${compact ? " persona-switcher--compact" : ""}`}>
-      {!compact && <span id={labelId}>Viewing as</span>}
+      {!compact && <span aria-hidden="true">{workspace.demoMode ? "Test role" : "Active role"}</span>}
       <Avatar name={workspace.actor.name} size="sm" />
       <select
-        aria-labelledby={compact ? undefined : labelId}
-        aria-label={compact ? "Switch demo persona" : undefined}
+        aria-label={compact && workspace.demoMode ? "Switch demo persona" : "Viewing as"}
         value={actorRoleOptionValue(workspace.actor, selectableActors)}
         onChange={(event) => {
           const actor = actorForRoleOption(selectableActors, event.target.value);

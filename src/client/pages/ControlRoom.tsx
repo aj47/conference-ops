@@ -190,6 +190,8 @@ export function ControlRoom() {
   const currentWeekday = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone: workspace.event.timezone }).format(new Date(now));
   const trialSteps = organizerTrialSteps(workspace, eventId);
   const completedTrialSteps = trialSteps.filter((step) => step.complete).length;
+  const nextTrialStep = trialSteps.find((step) => !step.complete);
+  const latestProof = workspace.activity[0];
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -244,6 +246,15 @@ export function ControlRoom() {
         <div><MapPin size={15} /> {workspace.event.venue}</div>
         <div><CalendarClock size={15} /> {formatEventDateRange(workspace.event)} · {timeZoneAbbreviation(workspace.event.startsAt, workspace.event.timezone)}</div>
         <button type="button" onClick={() => setSettingsOpen(true)}><Pencil size={14} /> Edit</button>
+      </section>
+
+      <section className="readiness-cockpit" aria-labelledby="readiness-cockpit-title">
+        <header><div><p className="eyebrow">Pilot readiness cockpit</p><h2 id="readiness-cockpit-title">What matters now, what comes next, and what is proven.</h2></div><span>{completedTrialSteps}/{trialSteps.length} launch gates</span></header>
+        <div className="readiness-cockpit__rail">
+          <article data-stage="now"><span>NOW</span><div><strong>{primaryIntervention?.title ?? "No critical exception"}</strong><p>{primaryIntervention?.detail ?? "The current workspace has no overdue profile, task, or placement exception."}</p></div>{primaryIntervention ? <Link to={primaryIntervention.to}>Act now <ArrowUpRight size={14} /></Link> : <CheckCircle2 size={18} />}</article>
+          <article data-stage="next"><span>NEXT</span><div><strong>{nextTrialStep?.label ?? "The full event loop is complete"}</strong><p>{nextTrialStep?.detail ?? "Use persona preview for one last confidence check before the client session."}</p></div>{nextTrialStep ? <Link to={nextTrialStep.to} target={nextTrialStep.external ? "_blank" : undefined} rel={nextTrialStep.external ? "noreferrer" : undefined}>Open step <ArrowUpRight size={14} /></Link> : <CheckCircle2 size={18} />}</article>
+          <article data-stage="proof"><span>PROOF</span><div><strong>{latestProof ? `${latestProof.actor} ${latestProof.action}` : "Audit trail ready"}</strong><p>{latestProof ? `${latestProof.target} · ${formatEventDateTime(latestProof.at, workspace.event.timezone)}` : "Committed organizer actions will appear here with actor, target, and time."}</p></div><Link to={privateEventPath("/program-settings?section=data", eventId)}>Data proof <ArrowUpRight size={14} /></Link></article>
+        </div>
       </section>
 
       <section className="trial-runway" aria-labelledby="trial-runway-title">
@@ -310,7 +321,7 @@ export function ControlRoom() {
         </section>
 
         <section className="paper-panel">
-          <SectionHeading title="Latest desk notes" description="A compact audit trail of material changes." />
+          <SectionHeading title="Client activity timeline" description="Who changed what, when—the compact audit trail clients can use during a trial." />
           {workspace.activity.length ? (
             <ol className="activity-list">
               {workspace.activity.map((activity) => (
