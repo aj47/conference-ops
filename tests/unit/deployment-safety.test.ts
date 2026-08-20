@@ -71,6 +71,20 @@ function readinessBindings(overrides: Partial<Bindings> = {}): Bindings {
 }
 
 describe("deployment preflight", () => {
+  it("ships crawler-readable discovery assets and a followable pilot door", () => {
+    const robots = readFileSync("public/robots.txt", "utf8");
+    const llms = readFileSync("public/llms.txt", "utf8");
+    const homepage = readFileSync("index.html", "utf8");
+
+    expect(robots).toMatch(/^User-agent: \*/m);
+    expect(robots).toContain("Allow: /");
+    expect(robots.toLowerCase()).not.toContain("<html");
+    expect(llms).toContain("# Conference Ops");
+    expect(llms).toContain("/try");
+    expect(llms.toLowerCase()).not.toContain("<html");
+    expect(homepage).toMatch(/href=["']\/try["']/);
+  });
+
   it("keeps secretless Terraform account placeholders as 32-character strings", () => {
     const workflow = readFileSync(".github/workflows/terraform-plan.yml", "utf8");
 

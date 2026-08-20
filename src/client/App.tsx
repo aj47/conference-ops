@@ -123,6 +123,7 @@ export default function App() {
     <Suspense fallback={<div className="route-loader">Opening the next workspace…</div>}>
       <Routes>
         <Route path="/" element={<RoleHome />} />
+        <Route path="/try" element={<Navigate to="/auth?returnTo=%2Fworkspace" replace />} />
         <Route element={<WorkspaceLayout />}>
           <Route path="/workspace" element={<RoleRoute roles={["organizer"]}><ControlRoom /></RoleRoute>} />
           <Route path="/forms" element={<RoleRoute roles={["organizer"]}><FormBuilder /></RoleRoute>} />

@@ -1,0 +1,7 @@
+# Conference Ops
+
+Conference Ops is a program-operations workspace for calls for speakers, track-routed review, speaker onboarding, scheduling, publishing, and public event widgets.
+
+Pilot: https://conference-ops-pilot-app.techfren.workers.dev/
+Try the pilot: https://conference-ops-pilot-app.techfren.workers.dev/try
+Public agenda: https://conference-ops-pilot-app.techfren.workers.dev/events/ai-engineer-summit-2026/agenda
